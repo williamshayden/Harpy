@@ -221,15 +221,11 @@ def test_ableton_note_names(number: int, expected: str) -> None:
 
 
 def test_pitch_readout_contains_note_midi_and_frequency() -> None:
-    assert format_pitch_readout(MidiNote(60), EqualTemperament()) == (
-        "C3 · MIDI 60 · 261.626 Hz"
-    )
+    assert format_pitch_readout(MidiNote(60), EqualTemperament()) == ("C3 · MIDI 60 · 261.626 Hz")
 
 
 def test_tuning_readout_avoids_octave_naming_ambiguity() -> None:
-    assert format_tuning_readout(EqualTemperament()) == (
-        "Concert A reference (MIDI 69) · 440.0 Hz"
-    )
+    assert format_tuning_readout(EqualTemperament()) == ("Concert A reference (MIDI 69) · 440.0 Hz")
 ```
 
 - [ ] **Step 3: Run the focused tests and verify the expected failure**
@@ -301,9 +297,7 @@ class EqualTemperament:
         object.__setattr__(self, "reference_hz", value)
 
     def frequency_hz(self, pitch: Pitch) -> float:
-        exponent = (
-            pitch.cents_from_midi_zero - 100.0 * self.reference_note.number
-        ) / 1200.0
+        exponent = (pitch.cents_from_midi_zero - 100.0 * self.reference_note.number) / 1200.0
         try:
             frequency = self.reference_hz * (2.0**exponent)
         except OverflowError as error:
@@ -337,8 +331,7 @@ def format_pitch_readout(
 
 def format_tuning_readout(tuning: EqualTemperament) -> str:
     return (
-        f"Concert A reference (MIDI {tuning.reference_note.number}) · "
-        f"{tuning.reference_hz:.1f} Hz"
+        f"Concert A reference (MIDI {tuning.reference_note.number}) · {tuning.reference_hz:.1f} Hz"
     )
 ```
 
@@ -599,11 +592,7 @@ class KeyboardViewSpec:
     middle_c_octave: int = 3
 
     def __post_init__(self) -> None:
-        if not (
-            self.minimum_note.number
-            <= self.initial_note.number
-            <= self.maximum_note.number
-        ):
+        if not (self.minimum_note.number <= self.initial_note.number <= self.maximum_note.number):
             raise ValueError("minimum_note <= initial_note <= maximum_note is required")
         if isinstance(self.middle_c_octave, bool) or not isinstance(self.middle_c_octave, int):
             raise TypeError("middle_c_octave must be an integer")
@@ -973,10 +962,9 @@ def test_release_reaches_exact_silence() -> None:
 def test_fft_peak_matches_middle_c_within_one_bin() -> None:
     voice = make_voice()
     voice.note_on(Pitch.from_midi(60))
-    settle_frames = (
-        DEFAULT_CONFIG.patch.envelope.attack_frames(48_000)
-        + DEFAULT_CONFIG.patch.envelope.decay_frames(48_000)
-    )
+    settle_frames = DEFAULT_CONFIG.patch.envelope.attack_frames(
+        48_000
+    ) + DEFAULT_CONFIG.patch.envelope.decay_frames(48_000)
     voice.render_block(settle_frames)
     samples = voice.render_block(96_000).astype(np.float64)
     spectrum = np.abs(np.fft.rfft(samples * np.hanning(samples.size)))
@@ -1043,9 +1031,7 @@ class SineVoice:
         if frequency_hz >= nyquist_hz:
             raise ValueError("frequency must be below Nyquist")
         self._phase = 0.0
-        self._phase_increment = (
-            math.tau * frequency_hz / self.render_spec.sample_rate_hz
-        )
+        self._phase_increment = math.tau * frequency_hz / self.render_spec.sample_rate_hz
         self._envelope.note_on()
 
     def note_off(self) -> None:
@@ -1491,9 +1477,7 @@ class LabController:
     def press_play(self) -> ControllerState:
         if self._gate_active:
             return self.state
-        self._send_command(
-            AudioCommand(AudioCommandKind.NOTE_ON, Pitch.from_midi(self._note))
-        )
+        self._send_command(AudioCommand(AudioCommandKind.NOTE_ON, Pitch.from_midi(self._note)))
         self._gate_active = True
         self._voice_started = True
         return self.state
@@ -1581,8 +1565,7 @@ class FormatDevice:
 
 def test_format_candidates_have_approved_priority() -> None:
     values = [
-        (item.channelCount(), item.sampleFormat())
-        for item in audio_format_candidates(48_000)
+        (item.channelCount(), item.sampleFormat()) for item in audio_format_candidates(48_000)
     ]
     assert values == [
         (2, QAudioFormat.SampleFormat.Float),
@@ -2003,9 +1986,7 @@ class QtAudioEngine(QObject):
         if self._sink is not sink:
             return
         format_name = (
-            "Float"
-            if audio_format.sampleFormat() is QAudioFormat.SampleFormat.Float
-            else "Int16"
+            "Float" if audio_format.sampleFormat() is QAudioFormat.SampleFormat.Float else "Int16"
         )
         self.status_changed.emit(
             f"{device.description()} · 48 kHz · {audio_format.channelCount()} ch · {format_name}",
@@ -2114,9 +2095,7 @@ def test_window_starts_at_middle_c_with_fixed_patch_copy(qtbot) -> None:
     window, _ = make_window(qtbot)
     assert window.pitch_slider.value() == 60
     assert window.pitch_readout.text() == "C3 · MIDI 60 · 261.626 Hz"
-    assert window.tuning_readout.text() == (
-        "Concert A reference (MIDI 69) · 440.0 Hz"
-    )
+    assert window.tuning_readout.text() == ("Concert A reference (MIDI 69) · 440.0 Hz")
     assert "Sine" in window.patch_label.text()
     assert "−12 dBFS" in window.patch_label.text()
     assert "1 ms" in window.patch_label.text()
@@ -2244,8 +2223,7 @@ class HarpyWindow(QMainWindow):
         self.pitch_readout = QLabel()
         self.tuning_readout = QLabel(format_tuning_readout(config.tuning))
         self.patch_label = QLabel(
-            "Sine · Peak −12 dBFS · A 1 ms · D 600 ms · "
-            "S −6 dB · R 600 ms · Linear amplitude"
+            "Sine · Peak −12 dBFS · A 1 ms · D 600 ms · S −6 dB · R 600 ms · Linear amplitude"
         )
         self.pitch_slider = QSlider(Qt.Orientation.Horizontal)
         self.pitch_slider.setRange(
@@ -2332,63 +2310,71 @@ Implement `_apply_style()` with this concrete QSS so the first screen is capture
 Add these methods to `HarpyWindow`:
 
 ```python
-    def _apply_state(self, state: ControllerState) -> None:
-        self.pitch_slider.blockSignals(True)
-        self.pitch_slider.setValue(state.note.number)
-        self.pitch_slider.blockSignals(False)
-        self.pitch_readout.setText(state.readout)
-        self.pitch_slider.setEnabled(state.selector_enabled)
-        self.play_button.setEnabled(self._audio_playable)
+def _apply_state(self, state: ControllerState) -> None:
+    self.pitch_slider.blockSignals(True)
+    self.pitch_slider.setValue(state.note.number)
+    self.pitch_slider.blockSignals(False)
+    self.pitch_readout.setText(state.readout)
+    self.pitch_slider.setEnabled(state.selector_enabled)
+    self.play_button.setEnabled(self._audio_playable)
 
-    def _on_note_changed(self, number: int) -> None:
-        self._apply_state(self._controller.set_note(number))
 
-    def _on_play_pressed(self) -> None:
-        self._apply_state(self._controller.press_play())
+def _on_note_changed(self, number: int) -> None:
+    self._apply_state(self._controller.set_note(number))
 
-    def _on_play_released(self) -> None:
-        self._apply_state(self._controller.release_play())
 
-    def _force_stop(self) -> None:
-        self.play_button.setDown(False)
-        self._sample_history.clear()
-        self._apply_state(self._controller.force_stop())
+def _on_play_pressed(self) -> None:
+    self._apply_state(self._controller.press_play())
 
-    def _on_audio_status(self, message: str, playable: bool) -> None:
-        self._audio_playable = playable
-        self.status_label.setText(message)
-        self._apply_state(self._controller.state)
 
-    def _update_plots(self) -> None:
-        try:
-            waveform = self._sample_history.snapshot(2_048)
-            time_ms = waveform_time_ms(waveform.size, self._config.render.sample_rate_hz)
-            self._waveform_curve.setData(time_ms, waveform)
-            frequencies, levels = spectrum_dbfs(
-                self._sample_history.snapshot(4_096),
-                self._config.render.sample_rate_hz,
-            )
-            self._spectrum_curve.setData(frequencies, levels)
-            self.waveform_plot.setLabel("bottom", "Time", units="ms")
-            self.spectrum_plot.setLabel("bottom", "Frequency", units="Hz")
-            self.spectrum_plot.setLabel("left", "Level", units="dBFS")
-            self.spectrum_plot.setYRange(-120.0, 0.0)
-            self.spectrum_plot.setXRange(0.0, 2_000.0)
-        except (FloatingPointError, RuntimeError, ValueError) as error:
-            self._plot_timer.stop()
-            message = f"Visualization disabled: {error}"
-            self.waveform_plot.setTitle(message)
-            self.spectrum_plot.setTitle(message)
+def _on_play_released(self) -> None:
+    self._apply_state(self._controller.release_play())
 
-    def event(self, event: QEvent) -> bool:
-        if event.type() is QEvent.Type.WindowDeactivate:
-            self._force_stop()
-        return super().event(event)
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+def _force_stop(self) -> None:
+    self.play_button.setDown(False)
+    self._sample_history.clear()
+    self._apply_state(self._controller.force_stop())
+
+
+def _on_audio_status(self, message: str, playable: bool) -> None:
+    self._audio_playable = playable
+    self.status_label.setText(message)
+    self._apply_state(self._controller.state)
+
+
+def _update_plots(self) -> None:
+    try:
+        waveform = self._sample_history.snapshot(2_048)
+        time_ms = waveform_time_ms(waveform.size, self._config.render.sample_rate_hz)
+        self._waveform_curve.setData(time_ms, waveform)
+        frequencies, levels = spectrum_dbfs(
+            self._sample_history.snapshot(4_096),
+            self._config.render.sample_rate_hz,
+        )
+        self._spectrum_curve.setData(frequencies, levels)
+        self.waveform_plot.setLabel("bottom", "Time", units="ms")
+        self.spectrum_plot.setLabel("bottom", "Frequency", units="Hz")
+        self.spectrum_plot.setLabel("left", "Level", units="dBFS")
+        self.spectrum_plot.setYRange(-120.0, 0.0)
+        self.spectrum_plot.setXRange(0.0, 2_000.0)
+    except (FloatingPointError, RuntimeError, ValueError) as error:
+        self._plot_timer.stop()
+        message = f"Visualization disabled: {error}"
+        self.waveform_plot.setTitle(message)
+        self.spectrum_plot.setTitle(message)
+
+
+def event(self, event: QEvent) -> bool:
+    if event.type() is QEvent.Type.WindowDeactivate:
         self._force_stop()
-        self._audio_engine.shutdown()
-        event.accept()
+    return super().event(event)
+
+
+def closeEvent(self, event: QCloseEvent) -> None:
+    self._force_stop()
+    self._audio_engine.shutdown()
+    event.accept()
 ```
 
 - [ ] **Step 5: Run offscreen widget and regression checks**

@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from enum import Enum
 
 import numpy as np
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
@@ -175,6 +176,39 @@ class FakeSink(QObject):
 
     def error(self) -> QAudio.Error:
         return self.current_error
+
+
+class ForeignAudioError(Enum):
+    NoError = 0
+    OpenError = 1
+
+
+class ForeignAudioState(Enum):
+    StoppedState = 2
+
+
+def test_engine_compares_audio_codes_across_qt_binding_enum_types(qapp) -> None:
+    device = DefaultDevice({(2, QAudioFormat.SampleFormat.Float)})
+    sink = FakeSink()
+    sink.current_error = ForeignAudioError.NoError
+    engine = QtAudioEngine(
+        DEFAULT_CONFIG,
+        SampleRingBuffer(capacity_frames=48_000),
+        media_devices=FakeMediaDevices(device),
+        sink_factory=lambda *_args: sink,
+    )
+    forced_stops: list[bool] = []
+    statuses: list[tuple[str, bool]] = []
+    engine.force_stop_requested.connect(lambda: forced_stops.append(True))
+    engine.status_changed.connect(lambda message, playable: statuses.append((message, playable)))
+
+    engine.start()
+
+    assert statuses == [("Fake speakers · 48 kHz · 2 ch · Float", True)]
+    sink.current_error = ForeignAudioError.OpenError
+    sink.stateChanged.emit(ForeignAudioState.StoppedState)
+    assert forced_stops == [True]
+    assert statuses[-1] == ("Audio output failed: OpenError", False)
 
 
 def test_engine_starts_default_device_and_rebuilds_once_on_hotplug(qapp) -> None:

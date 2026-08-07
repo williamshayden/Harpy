@@ -208,7 +208,7 @@ class QtAudioEngine(QObject):
         self._sink.stateChanged.connect(self._on_sink_state_changed)
         sink = self._sink
         sink.start(self._source)
-        if sink.error() is not QAudio.Error.NoError:
+        if sink.error().value != QAudio.Error.NoError.value:
             self._on_sink_state_changed(QAudio.State.StoppedState)
             return
         if self._sink is not sink:
@@ -232,8 +232,12 @@ class QtAudioEngine(QObject):
     def _on_sink_state_changed(self, state: QAudio.State) -> None:
         if self._disposing or self._sink is None:
             return
-        if state is QAudio.State.StoppedState and self._sink.error() is not QAudio.Error.NoError:
-            error_name = self._sink.error().name
+        error = self._sink.error()
+        if (
+            state.value == QAudio.State.StoppedState.value
+            and error.value != QAudio.Error.NoError.value
+        ):
+            error_name = error.name
             self.force_stop_requested.emit()
             self._dispose_sink()
             self.status_changed.emit(f"Audio output failed: {error_name}", False)
