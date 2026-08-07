@@ -1,0 +1,40 @@
+[project]
+name = "harpy-audio"
+version = "0.1.0"
+description = "A constrained audio-control benchmark and native demonstration lab"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy>=2.0,<3",
+  "pyqtgraph>=0.13.7,<1",
+  "pyside6>=6.8,<7",
+]
+
+[project.scripts]
+harpy = "harpy.gui.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harpy"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.9,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+qt_api = "pyside6"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]

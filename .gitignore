@@ -27,3 +27,9 @@ data/generated/
 Thumbs.db
 .idea/
 .vscode/
+
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
