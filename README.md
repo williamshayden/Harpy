@@ -6,6 +6,7 @@ The project is currently in research and design. The living notebook records pro
 
 - [Project notebook](docs/project-notebook.md)
 
-The native sine lab's high-level design is approved; its written specification is awaiting final review:
+The native sine lab design is approved and has an implementation plan:
 
 - [Native sine lab design](docs/superpowers/specs/2026-08-07-native-sine-lab-design.md)
+- [Native sine lab implementation plan](docs/superpowers/plans/2026-08-07-native-sine-lab.md)
