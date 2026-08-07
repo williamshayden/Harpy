@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --basetemp=.pytest-tmp --capture=sys"
 testpaths = ["tests"]
 qt_api = "pyside6"
 
