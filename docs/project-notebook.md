@@ -255,7 +255,7 @@ Observed on 2026-08-07:
 - GPU: NVIDIA RTX 500 Ada Generation Laptop GPU, 4,094 MiB VRAM;
 - environment: WSL2 2.1.5, Linux kernel 5.15.146.1.
 
-There is no `%UserProfile%/.wslconfig`. Microsoft documents WSL2's default memory allocation as 50% of Windows physical RAM, which explains the apparent 8 GB limit. This is a WSL VM allocation, not missing physical memory. A future explicit `.wslconfig` can raise the cap, but that is an operational choice rather than a Harpy requirement.
+At the time of the snapshot there was no `%UserProfile%/.wslconfig`. Microsoft documents WSL2's default memory allocation as 50% of Windows physical RAM, which explained the apparent 8 GB limit; it was a VM allocation rather than missing physical memory. On 2026-08-07, `%UserProfile%/.wslconfig` was created with `memory=16GB`. The new ceiling takes effect after WSL is fully shut down and restarted.
 
 Reference: [Microsoft WSL advanced settings](https://learn.microsoft.com/windows/wsl/wsl-config).
 
@@ -332,3 +332,4 @@ Questions should be resolved one at a time during design:
 - Made compute telemetry optional and capability-based.
 - Chose to report resource cost as separate raw objectives before considering a composite reward.
 - Initialized a new Git repository for the project notebook and future work.
+- Raised the configured WSL2 memory ceiling from its default 50% allocation to 16 GB; activation requires a WSL restart.
