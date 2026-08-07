@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Experiment artifacts (manifests and summaries should be committed separately)
+artifacts/
+checkpoints/
+runs/
+outputs/
+
+# Large local datasets
+data/raw/
+data/generated/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
