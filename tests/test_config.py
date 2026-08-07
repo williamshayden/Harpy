@@ -4,7 +4,7 @@ import pytest
 
 from harpy.config import DEFAULT_CONFIG, AppConfig
 from harpy.gui.specs import KeyboardViewSpec
-from harpy.pitch import MidiNote
+from harpy.pitch import EqualTemperament, MidiNote
 from harpy.synth.specs import EnvelopeSpec, RenderSpec, SinePatch, seconds_to_frames
 
 
@@ -85,3 +85,23 @@ def test_application_rejects_sub_frame_envelope_stage() -> None:
     patch = SinePatch(envelope=EnvelopeSpec(attack_seconds=0.00001))
     with pytest.raises(ValueError, match=r"attack.*one frame"):
         AppConfig(patch=patch)
+
+
+def test_application_rejects_maximum_note_at_or_above_nyquist() -> None:
+    tuning = EqualTemperament(reference_hz=48_000.0)
+
+    with pytest.raises(
+        ValueError,
+        match=r"maximum_note \(MIDI 72\).*below Nyquist \(24000 Hz\)",
+    ):
+        AppConfig(tuning=tuning)
+
+
+def test_application_rejects_minimum_note_without_finite_positive_frequency() -> None:
+    tuning = EqualTemperament(reference_hz=5e-324)
+
+    with pytest.raises(
+        ValueError,
+        match=r"minimum_note \(MIDI 48\).*finite, positive frequency",
+    ):
+        AppConfig(tuning=tuning)

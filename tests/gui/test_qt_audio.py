@@ -4,7 +4,7 @@ import numpy as np
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtMultimedia import QAudio, QAudioFormat
 
-from harpy.config import DEFAULT_CONFIG
+from harpy.config import DEFAULT_CONFIG, AppConfig
 from harpy.gui.controller import AudioCommand, AudioCommandKind
 from harpy.gui.qt_audio import (
     QtAudioEngine,
@@ -15,6 +15,7 @@ from harpy.gui.qt_audio import (
 )
 from harpy.gui.visualizer import SampleRingBuffer
 from harpy.pitch import Pitch
+from harpy.synth.specs import RenderSpec
 
 
 class FormatDevice:
@@ -194,10 +195,13 @@ def test_engine_starts_default_device_and_rebuilds_once_on_hotplug(qapp) -> None
         sink_factory=sink_factory,
     )
     forced_stops: list[bool] = []
+    statuses: list[tuple[str, bool]] = []
     engine.force_stop_requested.connect(lambda: forced_stops.append(True))
+    engine.status_changed.connect(lambda message, playable: statuses.append((message, playable)))
     engine.start()
     assert len(sinks) == 1
     assert sinks[0].source is not None
+    assert statuses == [("Fake speakers · 48 kHz · 2 ch · Float", True)]
     media_devices.audioOutputsChanged.emit()
     assert forced_stops == [True]
     assert sinks[0].reset_count == 1
@@ -282,6 +286,38 @@ def test_engine_disables_play_when_default_format_is_incompatible(qapp) -> None:
     engine.status_changed.connect(lambda message, playable: statuses.append((message, playable)))
     engine.start()
     assert statuses == [("Default output has no compatible 48 kHz format", False)]
+
+
+def test_engine_reports_non_default_sample_rate_when_format_is_supported(qapp) -> None:
+    config = AppConfig(render=RenderSpec(sample_rate_hz=44_100))
+    device = DefaultDevice({(2, QAudioFormat.SampleFormat.Float)})
+    engine = QtAudioEngine(
+        config,
+        SampleRingBuffer(capacity_frames=44_100),
+        media_devices=FakeMediaDevices(device),
+        sink_factory=lambda *_args: FakeSink(),
+    )
+    statuses: list[tuple[str, bool]] = []
+    engine.status_changed.connect(lambda message, playable: statuses.append((message, playable)))
+
+    engine.start()
+
+    assert statuses == [("Fake speakers · 44.1 kHz · 2 ch · Float", True)]
+
+
+def test_engine_reports_non_default_sample_rate_when_format_is_incompatible(qapp) -> None:
+    config = AppConfig(render=RenderSpec(sample_rate_hz=44_100))
+    engine = QtAudioEngine(
+        config,
+        SampleRingBuffer(capacity_frames=44_100),
+        media_devices=FakeMediaDevices(DefaultDevice(set())),
+    )
+    statuses: list[tuple[str, bool]] = []
+    engine.status_changed.connect(lambda message, playable: statuses.append((message, playable)))
+
+    engine.start()
+
+    assert statuses == [("Default output has no compatible 44.1 kHz format", False)]
 
 
 def test_engine_disables_play_when_no_default_output_exists(qapp) -> None:

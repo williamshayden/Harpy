@@ -19,6 +19,16 @@ from harpy.gui.visualizer import SampleRingBuffer
 from harpy.synth.reference import SineVoice
 
 
+def _format_sample_rate(sample_rate_hz: int) -> str:
+    if sample_rate_hz < 1_000:
+        return f"{sample_rate_hz} Hz"
+    kilohertz, remainder_hz = divmod(sample_rate_hz, 1_000)
+    if remainder_hz == 0:
+        return f"{kilohertz} kHz"
+    decimal = f"{remainder_hz:03d}".rstrip("0")
+    return f"{kilohertz}.{decimal} kHz"
+
+
 def audio_format_candidates(sample_rate_hz: int) -> tuple[QAudioFormat, ...]:
     formats: list[QAudioFormat] = []
     for channels, sample_format in (
@@ -179,9 +189,14 @@ class QtAudioEngine(QObject):
         if device.isNull():
             self.status_changed.emit("No default audio output", False)
             return
-        audio_format = choose_audio_format(device, self._config.render.sample_rate_hz)
+        sample_rate_hz = self._config.render.sample_rate_hz
+        sample_rate_text = _format_sample_rate(sample_rate_hz)
+        audio_format = choose_audio_format(device, sample_rate_hz)
         if audio_format is None:
-            self.status_changed.emit("Default output has no compatible 48 kHz format", False)
+            self.status_changed.emit(
+                f"Default output has no compatible {sample_rate_text} format",
+                False,
+            )
             return
         self._source = SynthAudioDevice(
             self._config,
@@ -202,7 +217,8 @@ class QtAudioEngine(QObject):
             "Float" if audio_format.sampleFormat() is QAudioFormat.SampleFormat.Float else "Int16"
         )
         self.status_changed.emit(
-            f"{device.description()} · 48 kHz · {audio_format.channelCount()} ch · {format_name}",
+            f"{device.description()} · {sample_rate_text} · "
+            f"{audio_format.channelCount()} ch · {format_name}",
             True,
         )
 
