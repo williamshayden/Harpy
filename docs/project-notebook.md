@@ -8,20 +8,24 @@ This is the living record for the project: what we think Harpy is, what prior wo
 
 ## Working thesis
 
-Harpy should be a model-agnostic audio-control benchmark in which an actor receives a reference audio target and a candidate audio asset, then uses a deliberately constrained set of pitch-manipulation actions to tune the candidate toward the reference.
+Harpy's initial track should be a model-agnostic audio-control benchmark in which an actor receives source audio plus a **symbolic musical goal**—for example, “tune this note to D4” or “transpose this chord to F minor”—then uses a deliberately constrained set of analysis and pitch-manipulation tools to satisfy that goal.
+
+The actor does not need to hear an ideal target recording. When useful, the evaluator may generate a hidden target render from the same procedural source and use it to measure audio fidelity. That render is evaluator-only; the actor reasons from the source audio, the symbolic goal, its allowed observations, and the effects of its actions.
 
 The point is not to discover a new formula for pitch. The point is to measure whether a learned actor can acquire and generalize an effective audio-to-action policy while being restricted to the same hierarchical controls a person or tool-using agent might have.
 
-The environment should make simple, solved cases cheap enough to validate the entire experimental pipeline, then preserve the same interface as the audio becomes less pitch-salient or more polyphonic.
+The environment should make simple, solved cases cheap enough to validate the entire experimental pipeline, then preserve the same interface as the audio becomes less pitch-salient or more polyphonic. The scientific claim must match the observation track: giving an actor an explicit F0 estimate tests tool use and control, while giving it only audio or a non-oracle spectrum also tests pitch perception.
 
-## Critical correction: audio transformation, not synth programming
+## Core track first: audio transformation, then inverse synthesis
 
-The actor does **not** control oscillator, filter, envelope, or synthesizer-patch parameters. It manipulates an immutable audio asset through pitch tools.
+In the first retuning versions, the actor does **not** control oscillator, filter, envelope, or synthesizer-patch parameters. It manipulates an immutable audio asset through pitch tools.
 
 A synthesizer can still serve two useful roles:
 
 1. Generate reproducible labeled source audio for procedural tests.
-2. Let a human create realistic held-out assets in Ableton, Serum, or another DAW while retaining exact musical metadata.
+2. Generate an evaluator-only ideal render after applying a known symbolic transformation.
+
+A later inverse-synthesis track can let an actor control waveform, ADSR, and eventually richer parameters to match a reference timbre. That can grow into a two-stage challenge: first create a patch that matches a reference, then use the matched patch to reach a requested note, key, or chord. It is a separate benchmark family that can reuse Harpy's rendering, actor, evaluation, and replay infrastructure without being chained into v1.
 
 The environment should always derive each candidate render from the original source plus the current cumulative pitch offset. It should never repeatedly pitch-shift the previous output, because cumulative processing artifacts would turn action order into an unintended hidden variable.
 
@@ -30,14 +34,15 @@ The environment should always derive each candidate render from the original sou
 Working hypothesis for the first benchmark:
 
 1. Select or generate an immutable base asset.
-2. Produce a reference render and an initially detuned candidate render from that same asset.
-3. Give the actor the permitted observation, current tool state, and remaining action budget.
+2. Declare a symbolic musical goal and, where possible, generate an evaluator-only ideal render from the same source configuration.
+3. Give the actor the source/current audio, symbolic goal, permitted analysis tools, current tool state, and remaining action budget.
 4. Let the actor apply one constrained pitch action at a time.
 5. Re-render from the immutable base asset after each action.
-6. Terminate when the candidate is inside the tuning tolerance; truncate when the action budget is exhausted.
-7. Record accuracy, trajectory, latency, environment steps, model metadata, and any available compute telemetry.
+6. Score musical correctness against latent evaluator truth and audio fidelity as separate outcomes.
+7. Terminate when the candidate is inside the tuning tolerance; truncate when the action budget is exhausted.
+8. Record accuracy, trajectory, latency, environment steps, model metadata, and any available compute telemetry.
 
-The target offset and source metadata are evaluator truth. They must not accidentally leak through filenames, array lengths, loudness, phase, metadata fields, episode IDs, or debug information.
+The source pitch, generated transform, and hidden ideal render are evaluator truth. The declared musical goal is actor-visible, but evaluator-only values must not accidentally leak through filenames, array lengths, loudness, phase, metadata fields, episode IDs, or debug information.
 
 ## Candidate action surface
 
@@ -62,36 +67,76 @@ The action schema should be defined once and adapted to:
 
 These variants answer different scientific questions and should not be conflated:
 
+### Symbolic goal with callable analysis tools
+
+The actor receives the source/current audio and a target note, chord, key, or interval. It may call a deliberately limited analyzer such as a spectrum, F0 estimator, or chromagram, then use pitch actions. This is the leading candidate for v0 because it tests whether an actor can combine musical intent, evidence, and constrained control without requiring an audible target.
+
+An explicit F0 or cents estimate makes perception an engineered preprocessing step. That is legitimate for a tool-use/control track, but it cannot support a claim that the policy learned pitch perception.
+
+### Symbolic goal with non-oracle audio representation
+
+The actor receives the same musical goal but only raw audio or a declared representation such as a log-frequency magnitude spectrum. This combines perception and control and is a harder, scientifically distinct track.
+
 ### Reference-conditioned audio
 
-The actor receives the reference and current candidate as audio or a non-oracle audio representation, but never receives frequency or cents error. This tests audio perception plus sequential control and is the leading candidate for the main benchmark.
+The actor receives an audible reference plus the current candidate. This remains a useful sound-matching variant, but it is not required for the core symbolic-retuning question.
 
 ### Reward-only control
 
-The actor sees its current controls and scalar feedback but not the reference audio. This is black-box search or bandit optimization, not evidence of listening. It is valuable as a leakage and search baseline.
+The actor sees its current controls and scalar feedback but no audio evidence. This is black-box search or bandit optimization, not evidence of listening or musical reasoning. It is valuable as a leakage and search baseline, not the main track.
 
 ### Oracle descriptors
 
-The actor receives an explicit pitch estimate, chroma, or other engineered descriptor. This is useful as an easy pipeline check and upper-bound-style baseline, but it should not be the main “learned to hear pitch” claim.
+The actor receives latent source pitch or exact cents error rather than an estimate derived from audio. This is useful as an easy pipeline check and upper-bound baseline, but it should never be presented as learned listening.
 
 ### Raw waveform versus spectral representation
 
 Raw waveforms make the perception problem substantially harder. A log-frequency magnitude representation supplies useful inductive bias without handing the actor a pitch number. This deserves its own controlled comparison rather than an accidental implementation choice.
 
-## Proposed difficulty ladder
+### Working target semantics
 
-Every early tier should remain solvable through one **global transposition**. Arbitrarily detuned individual chord voices cannot be repaired by a single global pitch control.
+The target format determines what the result demonstrates:
 
-1. **Pipeline sanity:** generated sine, fixed duration, clean signal.
-2. **Robust sine:** randomized phase, level, onset, polarity, duration, and mild noise.
-3. **Single-note timbre:** sine, triangle, saw, square, filtered and missing-fundamental variants.
-4. **Chords:** known voicing and intervals, globally detuned; hold out chord qualities, inversions, and timbres.
-5. **Mixed waveforms:** layered harmonic sources and held-out combinations.
-6. **Pitched percussion:** decays, transients, noise, and controlled inharmonicity with a declared nominal pitch.
-7. **DAW-rendered out-of-domain audio:** Serum/Ableton instruments, unusual presets, effects, and owned recordings.
-8. **Time-varying material:** loops or moving pitch targets, only after the static benchmark is understood.
+- `cents_offset: +235` is a non-perceptual action/planner sanity test because the answer is already stated.
+- `target_note: D4` is the smallest core listening task: the actor must infer the hidden source pitch and reach an octave-specific target.
+- `target_pitch_class: D` permits octave-equivalent answers and therefore tests pitch class rather than register.
+- `target_chord: F:min` is globally reachable only when the source has the same quality and voicing relationship up to transposition.
+- a target key or timed note contour belongs to later, longer-form material.
+
+The main result should include both a one-shot signed-offset prediction view, which isolates perception, and a sequential-action view, which adds planning and refinement. Otherwise, repeated reward queries can conceal the fact that an actor is searching rather than listening.
+
+## Proposed curriculum
+
+The curriculum should vary three axes deliberately instead of treating “harder audio” as one dimension: harmonic richness, polyphony/harmony, and whether the actor transforms audio or programs a synth.
+
+### Retuning track
+
+The user-proposed order is:
+
+1. **V1 — single sine pitch:** one oscillator, one note, hidden source pitch/detune, symbolic target note.
+2. **V2 — sine chords in the same mode:** multiple sine voices, initially keeping the harmonic relationship controlled.
+3. **V3 — harmonic single notes:** one note from a square, saw, or another band-limited oscillator shape.
+4. **V4 — same-mode chords across oscillator shapes:** polyphony plus richer spectra.
+5. **V5 — chords across modes with sine voices:** expand harmonic vocabulary while keeping timbre analytically clean.
+6. **V6 — chords across modes and oscillator shapes:** combine the harmonic and timbral axes.
+
+Each version can contain its own robustness sub-rungs for phase, level, onset, polarity, duration, noise, voicing, inversion, and held-out frequencies or waveforms. This keeps “V1 single sine” small without losing a path to a meaningful generalization result.
+
+“Across modes” still needs one precise definition. If it means the dataset contains major, minor, and modal chords while each episode transposes a chord without changing its internal intervals, the global pitch action remains sufficient. If it means converting the rendered audio itself from one mode or quality to another, the environment needs per-voice note editing or resynthesis.
+
+### Inverse-synthesis track
+
+After the retuning ladder is established:
+
+1. **Patch match:** control a small synth to match an audible reference timbre at a fixed note.
+2. **Patch match, then retune:** create the matching patch, then render it at a requested target note or transposition.
+3. **Chord patch match, then reharmonize/retune:** extend the same two-stage flow to controlled chords.
+
+The first inverse-synthesis task should expose a deliberately small patch surface—oscillator shape, level, and envelope before filters, modulation, effects, or Serum-scale parameter spaces. Patch similarity and musical pitch correctness should remain separate scores.
 
 The sine checkpoint proves the environment, seeding, reward, action semantics, logging, and evaluation. It does not by itself establish an interesting RL result.
+
+The global-transposition boundary is important. C minor to F minor is a uniform +5-semitone shift. C major to F minor is not: its E natural must also become E-flat. That second operation is an advanced polyphonic-editing task and should not silently change the meaning of v0.
 
 ## Dataset strategy
 
@@ -99,22 +144,22 @@ The sine checkpoint proves the environment, seeding, reward, action semantics, l
 
 A tiny built-in renderer can generate unlimited labeled sine, waveform, chord, and simple percussion episodes. This is ideal for deterministic tests, train/test splits, and exact latent pitch truth. It need not become a general-purpose synthesizer.
 
-### DAW-authored data
+### Authored or recorded data
 
-DAW bounces are a strong source of realistic, controlled examples. A session can render the same musical event at known global detune offsets, including difficult timbres and effects. These assets should complement procedural data rather than replace it.
+Simple bounces or recordings can supply realistic held-out examples. Harpy does not need to reproduce a DAW session, plugin, preset, or processing chain. A high-level label such as `saw`, `sine`, `layered chord`, or `pitched percussion`, plus known musical truth, is sufficient for the benchmark manifest.
 
 A manifest should retain at least:
 
-- stable asset ID and source-file hash;
+- stable asset ID, source-file hash, and procedural seed where applicable;
 - ownership/license and redistribution status;
-- source type: procedural, DAW, recorded, or uploaded;
-- DAW, plugin/instrument, preset, and processing-chain notes where available;
-- MIDI notes, chord symbol/voicing, root, and tuning reference;
-- known global detune in cents;
-- sample rate, bit depth, channels, duration, and loudness treatment;
-- recording/render session and base-asset group;
+- high-level source family such as sine, saw, chord, or percussion;
+- evaluator note set or chord label, tuning reference, target goal, and known global offset in cents;
+- sample rate, channels, and duration;
+- base-asset group so related renders remain together;
 - train, validation, IID-test, or OOD-test split;
 - free-form caveats, especially for ambiguous percussion pitch.
+
+Extra production provenance may be kept as optional private notes when it is genuinely useful, but it is not part of the required schema.
 
 Derived detunings of the same original must remain in the same split. Splitting individual rendered files would leak the source timbre across train and test.
 
@@ -158,44 +203,11 @@ References: [OpenAI function calling](https://developers.openai.com/api/docs/gui
 
 ## Optional compute telemetry
 
-Compute is a potentially distinctive benchmark dimension, but it should initially be reported alongside task quality rather than silently folded into the reward.
+Telemetry is a deferred, optional benchmark dimension—not a v0 requirement and not part of the first reward. The base experiment record only needs wall-clock latency, environment steps, and model/inference-call count. Those are portable and already help compare actors.
 
-Why keep it separate first:
+A later local collector may add process CPU/memory plus GPU utilization, VRAM, power, and estimated energy through [psutil](https://psutil.readthedocs.io/) and NVIDIA's official [`nvidia-ml-py`](https://pypi.org/project/nvidia-ml-py/) binding. Hosted actors can report provider usage and cost when available; unobservable remote compute must be labeled unknown rather than zero. Any eventual efficiency score should preserve task quality and resource use as separate raw measurements so the trade-off remains visible.
 
-- a scalar weight between accuracy and energy is an arbitrary research decision;
-- actors may learn to terminate early or avoid useful observations in ways that look efficient but are not comparable;
-- local and hosted inference expose fundamentally different telemetry;
-- raw measurements allow later Pareto-frontier analysis without rerunning every experiment.
-
-Candidate local measurements:
-
-- wall-clock time and time to successful tune;
-- environment steps and model inference calls;
-- process CPU time and peak/resident memory;
-- GPU utilization, VRAM, power draw, and energy integral when the device exposes them;
-- idle baseline, sampling interval, warm-up, hardware, driver, power mode, and telemetry coverage.
-
-Candidate hosted measurements:
-
-- request count, latency, retries, input/output tokens or provider units;
-- provider-reported model, region/routing metadata, and monetary cost when available;
-- no fabricated “GPU energy” estimate when the remote provider does not expose one.
-
-The primary presentation should be an accuracy–latency–energy/cost Pareto view. A later challenge track may define a composite score, but raw components must always remain available.
-
-Telemetry should be capability-based and optional. Missing GPU power counters must never prevent an actor from running.
-
-Working implementation direction:
-
-- `time.perf_counter_ns()` for monotonic wall time;
-- [psutil](https://psutil.readthedocs.io/) for root-and-descendant CPU time and peak RSS/USS;
-- NVIDIA's official [`nvidia-ml-py`](https://pypi.org/project/nvidia-ml-py/) NVML binding for device GPU utilization, VRAM, power, and cumulative energy when supported;
-- `nvidia-smi` only as a diagnostic/fallback, because its text output is not a stable library contract;
-- [Zeus](https://ml.energy/zeus/measure/) as a possible later energy-window helper, not a base requirement.
-
-This machine currently exposes whole-device GPU utilization, VRAM, temperature, and power draw under WSL, but not an `nvidia-smi` cumulative-energy field or Linux CPU RAPL counters. If cumulative NVML energy is unavailable, Harpy can integrate sampled power, label it `device_total`, and subtract a separately measured idle baseline. Short operations should be batched into roughly ten-second measurement windows because laptop Ada power readings are averaged and noisy. Cold start and warmed steady state must be reported separately.
-
-The collector should default to best-effort 250 ms sampling, preserve raw samples or summaries plus coverage/errors, and use `null` with an explanation for unsupported counters. Remote provider compute must be labeled `unobserved_remote`, never zero. WSL CPU/RAM measurements cover the VM/process tree rather than all Windows host activity, and CPU energy will require a future native-Windows sidecar if it becomes important.
+Telemetry must remain capability-based and best-effort. Missing counters should never prevent an experiment from running.
 
 References: [NVIDIA NVML device queries](https://docs.nvidia.com/deploy/nvml-api/group__nvmlDeviceQueries.html), [NVIDIA CUDA on WSL limitations](https://docs.nvidia.com/cuda/wsl-user-guide/), and [CodeCarbon methodology](https://docs.codecarbon.io/latest/explanation/methodology/).
 
@@ -205,7 +217,7 @@ The manual lab is not the training system. Its purposes are:
 
 - validate that the pitch actions sound and behave as specified;
 - inspect one episode and its reward/telemetry trace;
-- compare reference, initial candidate, and final candidate;
+- compare the source, initial state, and final output, with an optional evaluator-only target reveal for debugging;
 - demonstrate the sandbox and tool surface in the YouTube video;
 - replay saved agent trajectories.
 
@@ -230,7 +242,13 @@ This experiment ledger is part of the product, not cleanup work after training.
 
 ## Evaluation principles and required baselines
 
-Primary candidate metric: held-out success rate within a declared cents tolerance. Also record final absolute cents error, octave-error rate, action count, excess actions over the shortest legal path, sample efficiency, latency, and generalization gaps.
+The first evaluation should keep three questions separate:
+
+1. **Musical correctness:** held-out success rate within a declared cents tolerance, final absolute cents error, target-note or target-note-set accuracy, and octave-error rate.
+2. **Signal fidelity:** timing, envelope, timbre, and processing artifacts relative to the immutable source and, where available, the hidden ideal render.
+3. **Control efficiency:** action count, excess actions over the shortest legal path, inference calls, latency, and sample efficiency.
+
+One scalar reward may be required for a particular trainer, but the benchmark report should retain these components. Otherwise, a musically correct but badly damaged render could look equivalent to a clean one, or a high-fidelity render at the wrong pitch could receive undue credit.
 
 Required comparisons:
 
@@ -241,6 +259,8 @@ Required comparisons:
 - supervised signed-offset estimator plus planner;
 - one standard RL baseline;
 - human/manual trajectories where useful for the narrative.
+
+The oracle and classical controllers are especially important for the “smallest model” question. On the first rungs, a deterministic estimator-plus-planner may need no learned model at all. The meaningful benchmark is then the smallest actor that generalizes under each declared observation track, not whether RL can be made to imitate a formula on a single sine wave.
 
 If a classical or search baseline wins the early tasks, that is an honest and useful result. RL becomes more substantively motivated when later tasks introduce partial observation, noisy or delayed feedback, source-dependent processing artifacts, action costs, moving targets, or online adaptation.
 
@@ -261,7 +281,13 @@ Reference: [Microsoft WSL advanced settings](https://learn.microsoft.com/windows
 
 ## Ecosystem and prior work
 
-The broad claim “RL uses audio similarity to control pitch or synthesis parameters” already exists. Harpy's defensible contribution is the standardized audio-transformation benchmark, curriculum, adapters, telemetry, leakage controls, and reproducible experiment ledger.
+The broad claim “RL uses audio similarity to control pitch or synthesis parameters” already exists. Harpy's defensible contribution is a standardized symbolic-retuning benchmark with explicit observation tracks, a controlled curriculum, model adapters, leakage tests, and a reproducible experiment ledger.
+
+### How established pitch tools bound the problem
+
+- **Global sample transposition** applies one ratio, `2^(cents / 1200)`, to the whole signal. A duration-preserving implementation combines pitch shifting and time stretching, with renderer-dependent transient, formant, and phase artifacts. It works on chords because it preserves every interval; it cannot change chord quality. [Rubber Band technical notes](https://www.breakfastquay.com/rubberband/technical.html) describe a production-oriented implementation, while [librosa documents](https://librosa.org/doc/latest/generated/librosa.effects.pitch_shift.html) a convenient open-source baseline.
+- **Auto-Tune-style correction** first estimates a monophonic pitch contour, chooses target notes from a key/scale, MIDI, or edited contour, then applies a smoothed time-varying shift with voicing/formant handling. Antares explicitly scopes its tracker to a single voice or non-chordal instrument; it does not independently tune simultaneous chord voices. References: [original Auto-Tune patent](https://patents.google.com/patent/US5973252A/en), [AutoTune 2026 guide](https://antares-web-frontend.sfo3.cdn.digitaloceanspaces.com/documentation/pdfs/AutoTune_2026_User_Guide.pdf), and [Antares tracking guidance](https://help.antarestech.com/hc/en-us/articles/41115327742740-What-does-the-Tracking-knob-and-other-controls-do-in-Auto-Tune-Pro).
+- **Polyphonic note editing** detects overlapping note objects, assigns spectral energy to them, edits individual pitch/time/formant properties, and resynthesizes the mixture. This is closer to source separation plus transcription and resynthesis than to one pitch knob. Celemony notes that its DNA algorithms separate by pitch rather than instrument, so two instruments on the same pitch remain one object. References: [Celemony audio algorithms](https://helpcenter.celemony.com/M5/doc/melodyneStudio5/en/M5tour_AudioAlgorithms?env=standAlone) and [DNA patent](https://patents.google.com/patent/US8022286B2/en).
 
 ### Closest projects and papers
 
@@ -283,11 +309,14 @@ No field-standard, maintained, installable “AudioGym” suite with Harpy's pro
 - [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) for first standard RL baselines (MIT).
 - [NumPy](https://numpy.org/) and [SciPy](https://scipy.org/) for deterministic synthesis and signal processing (BSD-family).
 - [SoundFile](https://python-soundfile.readthedocs.io/) for initial WAV/FLAC I/O (BSD-3; libsndfile is LGPL).
-- [librosa](https://librosa.org/) for offline resampling, pitch shifting, features, and classical baselines (ISC).
+- [librosa](https://librosa.org/) for offline pitch shifting, pYIN/YIN, CQT/chroma features, and classical baselines (ISC).
+- [mir_eval](https://mir-eval.readthedocs.io/) for conventional melody, multi-pitch, transcription, chord, and key metrics (MIT), while using stricter 5/10/25-cent tuning thresholds than its conventional 50-cent transcription tolerance.
 - [psutil](https://psutil.readthedocs.io/) and optional [nvidia-ml-py](https://pypi.org/project/nvidia-ml-py/) for telemetry (BSD-family).
 - PyTorch only where an actor or batched representation actually needs it.
 
-TorchAudio is now officially in maintenance mode and moved media I/O toward TorchCodec, so it should not anchor the base architecture. Heavy or restrictive stacks such as DDSP/TensorFlow, Ray/RLlib, Essentia, aubio, Pedalboard, or Rubber Band should remain optional and justified by a specific later experiment.
+For procedural tones, the renderer should synthesize the requested frequency directly instead of pitch-shifting audio; this provides artifact-free ground truth. Saw and square generators must be band-limited because naive discontinuous waveforms alias. For recorded audio, [Rubber Band](https://breakfastquay.com/rubberband/) is a useful optional high-quality global baseline with formant handling, but its engine is GPL-2.0-or-later/commercial dual-licensed and should not silently enter a permissive core dependency. [Basic Pitch](https://github.com/spotify/basic-pitch) can later provide polyphonic transcription diagnostics, but transcription alone does not recover independently editable original note waveforms.
+
+TorchAudio is now officially in maintenance mode and moved media I/O toward TorchCodec, so it should not anchor the base architecture. Heavy stacks such as DDSP/TensorFlow, Ray/RLlib, Essentia, Pedalboard, or neural transcription should remain optional and justified by a specific later experiment.
 
 ## YouTube/process narrative
 
@@ -295,13 +324,13 @@ A strong start-to-finish story could follow this arc:
 
 1. Begin with the intentionally “solved” 440 Hz tuning problem.
 2. Explain why solving pitch analytically is not the experiment.
-3. Define the actor's limited tools and what information is hidden.
+3. Give the actor a symbolic target, define its limited tools, and reveal what the evaluator keeps hidden.
 4. Show a human completing the same episode in the manual lab.
 5. Build and validate the environment against oracle and classical baselines.
 6. Train/evaluate the first small policy locally, including failures.
-7. Add harder timbres, chords, percussion, and DAW-authored OOD assets.
+7. Add harder timbres, chords, percussion, and authored OOD assets.
 8. Compare small local policies with hosted or agentic actors.
-9. Plot quality against actions, time, local energy, or hosted cost.
+9. Plot quality against model size, actions, and latency; optionally add local energy or hosted cost later.
 10. End with the actual result, including the possibility that simple methods remain best.
 
 Preserve clean episode replays, audio A/B/C exports, plots, environment diagrams, exact commands/configs, and short decision-log entries as the project develops. These are both reproducibility artifacts and future video assets.
@@ -310,15 +339,17 @@ Preserve clean episode replays, audio A/B/C exports, plots, environment diagrams
 
 Questions should be resolved one at a time during design:
 
-1. What exactly may the main v0 actor observe: raw audio, a spectral representation, or only scalar feedback?
-2. What precise actions correspond to “octave,” “semitone,” “coarse,” and “fine” pitch?
-3. What first result counts as success: convergence on seen tones, OOD frequency generalization, or cross-timbre generalization?
-4. Should the first reward be sparse latent cents success, dense progress, audio similarity, or separate environment variants?
-5. Which renderer is authoritative for uploaded/DAW audio, and what artifact budget is acceptable?
-6. Is the first model a small native RL policy, or should the adapter contract be validated first with a deterministic actor?
-7. When does the manual lab move from a replay/debug page to a polished public demo?
-8. Which assets may be redistributed, and which remain private evaluation material?
-9. Should the repository adopt a permissive license, and which one?
+1. In V5/V6, does “across modes” mean mode diversity with interval-preserving transposition, or does the actor actually convert one rendered mode/chord quality into another?
+2. Is the leading learned track raw audio, a high-resolution log-frequency representation, or a separately labeled F0-assisted tool track?
+3. Is the first core symbolic goal an octave-specific note such as D4, with direct cents offset retained only as calibration?
+4. What precise actions correspond to “octave,” “semitone,” “coarse,” and “fine” pitch, and which targets are reachable on that action lattice?
+5. What first result counts as success: OOD frequency generalization, cross-timbre generalization, or both?
+6. Should training use sparse terminal success, dense latent progress, or controlled variants of both while keeping reward out of the evaluation observation?
+7. Which renderer is authoritative for uploaded/recorded audio, and what artifact budget is acceptable?
+8. What is the smallest supervised and RL actor worth comparing on the same observation encoder?
+9. When does the manual lab move from a replay/debug page to a polished public demo?
+10. Which assets may be redistributed, and which remain private evaluation material?
+11. Should the repository adopt a permissive license, and which one?
 
 ## Decision log
 
@@ -327,9 +358,15 @@ Questions should be resolved one at a time during design:
 - Adopted **Harpy** as the working project name from the workspace.
 - Defined the core task as constrained pitch manipulation of audio, not synthesizer parameter control.
 - Kept synthesis as a labeled-data source and optional renderer only.
+- Selected single-note sine retuning as V1, followed by a curriculum that varies polyphony, oscillator harmonic content, and chord modes deliberately.
+- Added a later inverse-synthesis track: match a reference patch first, then use that patch to reach a requested pitch or chord.
+- Reframed the leading benchmark from audible-reference matching to source audio plus a symbolic musical goal, with any ideal target render hidden inside evaluation.
+- Separated global transposition, monophonic Auto-Tune-style correction, polyphonic note editing, and synth patch matching into distinct task families.
+- Simplified authored-audio metadata to high-level source type plus musical/evaluation truth; plugin, preset, and processing-chain reconstruction is not required.
 - Treated the manual lab as a debugging, replay, and video-demonstration surface rather than the training loop.
 - Required model serving to remain behind an adapter boundary.
 - Made compute telemetry optional and capability-based.
+- Deferred detailed compute/energy collection beyond v0.
 - Chose to report resource cost as separate raw objectives before considering a composite reward.
 - Initialized a new Git repository for the project notebook and future work.
 - Raised the configured WSL2 memory ceiling from its default 50% allocation to 16 GB; activation requires a WSL restart.
