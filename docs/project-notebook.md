@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-07
 
-Status: exploratory notes, not an approved design or implementation plan.
+Status: exploratory project-level notes. Milestone specifications and their review status live under `docs/superpowers/specs/`.
 
 This is the living record for the project: what we think Harpy is, what prior work exists, what decisions have been made, what remains uncertain, and what would make the work scientifically honest and useful.
 
@@ -221,7 +221,7 @@ The manual lab is not the training system. Its purposes are:
 - demonstrate the sandbox and tool surface in the YouTube video;
 - replay saved agent trajectories.
 
-Because the project runs under WSL2, browser playback avoids making Windows/WSL audio-device routing a core dependency. The browser should play audio produced by the same headless environment used in training so the demo cannot drift from the benchmark.
+The manual lab is a native local desktop application; a browser or local web server is explicitly out of scope. The first approved slice uses PySide6, Qt Multimedia, pyqtgraph, and WSLg. Its live audio device remains a demonstration adapter around the same deterministic block renderer that future offline generation will use, so device behavior cannot become benchmark truth.
 
 ## Experiment record
 
@@ -308,6 +308,7 @@ No field-standard, maintained, installable “AudioGym” suite with Harpy's pro
 - [Gymnasium](https://gymnasium.farama.org/) for the environment contract (MIT).
 - [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) for first standard RL baselines (MIT).
 - [NumPy](https://numpy.org/) and [SciPy](https://scipy.org/) for deterministic synthesis and signal processing (BSD-family).
+- [PySide6](https://doc.qt.io/qtforpython-6/) and [pyqtgraph](https://pyqtgraph.readthedocs.io/) for the native manual lab and plots.
 - [SoundFile](https://python-soundfile.readthedocs.io/) for initial WAV/FLAC I/O (BSD-3; libsndfile is LGPL).
 - [librosa](https://librosa.org/) for offline pitch shifting, pYIN/YIN, CQT/chroma features, and classical baselines (ISC).
 - [mir_eval](https://mir-eval.readthedocs.io/) for conventional melody, multi-pitch, transcription, chord, and key metrics (MIT), while using stricter 5/10/25-cent tuning thresholds than its conventional 50-cent transcription tolerance.
@@ -347,7 +348,7 @@ Questions should be resolved one at a time during design:
 6. Should training use sparse terminal success, dense latent progress, or controlled variants of both while keeping reward out of the evaluation observation?
 7. Which renderer is authoritative for uploaded/recorded audio, and what artifact budget is acceptable?
 8. What is the smallest supervised and RL actor worth comparing on the same observation encoder?
-9. When does the manual lab move from a replay/debug page to a polished public demo?
+9. When does the manual lab move from a replay/debug surface to a polished public demo?
 10. Which assets may be redistributed, and which remain private evaluation material?
 11. Should the repository adopt a permissive license, and which one?
 
@@ -370,3 +371,10 @@ Questions should be resolved one at a time during design:
 - Chose to report resource cost as separate raw objectives before considering a composite reward.
 - Initialized a new Git repository for the project notebook and future work.
 - Raised the configured WSL2 memory ceiling from its default 50% allocation to 16 GB; activation requires a WSL restart.
+- Approved a native PySide6/Qt manual lab with no browser dependency.
+- Selected a small deterministic NumPy sine voice as the v1 reference synth; AMY is the leading optional backend to reconsider for harmonic oscillators and richer patches.
+- Set the initial selector to MIDI note 60, displayed as `C3` using Ableton's octave convention, with MIDI note 69 at 440 Hz as a separate tuning reference.
+- Fixed the v1 envelope to 1 ms attack, 600 ms decay, -6 dB sustain, and 600 ms release with linear-amplitude segments.
+- Chose validated typed configuration values for tuning, note selection, render format, and envelope rather than hidden OS environment variables.
+- Chose `uv` for Python environment and package management, with a committed lockfile.
+- Kept the first executable slice free of a database, JUCE/C++, MIDI, rendered-sample editing, and RL integration.
