@@ -173,6 +173,7 @@ class HarpyWindow(QMainWindow):
         return super().event(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._plot_timer.stop()
         self._force_stop()
         self._audio_engine.shutdown()
         event.accept()

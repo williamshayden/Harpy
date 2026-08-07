@@ -30,7 +30,7 @@ def build_runtime(
     *,
     audio_factory: AudioFactory = QtAudioEngine,
 ) -> LabRuntime:
-    sample_history = SampleRingBuffer(config.render.sample_rate_hz)
+    sample_history = SampleRingBuffer(max(config.render.sample_rate_hz, 4_096))
     audio = audio_factory(config, sample_history)
     controller = LabController(config, audio.submit)
     window = HarpyWindow(config, controller, audio, sample_history)

@@ -2310,71 +2310,65 @@ Implement `_apply_style()` with this concrete QSS so the first screen is capture
 Add these methods to `HarpyWindow`:
 
 ```python
-def _apply_state(self, state: ControllerState) -> None:
-    self.pitch_slider.blockSignals(True)
-    self.pitch_slider.setValue(state.note.number)
-    self.pitch_slider.blockSignals(False)
-    self.pitch_readout.setText(state.readout)
-    self.pitch_slider.setEnabled(state.selector_enabled)
-    self.play_button.setEnabled(self._audio_playable)
+class HarpyWindow(QMainWindow):
+    def _apply_state(self, state: ControllerState) -> None:
+        self.pitch_slider.blockSignals(True)
+        self.pitch_slider.setValue(state.note.number)
+        self.pitch_slider.blockSignals(False)
+        self.pitch_readout.setText(state.readout)
+        self.pitch_slider.setEnabled(state.selector_enabled)
+        self.play_button.setEnabled(self._audio_playable)
 
+    def _on_note_changed(self, number: int) -> None:
+        self._apply_state(self._controller.set_note(number))
 
-def _on_note_changed(self, number: int) -> None:
-    self._apply_state(self._controller.set_note(number))
+    def _on_play_pressed(self) -> None:
+        self._apply_state(self._controller.press_play())
 
+    def _on_play_released(self) -> None:
+        self._apply_state(self._controller.release_play())
 
-def _on_play_pressed(self) -> None:
-    self._apply_state(self._controller.press_play())
+    def _force_stop(self) -> None:
+        self.play_button.setDown(False)
+        self._sample_history.clear()
+        self._apply_state(self._controller.force_stop())
 
+    def _on_audio_status(self, message: str, playable: bool) -> None:
+        self._audio_playable = playable
+        self.status_label.setText(message)
+        self._apply_state(self._controller.state)
 
-def _on_play_released(self) -> None:
-    self._apply_state(self._controller.release_play())
+    def _update_plots(self) -> None:
+        try:
+            waveform = self._sample_history.snapshot(2_048)
+            time_ms = waveform_time_ms(waveform.size, self._config.render.sample_rate_hz)
+            self._waveform_curve.setData(time_ms, waveform)
+            frequencies, levels = spectrum_dbfs(
+                self._sample_history.snapshot(4_096),
+                self._config.render.sample_rate_hz,
+            )
+            self._spectrum_curve.setData(frequencies, levels)
+            self.waveform_plot.setLabel("bottom", "Time", units="ms")
+            self.spectrum_plot.setLabel("bottom", "Frequency", units="Hz")
+            self.spectrum_plot.setLabel("left", "Level", units="dBFS")
+            self.spectrum_plot.setYRange(-120.0, 0.0)
+            self.spectrum_plot.setXRange(0.0, 2_000.0)
+        except (FloatingPointError, RuntimeError, ValueError) as error:
+            self._plot_timer.stop()
+            message = f"Visualization disabled: {error}"
+            self.waveform_plot.setTitle(message)
+            self.spectrum_plot.setTitle(message)
 
+    def event(self, event: QEvent) -> bool:
+        if event.type() is QEvent.Type.WindowDeactivate:
+            self._force_stop()
+        return super().event(event)
 
-def _force_stop(self) -> None:
-    self.play_button.setDown(False)
-    self._sample_history.clear()
-    self._apply_state(self._controller.force_stop())
-
-
-def _on_audio_status(self, message: str, playable: bool) -> None:
-    self._audio_playable = playable
-    self.status_label.setText(message)
-    self._apply_state(self._controller.state)
-
-
-def _update_plots(self) -> None:
-    try:
-        waveform = self._sample_history.snapshot(2_048)
-        time_ms = waveform_time_ms(waveform.size, self._config.render.sample_rate_hz)
-        self._waveform_curve.setData(time_ms, waveform)
-        frequencies, levels = spectrum_dbfs(
-            self._sample_history.snapshot(4_096),
-            self._config.render.sample_rate_hz,
-        )
-        self._spectrum_curve.setData(frequencies, levels)
-        self.waveform_plot.setLabel("bottom", "Time", units="ms")
-        self.spectrum_plot.setLabel("bottom", "Frequency", units="Hz")
-        self.spectrum_plot.setLabel("left", "Level", units="dBFS")
-        self.spectrum_plot.setYRange(-120.0, 0.0)
-        self.spectrum_plot.setXRange(0.0, 2_000.0)
-    except (FloatingPointError, RuntimeError, ValueError) as error:
+    def closeEvent(self, event: QCloseEvent) -> None:
         self._plot_timer.stop()
-        message = f"Visualization disabled: {error}"
-        self.waveform_plot.setTitle(message)
-        self.spectrum_plot.setTitle(message)
-
-
-def event(self, event: QEvent) -> bool:
-    if event.type() is QEvent.Type.WindowDeactivate:
         self._force_stop()
-    return super().event(event)
-
-
-def closeEvent(self, event: QCloseEvent) -> None:
-    self._force_stop()
-    self._audio_engine.shutdown()
-    event.accept()
+        self._audio_engine.shutdown()
+        event.accept()
 ```
 
 - [ ] **Step 5: Run offscreen widget and regression checks**

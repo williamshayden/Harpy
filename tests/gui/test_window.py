@@ -13,13 +13,16 @@ class FakeAudioEngine(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.commands: list[AudioCommand] = []
+        self.lifecycle_events: list[str] = []
         self.shutdown_count = 0
 
     def submit(self, command: AudioCommand) -> None:
         self.commands.append(command)
+        self.lifecycle_events.append(f"submit:{command.kind.name}")
 
     def shutdown(self) -> None:
         self.shutdown_count += 1
+        self.lifecycle_events.append("shutdown")
 
 
 def make_window(qtbot) -> tuple[HarpyWindow, FakeAudioEngine]:
@@ -89,9 +92,12 @@ def test_audio_failure_disables_play_and_forces_stop(qtbot) -> None:
 def test_close_forces_stop_and_shuts_down_audio(qtbot) -> None:
     window, audio = make_window(qtbot)
     qtbot.mousePress(window.play_button, Qt.MouseButton.LeftButton)
+    assert window._plot_timer.isActive()
     window.close()
     assert audio.commands[-1].kind is AudioCommandKind.RESET
+    assert audio.lifecycle_events[-2:] == ["submit:RESET", "shutdown"]
     assert audio.shutdown_count == 1
+    assert not window._plot_timer.isActive()
 
 
 def test_plot_failure_stops_visual_timer_without_touching_audio(qtbot, monkeypatch) -> None:

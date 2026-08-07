@@ -101,6 +101,25 @@ def test_reset_command_makes_next_staging_block_exact_silence() -> None:
     np.testing.assert_array_equal(decoded, np.zeros(decoded.size, dtype=np.float32))
 
 
+def test_reset_command_clears_nonzero_sample_history() -> None:
+    history = SampleRingBuffer(capacity_frames=48_000)
+    audio_format = audio_format_candidates(48_000)[0]
+    source = SynthAudioDevice(DEFAULT_CONFIG, audio_format, history)
+    byte_count = DEFAULT_CONFIG.render.block_frames * audio_format.bytesPerFrame()
+    source.submit(AudioCommand(AudioCommandKind.NOTE_ON, Pitch.from_midi(60)))
+    source.readData(byte_count)
+    assert np.any(history.snapshot(4_096) != 0.0)
+
+    source.submit(AudioCommand(AudioCommandKind.RESET))
+    decoded = np.frombuffer(source.readData(byte_count), dtype=np.float32)
+
+    np.testing.assert_array_equal(decoded, np.zeros(decoded.size, dtype=np.float32))
+    np.testing.assert_array_equal(
+        history.snapshot(4_096),
+        np.zeros(4_096, dtype=np.float32),
+    )
+
+
 def test_reset_discards_a_partially_consumed_nonzero_staging_block() -> None:
     history = SampleRingBuffer(capacity_frames=48_000)
     audio_format = audio_format_candidates(48_000)[0]

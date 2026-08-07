@@ -136,6 +136,7 @@ class SynthAudioDevice(QIODevice):
             elif command.kind is AudioCommandKind.RESET:
                 self._voice.reset()
                 self._staging.clear()
+                self._sample_history.clear()
 
 
 SinkFactory = Callable[[QAudioDevice, QAudioFormat, QObject], QAudioSink]
