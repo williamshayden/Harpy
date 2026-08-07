@@ -84,8 +84,10 @@ class SynthAudioDevice(QIODevice):
     def readData(self, maxlen: int) -> bytes:
         if maxlen <= 0:
             return b""
-        while len(self._staging) < maxlen:
+        while True:
             self._drain_commands()
+            if len(self._staging) >= maxlen:
+                break
             mono = self._voice.render_block(self._config.render.block_frames)
             self._sample_history.append(mono)
             self._staging.extend(encode_mono_samples(mono, self._audio_format))
@@ -152,9 +154,12 @@ class QtAudioEngine(QObject):
         self._sink: QAudioSink | None = None
         self._source: SynthAudioDevice | None = None
         self._disposing = False
+        self._shutdown = False
         self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
 
     def start(self) -> None:
+        if self._shutdown:
+            return
         self._initialize_default_output()
 
     def submit(self, command: AudioCommand) -> None:
@@ -163,6 +168,10 @@ class QtAudioEngine(QObject):
         self._source.submit(command)
 
     def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._media_devices.audioOutputsChanged.disconnect(self._on_audio_outputs_changed)
         self._dispose_sink()
 
     def _initialize_default_output(self) -> None:
@@ -198,6 +207,8 @@ class QtAudioEngine(QObject):
         )
 
     def _on_audio_outputs_changed(self) -> None:
+        if self._shutdown:
+            return
         self.force_stop_requested.emit()
         self._dispose_sink()
         self._initialize_default_output()
@@ -213,13 +224,20 @@ class QtAudioEngine(QObject):
 
     def _dispose_sink(self) -> None:
         self._disposing = True
+        sink = self._sink
+        source = self._source
+        self._sink = None
+        self._source = None
         try:
-            if self._sink is not None:
-                self._sink.reset()
-            if self._source is not None:
-                self._source.reset_after_sink_stop()
-                self._source.close()
-            self._sink = None
-            self._source = None
+            if sink is not None:
+                sink.stateChanged.disconnect(self._on_sink_state_changed)
+                sink.reset()
+            if source is not None:
+                source.reset_after_sink_stop()
+                source.close()
         finally:
+            if sink is not None:
+                sink.deleteLater()
+            if source is not None:
+                source.deleteLater()
             self._disposing = False
