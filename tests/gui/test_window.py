@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QWidget
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QWidget
 
 from harpy.analysis import AnalysisConfig, AudioObservation
 from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
@@ -30,11 +31,21 @@ ANALYSIS = AnalysisConfig(waveform_window_seconds=4 / SAMPLE_RATE, fft_frames=4)
 class Dialogs:
     open_path: Path | None = None
     save_path: Path | None = None
+    deactivate_during_open: bool = False
+    deactivate_during_save: bool = False
+    open_count: int = 0
+    save_count: int = 0
 
-    def choose_open_path(self, _parent) -> Path | None:
+    def choose_open_path(self, parent) -> Path | None:
+        self.open_count += 1
+        if self.deactivate_during_open:
+            parent.event(QEvent(QEvent.Type.WindowDeactivate))
         return self.open_path
 
-    def choose_save_path(self, _parent) -> Path | None:
+    def choose_save_path(self, parent) -> Path | None:
+        self.save_count += 1
+        if self.deactivate_during_save:
+            parent.event(QEvent(QEvent.Type.WindowDeactivate))
         return self.save_path
 
 
@@ -136,25 +147,165 @@ def test_knob_and_entry_share_one_frequency_without_feedback_loops(qtbot) -> Non
     assert commands == []
 
 
-def test_mouse_and_space_hold_emit_one_note_pair_and_editor_owns_space(qtbot) -> None:
-    window, _, commands, _, _ = make_window(qtbot)
-    button = window.findChild(QPushButton, "playButton")
+def test_refresh_timer_preserves_a_focused_human_edit_until_explicit_knob_commit(qtbot) -> None:
+    window, controller, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
     entry = window.findChild(FrequencyEntry, "frequencyEntry")
-
-    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
-    qtbot.mouseRelease(button, Qt.MouseButton.LeftButton)
-    qtbot.keyPress(window, Qt.Key.Key_Space)
-    qtbot.keyRelease(window, Qt.Key.Key_Space)
+    knob = window.findChild(FrequencyKnob, "frequencyKnob")
     entry.setFocus()
-    qtbot.keyPress(entry, Qt.Key.Key_Space)
-    qtbot.keyRelease(entry, Qt.Key.Key_Space)
+    entry.selectAll()
+    qtbot.keyClicks(entry, "333.123")
+
+    qtbot.wait(window._refresh_timer.interval() * 2 + 10)
+
+    assert entry.text() == "333.123"
+    assert entry.isModified()
+    assert controller.state.selected_frequency_hz == pytest.approx(261.6255653005986)
+    assert commands == []
+
+    knob.set_frequency_hz(330.0, emit=True)
+    assert entry.text() == "330.000"
+    assert not entry.isModified()
+    assert controller.state.selected_frequency_hz == 330.0
+
+
+def test_invalid_entry_style_and_banner_survive_refresh_then_escape_restores_model(qtbot) -> None:
+    window, controller, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+    banner = window.findChild(QFrame, "audioErrorBanner")
+    entry.setFocus()
+    entry.selectAll()
+    qtbot.keyClicks(entry, "999")
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+
+    assert entry.text() == "999"
+    assert entry.property("validationState") == "error"
+    assert "frequency" in banner.findChild(QLabel).text().casefold()
+    qtbot.wait(window._refresh_timer.interval() * 2 + 10)
+    assert entry.text() == "999"
+    assert entry.property("validationState") == "error"
+    assert banner.isVisibleTo(window)
+    assert controller.state.selected_frequency_hz == pytest.approx(261.6255653005986)
+    assert commands == []
+
+    qtbot.keyClick(entry, Qt.Key.Key_Escape)
+    assert entry.text() == "261.626"
+    assert entry.property("validationState") is None
+    assert banner.isHidden()
+
+
+def test_valid_entry_commit_clears_prior_validation_error(qtbot) -> None:
+    window, controller, _, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+    banner = window.findChild(QFrame, "audioErrorBanner")
+    entry.setFocus()
+    entry.selectAll()
+    qtbot.keyClicks(entry, "999")
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+    entry.selectAll()
+    qtbot.keyClicks(entry, "330")
+
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+
+    assert controller.state.selected_frequency_hz == 330.0
+    assert entry.text() == "330.000"
+    assert entry.property("validationState") is None
+    assert banner.isHidden()
+
+
+@pytest.mark.parametrize(
+    "target_name",
+    ["frequencyKnob", "playButton", "clearButton", "loadPatchButton", "savePatchButton"],
+)
+def test_space_hold_routes_from_each_focused_non_editor_child(qtbot, target_name: str) -> None:
+    window, _, commands, _, dialogs = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    target = window.findChild(QWidget, target_name)
+    target.setFocus()
+
+    qtbot.keyPress(target, Qt.Key.Key_Space)
+    qtbot.keyRelease(target, Qt.Key.Key_Space)
 
     assert [command.kind for command in commands] == [
         AudioCommandKind.NOTE_ON,
         AudioCommandKind.NOTE_OFF,
+    ]
+    assert dialogs.open_count == 0
+    assert dialogs.save_count == 0
+
+
+def test_space_is_owned_by_focused_frequency_editor(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+    entry.setFocus()
+    entry.setText("330")
+    entry.setCursorPosition(3)
+
+    qtbot.keyPress(entry, Qt.Key.Key_Space)
+    qtbot.keyRelease(entry, Qt.Key.Key_Space)
+
+    assert entry.text() == "330 "
+    assert commands == []
+
+
+def test_space_autorepeat_is_consumed_without_retrigger_or_early_release(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    target = window.findChild(QPushButton, "clearButton")
+    target.setFocus()
+    qtbot.keyPress(target, Qt.Key.Key_Space)
+    repeat_press = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_Space,
+        Qt.KeyboardModifier.NoModifier,
+        " ",
+        True,
+        2,
+    )
+    repeat_release = QKeyEvent(
+        QEvent.Type.KeyRelease,
+        Qt.Key.Key_Space,
+        Qt.KeyboardModifier.NoModifier,
+        " ",
+        True,
+        2,
+    )
+
+    QApplication.sendEvent(target, repeat_press)
+    QApplication.sendEvent(target, repeat_release)
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+    qtbot.keyRelease(target, Qt.Key.Key_Space)
+    assert [command.kind for command in commands] == [
         AudioCommandKind.NOTE_ON,
         AudioCommandKind.NOTE_OFF,
     ]
+
+
+def test_window_space_filter_does_not_leak_to_another_top_level(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    other = QPushButton("Other")
+    qtbot.addWidget(other)
+    other.show()
+    qtbot.waitExposed(other)
+    clicks: list[bool] = []
+    other.clicked.connect(lambda: clicks.append(True))
+    other.setFocus()
+
+    qtbot.keyClick(other, Qt.Key.Key_Space)
+
+    assert clicks == [True]
+    assert commands == []
 
 
 def test_live_frequency_edit_retunes_without_retrigger(qtbot) -> None:
@@ -229,13 +380,21 @@ def test_patch_facts_are_six_separate_labelled_values(qtbot) -> None:
     assert len(labels) == 12
 
 
-def test_load_cancel_is_a_noop_and_invalid_load_is_atomic(qtbot, tmp_path) -> None:
-    window, controller, commands, history, dialogs = make_window(qtbot)
+def test_modal_load_cancel_is_a_true_noop(qtbot) -> None:
+    window, controller, commands, _, dialogs = make_window(qtbot)
+    controller.press_play()
     before = controller.state
-    window.findChild(QPushButton, "loadPatchButton").click()
-    assert controller.state == before
-    assert commands == []
+    dialogs.deactivate_during_open = True
 
+    window.findChild(QPushButton, "loadPatchButton").click()
+
+    assert controller.state == before
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+    assert dialogs.open_count == 1
+
+
+def test_modal_invalid_load_is_atomic(qtbot, tmp_path) -> None:
+    window, controller, commands, history, dialogs = make_window(qtbot)
     generation = controller.press_play().capture.generation
     history.append(np.ones(4, dtype=np.float32), generation)
     window.refresh_capture()
@@ -245,12 +404,29 @@ def test_load_cancel_is_a_noop_and_invalid_load_is_atomic(qtbot, tmp_path) -> No
     document["envelope"]["attack_seconds"] = "fast"
     bad.write_text(json.dumps(document), encoding="utf-8")
     dialogs.open_path = bad
+    dialogs.deactivate_during_open = True
     window.findChild(QPushButton, "loadPatchButton").click()
 
     assert controller.state == before
     assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
     banner = window.findChild(QFrame, "audioErrorBanner")
     assert "envelope.attack_seconds" in banner.findChild(QLabel).text()
+
+
+def test_modal_read_failure_preserves_playback_and_capture(qtbot, tmp_path) -> None:
+    window, controller, commands, history, dialogs = make_window(qtbot)
+    generation = controller.press_play().capture.generation
+    history.append(np.ones(4, dtype=np.float32), generation)
+    window.refresh_capture()
+    before = controller.state
+    dialogs.open_path = tmp_path / "missing.json"
+    dialogs.deactivate_during_open = True
+
+    window.findChild(QPushButton, "loadPatchButton").click()
+
+    assert controller.state == before
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+    assert window.findChild(QFrame, "audioErrorBanner").isVisibleTo(window)
 
 
 def test_valid_load_preserves_frequency_force_stops_and_replaces_patch(qtbot, tmp_path) -> None:
@@ -262,6 +438,7 @@ def test_valid_load_preserves_frequency_force_stops_and_replaces_patch(qtbot, tm
     path = tmp_path / "replacement.json"
     path.write_text(dumps_patch(replacement), encoding="utf-8")
     dialogs.open_path = path
+    dialogs.deactivate_during_open = True
     controller.set_frequency(330.0)
     controller.press_play()
 
@@ -271,12 +448,40 @@ def test_valid_load_preserves_frequency_force_stops_and_replaces_patch(qtbot, tm
     assert controller.state.patch == replacement
     assert controller.state.capture.state is CaptureState.EMPTY
     assert not controller.state.voice_may_be_active
-    assert commands[-1].kind is AudioCommandKind.REPLACE_PATCH
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
     facts = " ".join(
         label.text() for label in window.findChild(QFrame, "patchFacts").findChildren(QLabel)
     )
     assert "25 ms" in facts
     assert "\N{MINUS SIGN}18 dBFS" in facts
+
+
+def test_render_invalid_loaded_patch_is_reported_without_mutation(qtbot, tmp_path) -> None:
+    window, controller, commands, history, dialogs = make_window(qtbot)
+    generation = controller.press_play().capture.generation
+    history.append(np.ones(4, dtype=np.float32), generation)
+    window.refresh_capture()
+    before = controller.state
+    path = tmp_path / "sub-frame.json"
+    path.write_text(
+        dumps_patch(SynthPatch(envelope=EnvelopeConfig(attack_seconds=1e-12))),
+        encoding="utf-8",
+    )
+    dialogs.open_path = path
+
+    try:
+        window._load_patch()
+    except ValueError as error:
+        pytest.fail(f"render validation escaped the load boundary: {error}")
+
+    assert controller.state == before
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+    message = window.findChild(QFrame, "audioErrorBanner").findChild(QLabel).text()
+    assert "attack" in message
+    assert "frame" in message
 
 
 def test_valid_load_while_unavailable_updates_patch_and_command_cache(qtbot, tmp_path) -> None:
@@ -299,17 +504,21 @@ def test_valid_load_while_unavailable_updates_patch_and_command_cache(qtbot, tmp
 
 def test_save_as_writes_only_canonical_patch_and_failure_does_not_mutate(qtbot, tmp_path) -> None:
     window, controller, commands, _, dialogs = make_window(qtbot)
+    controller.press_play()
+    before = controller.state
     target = tmp_path / "saved.json"
     dialogs.save_path = target
+    dialogs.deactivate_during_save = True
     window.findChild(QPushButton, "savePatchButton").click()
 
     assert load_patch(target) == controller.state.patch
     assert target.read_text(encoding="utf-8") == dumps_patch(controller.state.patch)
-    before = controller.state
+    assert controller.state == before
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
     dialogs.save_path = tmp_path / "missing" / "saved.json"
     window.findChild(QPushButton, "savePatchButton").click()
     assert controller.state == before
-    assert commands == []
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
     assert window.findChild(QFrame, "audioErrorBanner").isVisibleTo(window)
 
 

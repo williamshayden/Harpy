@@ -146,6 +146,11 @@ class FrequencyKnob(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.hasFocus():
+            focus_rect = self.rect().adjusted(3, 3, -3, -3)
+            painter.setPen(QPen(QColor("#65d8ff"), 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(focus_rect, 8.0, 8.0)
         rect = self.rect().adjusted(12, 12, -12, -12)
         painter.setPen(QPen(QColor("#3a4352"), 5.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, 225 * 16, 270 * 16)

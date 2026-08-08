@@ -1,8 +1,8 @@
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QAccessible, QWheelEvent
+from PySide6.QtGui import QAccessible, QColor, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from harpy.gui.frequency_knob import FrequencyKnob, frequency_to_unit
 
@@ -126,6 +126,49 @@ def test_knob_has_focus_and_accessible_name(qtbot) -> None:
     knob = make_knob(qtbot)
     assert knob.focusPolicy() == Qt.FocusPolicy.StrongFocus
     assert knob.accessibleName() == "Frequency"
+
+
+def test_keyboard_focus_renders_a_high_contrast_ring_without_changing_value(qtbot) -> None:
+    # Omitting a custom focus cue makes this keyboard-operated painted widget look idle.
+    knob = make_knob(qtbot)
+    focus_sink = QPushButton("Focus sink")
+    qtbot.addWidget(focus_sink)
+    focus_sink.show()
+    focus_sink.activateWindow()
+    focus_sink.setFocus()
+    QApplication.processEvents()
+    assert not knob.hasFocus()
+    unfocused = knob.grab().toImage().copy()
+    before = knob.frequency_hz
+
+    knob.activateWindow()
+    knob.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    assert knob.hasFocus()
+    focused = knob.grab().toImage().copy()
+
+    focus_color = QColor("#65d8ff")
+    focused_pixels = sum(
+        focused.pixelColor(x, y) == focus_color
+        for y in range(focused.height())
+        for x in range(focused.width())
+    )
+    unfocused_pixels = sum(
+        unfocused.pixelColor(x, y) == focus_color
+        for y in range(unfocused.height())
+        for x in range(unfocused.width())
+    )
+    differing_pixels = sum(
+        focused.pixel(x, y) != unfocused.pixel(x, y)
+        for y in range(focused.height())
+        for x in range(focused.width())
+    )
+    assert differing_pixels >= 100
+    assert focused_pixels >= 40
+    assert unfocused_pixels == 0
+    assert knob.frequency_hz == before
+    assert knob.size().width() == 120
+    assert knob.size().height() == 120
 
 
 def test_knob_exposes_real_adjustable_accessibility_value_and_actions(qtbot) -> None:

@@ -45,7 +45,10 @@ class HarpyWindow(QMainWindow):
         self._patch_dialogs = patch_dialogs
         self._shutdown_prepared = False
         self._local_error: str | None = None
+        self._entry_error: str | None = None
         self._space_held = False
+        self._dialog_chooser_active = False
+        self._space_filter_installed = False
 
         self.setWindowTitle("Harpy")
         self.setMinimumSize(1_024, 640)
@@ -174,12 +177,17 @@ class HarpyWindow(QMainWindow):
 
         self.frequency_knob.frequency_changed.connect(self._set_frequency)
         self.frequency_entry.frequency_committed.connect(self._set_frequency)
-        self.frequency_entry.validation_failed.connect(self._show_local_error)
+        self.frequency_entry.validation_failed.connect(self._show_entry_error)
         self.play_button.pressed.connect(self._press_play)
         self.play_button.released.connect(self._release_play)
         self.clear_button.clicked.connect(self._clear_measurement)
         self.load_patch_button.clicked.connect(self._load_patch)
         self.save_patch_button.clicked.connect(self._save_patch)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+            self._space_filter_installed = True
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(34)
@@ -187,7 +195,7 @@ class HarpyWindow(QMainWindow):
         self._refresh_timer.start()
 
         self._apply_style()
-        self._apply_state(controller.state)
+        self._apply_state(controller.state, sync_frequency=True)
 
     @Slot(bool)
     def handle_audio_availability(self, available: bool) -> None:
@@ -222,40 +230,40 @@ class HarpyWindow(QMainWindow):
         self._shutdown_prepared = True
         self._refresh_timer.stop()
         self.handle_force_stop()
+        self._remove_space_event_filter()
         self.shutdown_requested.emit()
 
     def event(self, event: QEvent) -> bool:
-        if event.type() is QEvent.Type.WindowDeactivate:
+        if event.type() is QEvent.Type.WindowDeactivate and not self._dialog_chooser_active:
             self.handle_force_stop()
         return super().event(event)
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if (
-            event.key() == Qt.Key.Key_Space
-            and not event.isAutoRepeat()
-            and QApplication.focusWidget() is not self.frequency_entry
-        ):
-            if not self._space_held and self.play_button.isEnabled():
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if not isinstance(watched, QWidget) or watched.window() is not self:
+            return super().eventFilter(watched, event)
+        if not isinstance(event, QKeyEvent):
+            return super().eventFilter(watched, event)
+        if event.type() is QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            if watched is self.frequency_entry:
+                self._entry_error = None
+                self._apply_state(self._controller.state, sync_frequency=True)
+                return True
+            return super().eventFilter(watched, event)
+        if event.key() != Qt.Key.Key_Space or watched is self.frequency_entry:
+            return super().eventFilter(watched, event)
+        if event.type() is QEvent.Type.KeyPress:
+            if not event.isAutoRepeat() and not self._space_held and self.play_button.isEnabled():
                 self._space_held = True
                 self.play_button.setDown(True)
                 self._press_play()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if (
-            event.key() == Qt.Key.Key_Space
-            and not event.isAutoRepeat()
-            and QApplication.focusWidget() is not self.frequency_entry
-        ):
-            if self._space_held:
+            return True
+        if event.type() is QEvent.Type.KeyRelease:
+            if not event.isAutoRepeat() and self._space_held:
                 self._space_held = False
                 self.play_button.setDown(False)
                 self._release_play()
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
+            return True
+        return super().eventFilter(watched, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.prepare_shutdown()
@@ -263,7 +271,11 @@ class HarpyWindow(QMainWindow):
 
     @Slot(float)
     def _set_frequency(self, frequency_hz: float) -> None:
-        self._apply_state(self._controller.set_frequency(frequency_hz))
+        self._entry_error = None
+        self._apply_state(
+            self._controller.set_frequency(frequency_hz),
+            sync_frequency=True,
+        )
 
     @Slot()
     def _press_play(self) -> None:
@@ -279,7 +291,7 @@ class HarpyWindow(QMainWindow):
 
     @Slot()
     def _load_patch(self) -> None:
-        path = self._patch_dialogs.choose_open_path(self)
+        path = self._choose_open_path()
         if path is None:
             return
         try:
@@ -287,12 +299,17 @@ class HarpyWindow(QMainWindow):
         except (OSError, ValueError) as error:
             self._show_local_error(str(error))
             return
+        try:
+            state = self._controller.replace_patch(patch)
+        except ValueError as error:
+            self._show_local_error(str(error))
+            return
         self._local_error = None
-        self._apply_state(self._controller.replace_patch(patch))
+        self._apply_state(state)
 
     @Slot()
     def _save_patch(self) -> None:
-        path = self._patch_dialogs.choose_save_path(self)
+        path = self._choose_save_path()
         if path is None:
             return
         try:
@@ -308,10 +325,16 @@ class HarpyWindow(QMainWindow):
         self._local_error = message
         self._apply_state(self._controller.state)
 
-    def _apply_state(self, state: WorkbenchState) -> None:
+    @Slot(str)
+    def _show_entry_error(self, message: str) -> None:
+        self._entry_error = message
+        self._apply_state(self._controller.state)
+
+    def _apply_state(self, state: WorkbenchState, *, sync_frequency: bool = False) -> None:
         frequency = state.selected_frequency_hz
         self.frequency_knob.set_frequency_hz(frequency)
-        self.frequency_entry.set_frequency_hz(frequency)
+        if sync_frequency or not self.frequency_entry.isModified():
+            self.frequency_entry.set_frequency_hz(frequency)
         reading = self._tuning.describe_frequency(frequency)
         cents = 0.0 if abs(reading.cents) < 0.05 else reading.cents
         self.derived_pitch_label.setText(f"{reading.name} {cents:+.1f}¢")
@@ -329,9 +352,31 @@ class HarpyWindow(QMainWindow):
         self.spectrum_view.set_observation(state.capture.observation)
         self._set_patch_facts(state.patch)
 
-        error = state.audio_error or self._local_error
+        error = state.audio_error or self._entry_error or self._local_error
         self._error_label.setText(error or "")
         self.audio_error_banner.setVisible(error is not None)
+
+    def _choose_open_path(self):
+        self._dialog_chooser_active = True
+        try:
+            return self._patch_dialogs.choose_open_path(self)
+        finally:
+            self._dialog_chooser_active = False
+
+    def _choose_save_path(self):
+        self._dialog_chooser_active = True
+        try:
+            return self._patch_dialogs.choose_save_path(self)
+        finally:
+            self._dialog_chooser_active = False
+
+    def _remove_space_event_filter(self) -> None:
+        if not self._space_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        self._space_filter_installed = False
 
     def _set_patch_facts(self, patch: SynthPatch) -> None:
         envelope = patch.envelope
