@@ -1,10 +1,12 @@
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QAccessible, QColor, QMouseEvent, QWheelEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PySide6.QtGui import QAccessible, QImage, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QWidget
 
-from harpy.gui.frequency_knob import FrequencyKnob, frequency_to_unit
+from harpy.gui.frequency_knob import FrequencyKnob, frequency_to_unit, unit_to_angle_degrees
+from harpy.gui.workbench_spec import WorkbenchSpec
+from harpy.tuning import Tuning
 
 
 def make_knob(qtbot) -> FrequencyKnob:
@@ -15,11 +17,153 @@ def make_knob(qtbot) -> FrequencyKnob:
     return knob
 
 
+def render_widget(widget: QWidget) -> QImage:
+    image = QImage(widget.size(), QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    try:
+        widget.render(painter, QPoint())
+    finally:
+        painter.end()
+    return image
+
+
+def image_bytes(image: QImage) -> bytes:
+    return bytes(image.constBits()[: image.sizeInBytes()])
+
+
+def region_has_accent(image: QImage, rectangle: QRect) -> bool:
+    return any(
+        image.pixelColor(x, y).blue() > 200 and image.pixelColor(x, y).red() < 160
+        for y in range(rectangle.top(), rectangle.bottom() + 1)
+        for x in range(rectangle.left(), rectangle.right() + 1)
+    )
+
+
+def differing_pixel_count(first: QImage, second: QImage, rectangle: QRect) -> int:
+    return sum(
+        first.pixel(x, y) != second.pixel(x, y)
+        for y in range(rectangle.top(), rectangle.bottom() + 1)
+        for x in range(rectangle.left(), rectangle.right() + 1)
+    )
+
+
 def test_frequency_to_unit_maps_runtime_minimum_center_and_maximum_in_log_space() -> None:
     # A linear mapping would put 200 Hz at one third instead of the midpoint.
     assert frequency_to_unit(100.0, 100.0, 400.0) == 0.0
     assert frequency_to_unit(200.0, 100.0, 400.0) == 0.5
     assert frequency_to_unit(400.0, 100.0, 400.0) == 1.0
+
+
+def test_conventional_dial_orientation_places_center_at_twelve_oclock() -> None:
+    # Retaining the old clockwise Qt sweep would put the center pointer at three o'clock.
+    assert unit_to_angle_degrees(0.0) == 225.0
+    assert unit_to_angle_degrees(0.5) == 90.0
+    assert unit_to_angle_degrees(1.0) == -45.0
+
+
+def test_non_a440_tuned_c3_is_logarithmic_midpoint_and_top_angle() -> None:
+    # A fixed-Hz center or linear projection would move tuned C3 away from twelve o'clock.
+    spec = WorkbenchSpec.from_tuning(Tuning(reference_hz=442.0))
+
+    center_unit = frequency_to_unit(
+        spec.center_frequency_hz,
+        spec.minimum_frequency_hz,
+        spec.maximum_frequency_hz,
+    )
+
+    assert (center_unit, unit_to_angle_degrees(center_unit)) == (0.5, 90.0)
+
+
+def test_hover_drag_cursor_and_tooltip_expose_native_tuning_interactions(qtbot) -> None:
+    # Omitting interaction presentation would leave the custom control looking static.
+    knob = make_knob(qtbot)
+    before = knob.frequency_hz
+
+    QTest.mouseMove(knob, knob.rect().center())
+    assert knob.cursor().shape() is Qt.CursorShape.SizeVerCursor
+    assert knob._hovered
+
+    QTest.mousePress(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+    assert knob._dragging
+    assert knob.frequency_hz == before
+
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+    assert knob._hovered and not knob._dragging
+    assert knob.frequency_hz == before
+    assert all(
+        phrase in knob.toolTip()
+        for phrase in ("Vertical drag", "Shift", "Wheel", "arrow", "Double-click")
+    )
+
+
+def test_leave_clears_hover_only_after_dragging_finishes(qtbot) -> None:
+    # Clearing hover during a captured drag would make the active control appear abandoned.
+    knob = make_knob(qtbot)
+    QTest.mouseMove(knob, knob.rect().center())
+    QTest.mousePress(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+
+    QApplication.sendEvent(knob, QEvent(QEvent.Type.Leave))
+    assert knob._hovered
+
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+    QApplication.sendEvent(knob, QEvent(QEvent.Type.Leave))
+    assert not knob._hovered
+
+
+def test_pro_audio_shell_places_pointer_and_distinguishes_frequency_positions(qtbot) -> None:
+    # A floating right-side dot or static shell would misrepresent the conventional dial.
+    knob_minimum_hz = 100.0
+    knob_center_hz = 200.0
+    knob_maximum_hz = 400.0
+    knob = FrequencyKnob(knob_minimum_hz, knob_center_hz, knob_maximum_hz)
+    knob.resize(88, 88)
+    qtbot.addWidget(knob)
+    knob.show()
+
+    knob.set_frequency_hz(knob_center_hz)
+    center_pixels = render_widget(knob)
+    assert region_has_accent(center_pixels, QRect(40, 10, 8, 22))
+    assert not region_has_accent(center_pixels, QRect(66, 38, 12, 12))
+
+    knob.set_frequency_hz(knob_minimum_hz)
+    minimum_pixels = render_widget(knob)
+    knob.set_frequency_hz(knob_maximum_hz)
+    maximum_pixels = render_widget(knob)
+
+    assert image_bytes(minimum_pixels) != image_bytes(center_pixels)
+    assert image_bytes(center_pixels) != image_bytes(maximum_pixels)
+
+
+def test_hover_drag_and_focus_have_distinct_circular_render_states(qtbot) -> None:
+    # Missing state styling or restoring the old square border would erase native feedback.
+    knob = FrequencyKnob(100.0, 200.0, 400.0)
+    knob.resize(88, 88)
+    qtbot.addWidget(knob)
+    knob.show()
+    QApplication.processEvents()
+    QApplication.sendEvent(knob, QEvent(QEvent.Type.Leave))
+    before = knob.frequency_hz
+    idle_image = render_widget(knob)
+
+    QTest.mouseMove(knob, knob.rect().center())
+    hover_image = render_widget(knob)
+    QTest.mousePress(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+    dragging_image = render_widget(knob)
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
+
+    knob.clearFocus()
+    unfocused_image = render_widget(knob)
+    knob.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    focused_image = render_widget(knob)
+
+    assert image_bytes(idle_image) != image_bytes(hover_image)
+    assert image_bytes(hover_image) != image_bytes(dragging_image)
+    assert image_bytes(unfocused_image) != image_bytes(focused_image)
+    assert differing_pixel_count(unfocused_image, focused_image, QRect(0, 0, 9, 9)) == 0
+    assert differing_pixel_count(unfocused_image, focused_image, QRect(78, 0, 9, 9)) == 0
+    assert knob.frequency_hz == before
 
 
 def test_relative_vertical_drag_changes_from_current_value_without_absolute_jump(qtbot) -> None:
@@ -167,30 +311,29 @@ def test_knob_has_focus_and_accessible_name(qtbot) -> None:
 def test_keyboard_focus_renders_a_high_contrast_ring_without_changing_value(qtbot) -> None:
     # Omitting a custom focus cue makes this keyboard-operated painted widget look idle.
     knob = make_knob(qtbot)
-    focus_sink = QPushButton("Focus sink")
+    focus_sink = QWidget()
     qtbot.addWidget(focus_sink)
     focus_sink.show()
     focus_sink.activateWindow()
     focus_sink.setFocus()
     QApplication.processEvents()
     assert not knob.hasFocus()
-    unfocused = knob.grab().toImage().copy()
+    unfocused = render_widget(knob)
     before = knob.frequency_hz
 
     knob.activateWindow()
     knob.setFocus(Qt.FocusReason.TabFocusReason)
     QApplication.processEvents()
     assert knob.hasFocus()
-    focused = knob.grab().toImage().copy()
+    focused = render_widget(knob)
 
-    focus_color = QColor("#65d8ff")
     focused_pixels = sum(
-        focused.pixelColor(x, y) == focus_color
+        focused.pixelColor(x, y).blue() > 200 and focused.pixelColor(x, y).red() < 160
         for y in range(focused.height())
         for x in range(focused.width())
     )
     unfocused_pixels = sum(
-        unfocused.pixelColor(x, y) == focus_color
+        unfocused.pixelColor(x, y).blue() > 200 and unfocused.pixelColor(x, y).red() < 160
         for y in range(unfocused.height())
         for x in range(unfocused.width())
     )
@@ -200,8 +343,7 @@ def test_keyboard_focus_renders_a_high_contrast_ring_without_changing_value(qtbo
         for x in range(focused.width())
     )
     assert differing_pixels >= 100
-    assert focused_pixels >= 40
-    assert unfocused_pixels == 0
+    assert focused_pixels >= unfocused_pixels + 40
     assert knob.frequency_hz == before
     assert knob.size().width() == 120
     assert knob.size().height() == 120
