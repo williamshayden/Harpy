@@ -10,7 +10,7 @@ def test_public_import_smoke_is_silent() -> None:
             (
                 "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
                 "import harpy.gui.app; "
-                "import harpy.synth.engine, harpy.synth.patch_json"
+                "import harpy.synth.curves, harpy.synth.engine, harpy.synth.patch_json"
             ),
         ],
         capture_output=True,
