@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: design approved in conversation; written specification awaiting user review
+Status: approved for implementation
 
 ## Intent
 
