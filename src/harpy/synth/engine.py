@@ -76,20 +76,27 @@ class SynthEngine:
             return np.zeros(frame_count, dtype=np.float32)
 
         release_frames_remaining = self._envelope.release_frames_remaining
+        oscillator_frame_count = (
+            min(release_frames_remaining, frame_count)
+            if release_frames_remaining is not None
+            else frame_count
+        )
         frame_positions = np.arange(
             self._phase_frame_offset,
-            self._phase_frame_offset + frame_count,
+            self._phase_frame_offset + oscillator_frame_count,
             dtype=np.float64,
         )
         phases = self._phase_anchor + self._phase_increment * frame_positions
         oscillator = np.sin(phases)
         envelope = self._envelope.render(frame_count)
-        self._phase_frame_offset += frame_count
-        samples = oscillator * envelope * self._patch.output_gain
+        self._phase_frame_offset += oscillator_frame_count
+        samples = oscillator * envelope[:oscillator_frame_count] * self._patch.output_gain
         result = samples.astype(np.float32)
-        if release_frames_remaining is not None and release_frames_remaining < frame_count:
-            result[release_frames_remaining:] = np.float32(0.0)
-        return result
+        if oscillator_frame_count == frame_count:
+            return result
+        return np.concatenate(
+            (result, np.zeros(frame_count - oscillator_frame_count, dtype=np.float32))
+        )
 
     def reset(self) -> None:
         self._phase_anchor = 0.0

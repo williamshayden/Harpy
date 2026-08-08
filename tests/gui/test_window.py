@@ -8,7 +8,15 @@ import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
 from harpy.analysis import AnalysisConfig, AudioObservation
 from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
@@ -95,6 +103,24 @@ def make_window(qtbot, *, patch: SynthPatch | None = None, analyzer=None, send_c
     window = HarpyWindow(controller, tuning, spec, dialogs)
     qtbot.addWidget(window)
     return window, controller, commands, history, dialogs
+
+
+def patch_fact_pairs(window: HarpyWindow) -> list[tuple[str, str]]:
+    facts = window.findChild(QFrame, "patchFacts")
+    layout = facts.layout()
+    assert isinstance(layout, QGridLayout)
+    pairs: list[tuple[str, str]] = []
+    for column in range(7):
+        heading_item = layout.itemAtPosition(0, column)
+        value_item = layout.itemAtPosition(1, column)
+        assert heading_item is not None
+        assert value_item is not None
+        heading = heading_item.widget()
+        value = value_item.widget()
+        assert isinstance(heading, QLabel)
+        assert isinstance(value, QLabel)
+        pairs.append((heading.text(), value.text()))
+    return pairs
 
 
 def test_final_widget_contract_and_copy_contains_no_legacy_or_device_status(qtbot) -> None:
@@ -448,25 +474,30 @@ def test_measurement_states_and_captured_observation_survive_until_clear(qtbot) 
 
 def test_patch_facts_include_curve_and_keep_output_as_seventh_value(qtbot) -> None:
     window, _, _, _, _ = make_window(qtbot)
-    facts = window.findChild(QFrame, "patchFacts")
-    labels = [label.text() for label in facts.findChildren(QLabel)]
-
-    for name in ("Oscillator", "Attack", "Decay", "Sustain", "Release", "Curve", "Output"):
-        assert labels.count(name) == 1
-    assert labels.count("Linear") == 1
-    assert len(labels) == 14
+    assert patch_fact_pairs(window) == [
+        ("Oscillator", "Sine"),
+        ("Attack", "1 ms"),
+        ("Decay", "600 ms"),
+        ("Sustain", "\N{MINUS SIGN}6 dB"),
+        ("Release", "600 ms"),
+        ("Curve", "Linear"),
+        ("Output", "\N{MINUS SIGN}12 dBFS"),
+    ]
 
     curved_patch = replace(
         SynthPatch(),
         envelope=replace(SynthPatch().envelope, attack_curve=0.25),
     )
     curved_window, _, _, _, _ = make_window(qtbot, patch=curved_patch)
-    curved_facts = curved_window.findChild(QFrame, "patchFacts")
-    curved_labels = [label.text() for label in curved_facts.findChildren(QLabel)]
-
-    assert curved_labels.count("Curved") == 1
-    assert curved_labels.count("Output") == 1
-    assert len(curved_labels) == 14
+    assert patch_fact_pairs(curved_window) == [
+        ("Oscillator", "Sine"),
+        ("Attack", "1 ms"),
+        ("Decay", "600 ms"),
+        ("Sustain", "\N{MINUS SIGN}6 dB"),
+        ("Release", "600 ms"),
+        ("Curve", "Curved"),
+        ("Output", "\N{MINUS SIGN}12 dBFS"),
+    ]
 
 
 def test_modal_load_cancel_is_a_true_noop(qtbot) -> None:

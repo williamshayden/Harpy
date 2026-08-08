@@ -179,6 +179,34 @@ def test_curved_events_are_bit_exact_under_every_block_partition(
         )
 
 
+def test_release_spanning_render_does_not_advance_phase_through_idle() -> None:
+    render = RenderConfig(sample_rate_hz=8)
+    spanning = SynthEngine(render, short_patch())
+    split = SynthEngine(render, short_patch())
+    spanning.note_on(1.0)
+    split.note_on(1.0)
+    spanning.render(4)
+    split.render(4)
+    spanning.note_off()
+    split.note_off()
+
+    spanning_output = spanning.render(4 + 5)
+    split_output = np.concatenate((split.render(4), split.render(5)))
+
+    np.testing.assert_array_equal(
+        spanning_output.view(np.uint32),
+        split_output.view(np.uint32),
+    )
+    assert spanning_output[3].view(np.uint32) == np.uint32(2_147_483_648)
+    np.testing.assert_array_equal(
+        spanning_output[4:].view(np.uint32),
+        np.zeros(5, dtype=np.float32).view(np.uint32),
+    )
+    assert spanning._phase_anchor == split._phase_anchor
+    assert spanning._phase_increment == split._phase_increment
+    assert spanning._phase_frame_offset == split._phase_frame_offset == 4
+
+
 def test_retune_is_bit_exact_at_a_fixed_frame_across_partitions() -> None:
     whole = SynthEngine(RenderConfig(), SynthPatch())
     partitioned = SynthEngine(RenderConfig(), SynthPatch())
