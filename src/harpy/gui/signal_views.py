@@ -44,13 +44,13 @@ class _ScientificView(QWidget):
         self.plot_item.vb.setMouseEnabled(x=False, y=False)
         self.plot.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.curve = self.plot_item.plot(pen=pg.mkPen(pen, width=2))
-        self.marker = pg.ScatterPlotItem(
+        self.marker = self.plot_item.plot(
             pen=pg.mkPen(marker, width=1.5),
-            brush=pg.mkBrush(marker),
+            symbolPen=pg.mkPen(marker, width=1.5),
+            symbolBrush=pg.mkBrush(marker),
             size=9,
             symbol="o",
         )
-        self.plot_item.addItem(self.marker)
         self.readout = QLabel(self._EMPTY_MESSAGE)
 
         layout = QVBoxLayout(self)

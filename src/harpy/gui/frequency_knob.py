@@ -5,8 +5,19 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import (
+    QAccessible,
+    QAccessibleValueChangeEvent,
+    QAccessibleValueInterface,
+    QColor,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QWheelEvent,
+)
+from PySide6.QtWidgets import QAccessibleWidget, QWidget
 
 
 def frequency_to_unit(frequency_hz: float, minimum_hz: float, maximum_hz: float) -> float:
@@ -70,6 +81,7 @@ class FrequencyKnob(QWidget):
         self._frequency_hz = value
         if changed:
             self.update()
+            QAccessible.updateAccessibility(QAccessibleValueChangeEvent(self, value))
         if emit:
             self.frequency_changed.emit(value)
 
@@ -164,3 +176,69 @@ class FrequencyKnob(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#68d6ff"))
         painter.drawEllipse(indicator, 5.0, 5.0)
+
+
+class _FrequencyKnobAccessible(QAccessibleWidget, QAccessibleValueInterface):
+    """Qt accessibility bridge for the custom, float-valued frequency control."""
+
+    def __init__(self, knob: FrequencyKnob) -> None:
+        QAccessibleWidget.__init__(self, knob, QAccessible.Role.Dial)
+
+    def valueInterface(self) -> QAccessibleValueInterface:
+        return self
+
+    def currentValue(self) -> float:
+        knob = self._knob()
+        return knob.frequency_hz if knob is not None else 0.0
+
+    def setCurrentValue(self, value: float) -> None:
+        knob = self._knob()
+        if knob is None:
+            return
+        try:
+            knob.set_frequency_hz(float(value), emit=True)
+        except (TypeError, ValueError):
+            return
+
+    def minimumValue(self) -> float:
+        knob = self._knob()
+        return knob._minimum_hz if knob is not None else 0.0
+
+    def maximumValue(self) -> float:
+        knob = self._knob()
+        return knob._maximum_hz if knob is not None else 0.0
+
+    def minimumStepSize(self) -> float:
+        knob = self._knob()
+        if knob is None:
+            return 0.0
+        return knob._minimum_hz * (2 ** (1.0 / 1200.0) - 1.0)
+
+    def actionNames(self) -> list[str]:
+        return [self.increaseAction(), self.decreaseAction(), self.setFocusAction()]
+
+    def doAction(self, action_name: str) -> None:
+        knob = self._knob()
+        if knob is None:
+            return
+        if action_name == self.increaseAction():
+            knob._adjust_cents(1.0)
+        elif action_name == self.decreaseAction():
+            knob._adjust_cents(-1.0)
+        elif action_name == self.setFocusAction():
+            knob.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _knob(self) -> FrequencyKnob | None:
+        widget = self.widget()
+        return widget if isinstance(widget, FrequencyKnob) else None
+
+
+def _frequency_knob_accessible_factory(
+    _class_name: str, object_: object
+) -> _FrequencyKnobAccessible | None:
+    if isinstance(object_, FrequencyKnob):
+        return _FrequencyKnobAccessible(object_)
+    return None
+
+
+QAccessible.installFactory(_frequency_knob_accessible_factory)

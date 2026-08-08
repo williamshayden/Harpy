@@ -33,8 +33,8 @@ class FrequencyEntry(QLineEdit):
             raise ValueError("frequency bounds must be finite, positive, and ordered")
         self._minimum_hz = minimum_hz
         self._maximum_hz = maximum_hz
-        self._rendered_values: dict[str, float] = {}
-        self._last_rendered_text = ""
+        self._current_rendered_text = ""
+        self._current_exact_frequency_hz: float | None = None
         self.returnPressed.connect(self._commit)
 
     def set_frequency_hz(self, frequency_hz: float) -> None:
@@ -47,7 +47,7 @@ class FrequencyEntry(QLineEdit):
     def restore_last_valid(self) -> None:
         """Discard an incomplete or invalid edit and recover the last displayed value."""
 
-        self.setText(self._last_rendered_text)
+        self.setText(self._current_rendered_text)
         self._clear_error()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -60,8 +60,8 @@ class FrequencyEntry(QLineEdit):
     def _commit(self) -> None:
         text = self.text()
         try:
-            if text == self._last_rendered_text and text in self._rendered_values:
-                value = self._validated_frequency(self._rendered_values[text])
+            if text == self._current_rendered_text and self._current_exact_frequency_hz is not None:
+                value = self._validated_frequency(self._current_exact_frequency_hz)
             else:
                 value = self._validated_frequency(self._parse(text))
         except ValueError as error:
@@ -94,8 +94,8 @@ class FrequencyEntry(QLineEdit):
 
     def _remember_and_render(self, value: float) -> None:
         rendered = f"{value:.3f}"
-        self._rendered_values[rendered] = value
-        self._last_rendered_text = rendered
+        self._current_rendered_text = rendered
+        self._current_exact_frequency_hz = value
         self.setText(rendered)
 
     def _set_error(self, message: str) -> None:

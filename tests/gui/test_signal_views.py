@@ -88,7 +88,7 @@ def test_none_or_empty_observation_clears_without_fabricated_trace(qtbot) -> Non
         view.set_observation(None)
         assert view.curve.xData is None
         assert view.curve.yData is None
-        assert view.marker.data["x"].size == 0
+        assert view.marker.xData is None
         assert view.readout.text() == "Hold Play to inspect the signal."
         view.set_observation(empty)
         assert view.curve.xData is None
@@ -102,6 +102,17 @@ def test_spectrum_uses_positive_observed_bins_and_measured_peak_marker(qtbot) ->
     view.set_observation(observation())
 
     assert view.curve.xData.tolist() == [20.0, 440.0, 20_000.0]
-    assert view.marker.data["x"].tolist() == [439.8]
-    assert view.marker.data["y"].tolist() == [-12.3]
+    assert view.marker.xData.tolist() == [439.8]
+    assert view.marker.yData.tolist() == [-12.3]
     assert view.readout.text() == "Peak 439.8 Hz · -12.3 dBFS"
+
+
+def test_spectrum_peak_marker_is_rendered_at_its_log_frequency_position(qtbot) -> None:
+    # A raw-Hz ScatterPlotItem on the log ViewBox renders outside the fixed spectrum range.
+    view = SpectrumView()
+    qtbot.addWidget(view)
+    view.set_observation(observation())
+
+    rendered_x, rendered_y = view.marker.getData()
+    assert rendered_x.tolist() == pytest.approx([np.log10(439.8)])
+    assert rendered_y.tolist() == pytest.approx([-12.3])

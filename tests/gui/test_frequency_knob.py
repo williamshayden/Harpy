@@ -1,6 +1,6 @@
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QAccessible, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -126,3 +126,23 @@ def test_knob_has_focus_and_accessible_name(qtbot) -> None:
     knob = make_knob(qtbot)
     assert knob.focusPolicy() == Qt.FocusPolicy.StrongFocus
     assert knob.accessibleName() == "Frequency"
+
+
+def test_knob_exposes_real_adjustable_accessibility_value_and_actions(qtbot) -> None:
+    # A generic Client interface has no value semantics for assistive technology to adjust.
+    knob = make_knob(qtbot)
+    interface = QAccessible.queryAccessibleInterface(knob)
+
+    assert interface.role() == QAccessible.Role.Dial
+    value = interface.valueInterface()
+    assert value is not None
+    assert value.currentValue() == 200.0
+    assert value.minimumValue() == 100.0
+    assert value.maximumValue() == 400.0
+
+    actions = interface.actionInterface()
+    assert actions is not None
+    actions.doAction(actions.increaseAction())
+    assert knob.frequency_hz == pytest.approx(200.0 * 2 ** (1.0 / 1200.0))
+    actions.doAction(actions.decreaseAction())
+    assert knob.frequency_hz == pytest.approx(200.0)
