@@ -2,7 +2,7 @@
 
 Date: 2026-08-07
 
-Status: approved for implementation
+Status: implemented; completion acceptance remains pending native visual scaling and human hearing checks
 
 ## Purpose
 

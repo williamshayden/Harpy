@@ -221,7 +221,7 @@ The manual lab is not the training system. Its purposes are:
 - demonstrate the sandbox and tool surface in the YouTube video;
 - replay saved agent trajectories.
 
-The manual lab is a native local desktop application; a browser or local web server is explicitly out of scope. The first approved slice uses PySide6, Qt Multimedia, pyqtgraph, and WSLg. Its live audio device remains a demonstration adapter around the same deterministic block renderer that future offline generation will use, so device behavior cannot become benchmark truth.
+The manual lab is a native local desktop application; a browser or local web server is explicitly out of scope. The implemented Milestone A workbench uses PySide6, Qt Multimedia, pyqtgraph, and WSLg. Its live audio device remains a demonstration adapter around the same deterministic block renderer that future offline generation will use, so device behavior cannot become benchmark truth.
 
 ## Experiment record
 
