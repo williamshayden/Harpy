@@ -321,6 +321,73 @@ def test_older_same_generation_analysis_cannot_overwrite_newer_live_refresh() ->
     assert final.observation is newer
 
 
+def test_overlapping_silence_refreshes_keep_exact_retained_capture() -> None:
+    valid = _observation(1.0)
+    silence = _observation(0.0, has_signal=False)
+    history = SampleHistory(capacity_frames=8)
+    first_started = Event()
+    second_started = Event()
+    release_first = Event()
+    release_second = Event()
+
+    def analyzer(samples: np.ndarray, *_args: object) -> AudioObservation:
+        marker = float(samples[-1])
+        if marker == 1.0:
+            return valid
+        if marker == 0.0:
+            first_started.set()
+            assert release_first.wait(timeout=1.0), "first silence was not released"
+            return silence
+        assert marker == -1.0
+        second_started.set()
+        assert release_second.wait(timeout=1.0), "second silence was not released"
+        return silence
+
+    coordinator = CaptureCoordinator(
+        history,
+        SAMPLE_RATE_HZ,
+        ANALYSIS_CONFIG,
+        analyzer=analyzer,
+    )
+    generation = coordinator.begin()
+    history.append(np.ones(4, dtype=np.float32), generation)
+    assert coordinator.refresh().observation is valid
+
+    history.append(np.zeros(4, dtype=np.float32), generation)
+    first_views: list[object] = []
+    first_thread = Thread(target=lambda: first_views.append(coordinator.refresh()), daemon=True)
+    first_thread.start()
+    assert first_started.wait(timeout=1.0), "first silence did not start"
+
+    history.append(np.full(4, -1.0, dtype=np.float32), generation)
+    second_views: list[object] = []
+    second_thread = Thread(target=lambda: second_views.append(coordinator.refresh()), daemon=True)
+    second_thread.start()
+    try:
+        assert second_started.wait(timeout=1.0), "second silence did not start"
+        release_first.set()
+        first_thread.join(timeout=1.0)
+        assert len(first_views) == 1
+        after_first = coordinator.refresh()
+        assert after_first.state is CaptureState.CAPTURED
+        assert after_first.observation is valid
+
+        release_second.set()
+        second_thread.join(timeout=1.0)
+    finally:
+        release_first.set()
+        release_second.set()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert len(second_views) == 1
+    final = coordinator.refresh()
+    assert final.state is CaptureState.CAPTURED
+    assert final.observation is valid
+
+
 def test_refresh_runs_analysis_after_releasing_the_history_lock() -> None:
     valid = _observation(1.0)
     history = SampleHistory(capacity_frames=8)

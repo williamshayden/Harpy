@@ -214,7 +214,10 @@ class CaptureCoordinator:
             if observation.has_signal:
                 self._captured = candidate
                 self._state = CaptureState.LIVE
-            elif self._state is CaptureState.LIVE and self._captured is not None:
+            elif (
+                self._state in (CaptureState.LIVE, CaptureState.CAPTURED)
+                and self._captured is not None
+            ):
                 self._state = CaptureState.CAPTURED
             else:
                 self._captured = None
