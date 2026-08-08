@@ -270,6 +270,57 @@ def test_refresh_rejects_analysis_cleared_while_it_was_in_flight() -> None:
     assert view.observation is None
 
 
+def test_older_same_generation_analysis_cannot_overwrite_newer_live_refresh() -> None:
+    initial = _observation(1.0)
+    silence = _observation(0.0, has_signal=False)
+    newer = _observation(2.0)
+    history = SampleHistory(capacity_frames=8)
+    older_started = Event()
+    release_older = Event()
+
+    def analyzer(samples: np.ndarray, *_args: object) -> AudioObservation:
+        marker = float(samples[-1])
+        if marker == 0.0:
+            older_started.set()
+            assert release_older.wait(timeout=1.0), "older analysis was not released"
+            return silence
+        if marker == 1.0:
+            return initial
+        assert marker == 2.0
+        return newer
+
+    coordinator = CaptureCoordinator(
+        history,
+        SAMPLE_RATE_HZ,
+        ANALYSIS_CONFIG,
+        analyzer=analyzer,
+    )
+    generation = coordinator.begin()
+    history.append(np.ones(4, dtype=np.float32), generation)
+    assert coordinator.refresh().observation is initial
+
+    history.append(np.zeros(4, dtype=np.float32), generation)
+    older_views: list[object] = []
+    older_thread = Thread(target=lambda: older_views.append(coordinator.refresh()), daemon=True)
+    older_thread.start()
+    assert older_started.wait(timeout=1.0), "older analysis did not start"
+
+    try:
+        history.append(np.full(4, 2.0, dtype=np.float32), generation)
+        newer_view = coordinator.refresh()
+    finally:
+        release_older.set()
+        older_thread.join(timeout=1.0)
+
+    assert not older_thread.is_alive()
+    assert len(older_views) == 1
+    assert newer_view.state is CaptureState.LIVE
+    assert newer_view.observation is newer
+    final = coordinator.refresh()
+    assert final.state is CaptureState.LIVE
+    assert final.observation is newer
+
+
 def test_refresh_runs_analysis_after_releasing_the_history_lock() -> None:
     valid = _observation(1.0)
     history = SampleHistory(capacity_frames=8)

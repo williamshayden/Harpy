@@ -151,9 +151,12 @@ class CaptureCoordinator:
         self._analysis_config = analysis_config
         self._analyzer = analyzer
         self._lock = Lock()
+        self._snapshot_lock = Lock()
         self._state = CaptureState.EMPTY
         self._captured: _CapturedObservation | None = None
         self._generation = history.generation
+        self._next_refresh_sequence = 0
+        self._published_refresh_sequence = 0
 
     def begin(self) -> int:
         """Start measuring a newly allocated note/retrigger generation."""
@@ -179,7 +182,10 @@ class CaptureCoordinator:
                 return self._view_locked()
             generation = self._generation
 
-        snapshot = self._history.snapshot_recent(self._analysis_config.fft_frames)
+        with self._snapshot_lock:
+            snapshot = self._history.snapshot_recent(self._analysis_config.fft_frames)
+            self._next_refresh_sequence += 1
+            refresh_sequence = self._next_refresh_sequence
         if (
             snapshot.generation != generation
             or snapshot.samples.size < self._analysis_config.fft_frames
@@ -200,10 +206,11 @@ class CaptureCoordinator:
             if (
                 self._generation != candidate.generation
                 or self._history.generation != candidate.generation
-                or self._state not in _ANALYZING_STATES
+                or refresh_sequence <= self._published_refresh_sequence
             ):
                 return self._view_locked()
 
+            self._published_refresh_sequence = refresh_sequence
             if observation.has_signal:
                 self._captured = candidate
                 self._state = CaptureState.LIVE
