@@ -97,18 +97,20 @@ def test_hover_drag_cursor_and_tooltip_expose_native_tuning_interactions(qtbot) 
     )
 
 
-def test_leave_clears_hover_only_after_dragging_finishes(qtbot) -> None:
-    # Clearing hover during a captured drag would make the active control appear abandoned.
+def test_release_outside_after_drag_leave_clears_hover(qtbot) -> None:
+    # Ignoring release position would leave cyan hover stuck after an outside drag release.
     knob = make_knob(qtbot)
+    before = knob.frequency_hz
     QTest.mouseMove(knob, knob.rect().center())
     QTest.mousePress(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
 
     QApplication.sendEvent(knob, QEvent(QEvent.Type.Leave))
     assert knob._hovered
 
-    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=knob.rect().center())
-    QApplication.sendEvent(knob, QEvent(QEvent.Type.Leave))
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=QPoint(-8, -8))
+    assert not knob._dragging
     assert not knob._hovered
+    assert knob.frequency_hz == before
 
 
 def test_pro_audio_shell_places_pointer_and_distinguishes_frequency_positions(qtbot) -> None:

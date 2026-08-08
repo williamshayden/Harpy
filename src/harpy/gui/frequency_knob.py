@@ -144,6 +144,7 @@ class FrequencyKnob(QWidget):
             self._drag_origin_y = None
             self._drag_origin_hz = None
             self._dragging = False
+            self._hovered = QRectF(self.rect()).contains(event.position())
             self.update()
             event.accept()
             return
