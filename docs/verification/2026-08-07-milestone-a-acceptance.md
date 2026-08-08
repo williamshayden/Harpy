@@ -2,7 +2,8 @@
 
 Date exercised: 2026-08-08
 
-Implementation under test: `5cdcd13` (`fix: harden native workbench interaction boundaries`)
+Implementation base: `5cdcd13` (`fix: harden native workbench interaction boundaries`),
+plus the recorded Task 10 review fixes
 
 Environment: WSLg, 48 kHz `RDPSink`, Python 3.12, PySide6/Qt 6.11.1
 
@@ -22,10 +23,10 @@ All commands ran from the Milestone A worktree on 2026-08-08.
 
 | Command | Observed result |
 | --- | --- |
-| `uv run pytest` | Exit 0; 9,352 tests passed in 19.30 s. Qt reported that PipeWire was unavailable and used its supported FFmpeg/Pulse path. |
+| `uv run pytest` | Exit 0; 9,353 tests passed. Qt reported that PipeWire was unavailable where the full suite deliberately constructed the real audio backend. |
 | `uv run ruff check .` | Exit 0; `All checks passed!` |
-| `uv run ruff format --check .` | Exit 0; 48 files already formatted. |
-| `uv run python -c "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; import harpy.gui.app; import harpy.synth.engine, harpy.synth.patch_json"` | Exit 0; imports completed without application output. Qt emitted only its PipeWire dynamic-library fallback warnings. |
+| `uv run ruff format --check .` | Exit 0; 50 files already formatted. |
+| `uv run python -c "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; import harpy.gui.app; import harpy.synth.engine, harpy.synth.patch_json"` | Exit 0 with 0 stdout bytes and 0 stderr bytes. |
 | `git diff --check origin/william/native-sine-lab...HEAD` | Exit 0 with no findings before the documentation edit. |
 
 The tests cover engine and envelope determinism, strict patch JSON, tuning, calibrated
@@ -33,9 +34,16 @@ analysis, generation-safe capture, semantic controller behavior, Qt audio format
 device lifecycle boundaries, workbench interactions, and layout contracts. They are
 supporting automated evidence; the native observations below were gathered separately.
 
+Independent review found that the first acceptance commit's exact import smoke exited 0
+but emitted 135 stderr bytes because `harpy.gui.app` eagerly imported Qt Multimedia.
+A subprocess regression for the exact command was added first and observed failing on
+the stderr assertion. `harpy.gui.app` now resolves `QtAudioBackend` only when default
+runtime construction needs it; explicit injected factories remain eager-free. The
+regression and exact command then passed with both streams empty.
+
 ## Structural evidence
 
-`find src/harpy -type f -name '*.py' -print0 | xargs -0 wc -l` reported 2,906 production
+`find src/harpy -type f -name '*.py' -print0 | xargs -0 wc -l` reported 2,914 production
 Python lines. Inspection found one principal responsibility per module and no legacy
 browser, GUI-bound DSP model, MIDI-only controller, or compatibility path in the
 production source.
@@ -46,7 +54,7 @@ production source.
 | `playback.py` | 76 | Typed commands between controller and audio adapter |
 | `capture.py` | 245 | Bounded generation-safe sample history and capture state |
 | `analysis.py` | 226 | Pure waveform/spectrum observation and peak measurement |
-| `gui/app.py` | 80 | Runtime composition and application entry point |
+| `gui/app.py` | 88 | Runtime composition, lazy default audio resolution, and application entry point |
 | `gui/patch_dialogs.py` | 30 | Native patch-file dialog port and adapter |
 | `gui/window.py` | 456 | Workbench widgets, layout, formatting, and user actions |
 | `gui/workbench_controller.py` | 247 | Semantic transport, frequency, patch, and capture state |
@@ -136,8 +144,5 @@ was captured or committed.
 - **Qualifying artifacts:** capture one idle and one live default-size screenshot that
   show the complete native outer frame and no private desktop data, then store them in
   `docs/verification/assets/` and reference them here.
-- **Independent whole-branch review:** Task 10 does not self-review the complete branch;
-  that review is the next external completion gate.
-
-Until these pending checks and the independent review are resolved, this evidence does
-not authorize marking Milestone A complete or making its draft pull request ready.
+Until these four pending checks are resolved, this evidence does not authorize marking
+Milestone A complete or making its draft pull request ready.

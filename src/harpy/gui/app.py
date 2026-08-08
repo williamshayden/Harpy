@@ -3,19 +3,22 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from harpy.capture import CaptureCoordinator, SampleHistory
 from harpy.config import DEFAULT_CONFIG, AppConfig
 from harpy.gui.patch_dialogs import NativePatchDialogs, PatchDialogPort
-from harpy.gui.qt_audio import QtAudioBackend
 from harpy.gui.window import HarpyWindow
 from harpy.gui.workbench_controller import WorkbenchController
 from harpy.gui.workbench_spec import WorkbenchSpec
 from harpy.synth.models import RenderConfig, SynthPatch
 
-AudioFactory = Callable[[RenderConfig, SynthPatch, SampleHistory], QtAudioBackend]
+if TYPE_CHECKING:
+    from harpy.gui.qt_audio import QtAudioBackend
+
+AudioFactory = Callable[[RenderConfig, SynthPatch, SampleHistory], "QtAudioBackend"]
 
 
 @dataclass(slots=True)
@@ -32,9 +35,14 @@ def build_runtime(
     app: QApplication,
     config: AppConfig = DEFAULT_CONFIG,
     *,
-    audio_factory: AudioFactory = QtAudioBackend,
+    audio_factory: AudioFactory | None = None,
     patch_dialogs: PatchDialogPort | None = None,
 ) -> WorkbenchRuntime:
+    if audio_factory is None:
+        from harpy.gui.qt_audio import QtAudioBackend
+
+        audio_factory = QtAudioBackend
+
     spec = WorkbenchSpec.from_tuning(config.tuning)
     history = SampleHistory(capacity_frames=config.analysis.fft_frames)
     capture = CaptureCoordinator(

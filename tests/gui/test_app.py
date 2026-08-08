@@ -87,8 +87,9 @@ def test_about_to_quit_uses_reset_shutdown_teardown_order(qapp) -> None:
     assert not runtime.window._refresh_timer.isActive()
 
 
-def test_default_audio_factory_is_the_final_backend() -> None:
-    from inspect import signature
+def test_default_audio_factory_is_the_final_backend(qapp) -> None:
+    runtime = build_runtime(qapp)
 
-    parameter = signature(build_runtime).parameters["audio_factory"]
-    assert parameter.default is QtAudioBackend
+    assert isinstance(runtime.audio, QtAudioBackend)
+
+    runtime.window.close()
