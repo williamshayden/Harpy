@@ -401,11 +401,7 @@ verified; cleanup belongs to the final branch-finishing workflow.
   becomes exactly:
 
   ```python
-  (
-      "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
-      "import harpy.gui.app; "
-      "import harpy.synth.curves, harpy.synth.engine, harpy.synth.patch_json"
-  )
+  "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; import harpy.gui.app; import harpy.synth.curves, harpy.synth.engine, harpy.synth.patch_json"
   ```
 
   Retain `returncode == 0`, `stdout == b""`, and `stderr == b""`. Then run the complete
@@ -520,22 +516,50 @@ verified; cleanup belongs to the final branch-finishing workflow.
   ```python
   EXPECTED_LINEAR_ENVELOPE_BITS = np.array(
       [
-          4594314991293244562, 4598818590920615058, 4601392076421969627,
-          4603322190547985554, 4604608933298662838, 4605895676049340122,
-          4607182418800017408, 4606613483139180583, 4606044547478343758,
-          4605475611817506933, 4604906676156670108, 4604065244080245896,
-          4603223812003821684, 4602085940682148033, 4600403076529299610,
-          4598720212376451187, 4595899476901929112, 4591395877274558612, 0,
+          4594314991293244562,
+          4598818590920615058,
+          4601392076421969627,
+          4603322190547985554,
+          4604608933298662838,
+          4605895676049340122,
+          4607182418800017408,
+          4606613483139180583,
+          4606044547478343758,
+          4605475611817506933,
+          4604906676156670108,
+          4604065244080245896,
+          4603223812003821684,
+          4602085940682148033,
+          4600403076529299610,
+          4598720212376451187,
+          4595899476901929112,
+          4591395877274558612,
+          0,
       ],
       dtype=np.uint64,
   )
 
   EXPECTED_LINEAR_ENGINE_BITS = np.array(
       [
-          0, 1025724698, 1036759167, 1041246260, 1040312847, 1026296886,
-          3183795601, 3192413184, 3194009889, 3190642546, 3180535862,
-          1023623637, 1036772298, 1038855006, 1035049145, 1025520120,
-          584321663, 3159726069, 2147483648,
+          0,
+          1025724698,
+          1036759167,
+          1041246260,
+          1040312847,
+          1026296886,
+          3183795601,
+          3192413184,
+          3194009889,
+          3190642546,
+          3180535862,
+          1023623637,
+          1036772298,
+          1038855006,
+          1035049145,
+          1025520120,
+          584321663,
+          3159726069,
+          2147483648,
       ],
       dtype=np.uint32,
   )
@@ -807,8 +831,7 @@ verified; cleanup belongs to the final branch-finishing workflow.
   ```python
   def _reanchor_phase(self) -> None:
       self._phase_anchor = math.fmod(
-          self._phase_anchor
-          + self._phase_increment * self._phase_frame_offset,
+          self._phase_anchor + self._phase_increment * self._phase_frame_offset,
           math.tau,
       )
       self._phase_frame_offset = 0
@@ -1734,9 +1757,7 @@ verified; cleanup belongs to the final branch-finishing workflow.
 
   ```python
   def accept_graph_curve(stage: str, value: float) -> None:
-      graph.set_envelope(
-          replace(graph.envelope, **{f"{stage}_curve": value})
-      )
+      graph.set_envelope(replace(graph.envelope, **{f"{stage}_curve": value}))
 
 
   graph.curve_previewed.connect(accept_graph_curve)
@@ -2541,10 +2562,7 @@ verified; cleanup belongs to the final branch-finishing workflow.
 
   ```python
   can_release_held_gate = state.gate_held
-  can_start_new_voice = (
-      state.audio_available
-      and state.patch_apply_state is PatchApplyState.APPLIED
-  )
+  can_start_new_voice = state.audio_available and state.patch_apply_state is PatchApplyState.APPLIED
   self.play_button.setEnabled(can_release_held_gate or can_start_new_voice)
   ```
 
