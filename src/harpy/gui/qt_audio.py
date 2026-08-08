@@ -111,6 +111,10 @@ class SynthAudioDevice(QIODevice):
     def isSequential(self) -> bool:
         return True
 
+    def bytesAvailable(self) -> int:
+        block_bytes = self._config.render.block_frames * self._audio_format.bytesPerFrame()
+        return super().bytesAvailable() + block_bytes
+
     def reset_after_sink_stop(self) -> None:
         while True:
             try:

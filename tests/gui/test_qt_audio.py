@@ -89,6 +89,17 @@ def test_audio_device_applies_note_command_and_streams_one_stereo_block() -> Non
     assert np.any(history.snapshot(256) != 0.0)
 
 
+def test_sequential_audio_device_advertises_bytes_to_pull_consumers() -> None:
+    source = SynthAudioDevice(
+        DEFAULT_CONFIG,
+        audio_format_candidates(48_000)[0],
+        SampleRingBuffer(capacity_frames=48_000),
+    )
+
+    assert source.isSequential()
+    assert source.bytesAvailable() > 0
+
+
 def test_reset_command_makes_next_staging_block_exact_silence() -> None:
     history = SampleRingBuffer(capacity_frames=48_000)
     audio_format = audio_format_candidates(48_000)[0]
