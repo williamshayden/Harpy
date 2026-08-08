@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 from collections.abc import Callable
 from contextlib import suppress
+from threading import Lock
 
 import numpy as np
 from PySide6.QtCore import QIODevice, QObject, Qt, Signal, Slot
@@ -108,29 +109,35 @@ class SynthAudioSource(QIODevice):
         self._engine = SynthEngine(render, patch)
         self._commands: queue.SimpleQueue[AudioCommand] = queue.SimpleQueue()
         self._staging = bytearray()
+        self._io_lock = Lock()
+        self._naturally_idle = False
+        self._last_idle_generation: int | None = None
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def submit(self, command: AudioCommand) -> None:
         if not isinstance(command, AudioCommand):
             raise ValueError("command must be an AudioCommand")
-        self._commands.put(command)
+        with self._io_lock:
+            self._commands.put(command)
 
     def readData(self, maxlen: int) -> bytes:
         if maxlen <= 0:
             return b""
-        while True:
-            self._drain_commands()
-            if len(self._staging) >= maxlen:
-                break
-            was_idle = self._engine.is_idle
-            mono = self._engine.render(self._render.block_frames)
-            self._history.append(mono, self._capture_generation)
-            self._staging.extend(encode_mono_samples(mono, self._audio_format))
-            if not was_idle and self._engine.is_idle:
-                self.voice_idle.emit(self._capture_generation)
-        output = bytes(self._staging[:maxlen])
-        del self._staging[:maxlen]
-        return output
+        with self._io_lock:
+            while True:
+                self._drain_commands()
+                if len(self._staging) >= maxlen:
+                    break
+                was_idle = self._engine.is_idle
+                mono = self._engine.render(self._render.block_frames)
+                self._history.append(mono, self._capture_generation)
+                self._staging.extend(encode_mono_samples(mono, self._audio_format))
+                if not was_idle and self._engine.is_idle:
+                    self._naturally_idle = True
+                self._emit_natural_idle_if_needed()
+            output = bytes(self._staging[:maxlen])
+            del self._staging[:maxlen]
+            return output
 
     def writeData(self, data: bytes) -> int:
         return -1
@@ -147,12 +154,14 @@ class SynthAudioSource(QIODevice):
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
-                return
+                break
             if command.kind is AudioCommandKind.NOTE_ON:
                 if command.frequency_hz is None or command.generation is None:
                     raise RuntimeError("validated NOTE_ON command lost its payload")
                 self._capture_generation = command.generation
                 self._engine.note_on(command.frequency_hz)
+                self._naturally_idle = False
+                self._last_idle_generation = None
             elif command.kind is AudioCommandKind.RETUNE:
                 if command.frequency_hz is None:
                     raise RuntimeError("validated RETUNE command lost its frequency")
@@ -162,7 +171,7 @@ class SynthAudioSource(QIODevice):
                 was_idle = self._engine.is_idle
                 self._engine.note_off()
                 if not was_idle and self._engine.is_idle:
-                    self.voice_idle.emit(self._capture_generation)
+                    self._naturally_idle = True
             elif command.kind is AudioCommandKind.CLEAR_CAPTURE:
                 if command.generation is None:
                     raise RuntimeError("validated CLEAR_CAPTURE command lost its generation")
@@ -173,12 +182,26 @@ class SynthAudioSource(QIODevice):
                 self._staging.clear()
                 self._engine.replace_patch(command.patch)
                 self._capture_generation = command.generation
+                self._naturally_idle = False
+                self._last_idle_generation = None
             elif command.kind is AudioCommandKind.RESET:
                 if command.generation is None:
                     raise RuntimeError("validated RESET command lost its generation")
                 self._staging.clear()
                 self._engine.reset()
                 self._capture_generation = command.generation
+                self._naturally_idle = False
+                self._last_idle_generation = None
+        self._emit_natural_idle_if_needed()
+
+    def _emit_natural_idle_if_needed(self) -> None:
+        if (
+            self._naturally_idle
+            and self._engine.is_idle
+            and self._last_idle_generation != self._capture_generation
+        ):
+            self._last_idle_generation = self._capture_generation
+            self.voice_idle.emit(self._capture_generation)
 
 
 class QtAudioBackend(QObject):
@@ -213,6 +236,8 @@ class QtAudioBackend(QObject):
         self._sink_factory = sink_factory
         self._sink: QAudioSink | None = None
         self._source: SynthAudioSource | None = None
+        self._starting_sink: QAudioSink | None = None
+        self._start_failure_requests_force_stop = True
         self._active_failure_key: str | None = None
         self._disposing = False
         self._shutdown = False
@@ -294,6 +319,8 @@ class QtAudioBackend(QObject):
                 Qt.ConnectionType.QueuedConnection,
             )
             sink.stateChanged.connect(self._on_sink_state_changed)
+            self._starting_sink = sink
+            self._start_failure_requests_force_stop = request_force_stop_on_failure
             sink.start(source)
         except Exception as error:
             self._dispose_sink()
@@ -309,6 +336,7 @@ class QtAudioBackend(QObject):
         if _enum_value(error) != _enum_value(QAudio.Error.NoError):
             self._handle_sink_failure(error)
             return
+        self._starting_sink = None
         self._active_failure_key = None
         self.availability_changed.emit(True)
 
@@ -332,10 +360,16 @@ class QtAudioBackend(QObject):
 
     def _handle_sink_failure(self, error: object) -> None:
         error_name = getattr(error, "name", str(error))
+        request_force_stop = (
+            self._start_failure_requests_force_stop
+            if self._starting_sink is self._sink and self._sink is not None
+            else True
+        )
+        self._starting_sink = None
         self._dispose_sink()
         self._report_failure(
             f"Audio output failed: {error_name}",
-            request_force_stop=True,
+            request_force_stop=request_force_stop,
         )
 
     def _report_failure(self, message: str, *, request_force_stop: bool) -> None:
@@ -357,6 +391,7 @@ class QtAudioBackend(QObject):
         source = self._source
         self._sink = None
         self._source = None
+        self._starting_sink = None
         try:
             if sink is not None:
                 with suppress(RuntimeError, TypeError):

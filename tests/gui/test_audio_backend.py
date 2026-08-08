@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
+from threading import Event, Thread
 
 import numpy as np
 import pytest
@@ -271,6 +272,78 @@ def test_replace_patch_preempts_partial_pcm_without_mixing_old_patch() -> None:
 
 
 @pytest.mark.parametrize("kind", [AudioCommandKind.RESET, AudioCommandKind.REPLACE_PATCH])
+@pytest.mark.parametrize("partial_staging", [False, True], ids=["new-block", "partial-staging"])
+def test_reset_and_replace_submit_linearize_against_inflight_pcm_return(
+    monkeypatch,
+    kind: AudioCommandKind,
+    partial_staging: bool,
+) -> None:
+    source, history, render, audio_format = source_setup()
+    source.submit(AudioCommand(AudioCommandKind.NOTE_ON, frequency_hz=220.0, generation=0))
+    block_bytes = render.block_frames * audio_format.bytesPerFrame()
+    source.readData(block_bytes // 2 if partial_staging else block_bytes)
+    generation = history.begin_generation()
+    if kind is AudioCommandKind.REPLACE_PATCH:
+        command = AudioCommand(
+            kind, patch=short_patch(output_gain_dbfs=-18.0), generation=generation
+        )
+    else:
+        command = AudioCommand(kind, generation=generation)
+    drain_completed = Event()
+    allow_output_commit = Event()
+    submit_started = Event()
+    submit_returned = Event()
+    output: list[np.ndarray] = []
+    completion_order: list[str] = []
+    original_drain = source._drain_commands
+    drain_call_count = 0
+    target_drain_call = 1 if partial_staging else 2
+
+    def pause_after_drain() -> None:
+        nonlocal drain_call_count
+        original_drain()
+        drain_call_count += 1
+        if drain_call_count == target_drain_call:
+            drain_completed.set()
+            assert allow_output_commit.wait(timeout=2.0)
+
+    monkeypatch.setattr(source, "_drain_commands", pause_after_drain)
+
+    def read_pcm() -> None:
+        output.append(np.frombuffer(source.readData(block_bytes // 2), dtype=np.float32))
+        completion_order.append("read")
+
+    def submit_reset_or_replace() -> None:
+        submit_started.set()
+        source.submit(command)
+        completion_order.append("submit")
+        submit_returned.set()
+
+    reader = Thread(target=read_pcm)
+    reader.start()
+    assert drain_completed.wait(timeout=2.0)
+    submitter = Thread(target=submit_reset_or_replace)
+    submitter.start()
+    assert submit_started.wait(timeout=2.0)
+    submit_returned.wait(timeout=0.5)
+    allow_output_commit.set()
+    reader.join(timeout=2.0)
+    submitter.join(timeout=2.0)
+
+    assert not reader.is_alive()
+    assert not submitter.is_alive()
+    assert len(output) == 1
+    assert set(completion_order) == {"read", "submit"}
+    if completion_order.index("submit") < completion_order.index("read"):
+        np.testing.assert_array_equal(output[0], np.zeros(output[0].size, dtype=np.float32))
+    after_submit = np.frombuffer(source.readData(block_bytes // 2), dtype=np.float32)
+    np.testing.assert_array_equal(
+        after_submit,
+        np.zeros(after_submit.size, dtype=np.float32),
+    )
+
+
+@pytest.mark.parametrize("kind", [AudioCommandKind.RESET, AudioCommandKind.REPLACE_PATCH])
 def test_reset_and_replace_are_exactly_silent_without_false_idle(kind: AudioCommandKind) -> None:
     source, history, render, audio_format = source_setup()
     idle_generations: list[int] = []
@@ -317,6 +390,72 @@ def test_newer_queued_generation_tags_render_and_rejects_delayed_old_append() ->
     )
 
 
+def test_clear_after_immediate_note_off_emits_only_the_final_generation_idle() -> None:
+    source, history, render, audio_format = source_setup()
+    idle_generations: list[int] = []
+    source.voice_idle.connect(idle_generations.append)
+    note_generation = history.begin_generation()
+    clear_generation = history.begin_generation()
+    source.submit(
+        AudioCommand(
+            AudioCommandKind.NOTE_ON,
+            frequency_hz=220.0,
+            generation=note_generation,
+        )
+    )
+    source.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    source.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+
+    read_block(source, render, audio_format)
+
+    assert idle_generations == [clear_generation]
+
+
+def test_clear_waiting_on_release_completion_gets_new_generation_idle(
+    monkeypatch,
+    qapp,
+) -> None:
+    source, history, render, audio_format = source_setup(patch=short_patch(release_frames=4))
+    idle_generations: list[int] = []
+    source.voice_idle.connect(idle_generations.append)
+    source.submit(AudioCommand(AudioCommandKind.NOTE_ON, frequency_hz=220.0, generation=0))
+    read_block(source, render, audio_format)
+    source.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    release_rendered = Event()
+    allow_release_return = Event()
+    clear_started = Event()
+    original_render = source._engine.render
+
+    def pause_after_release_render(frame_count: int) -> np.ndarray:
+        samples = original_render(frame_count)
+        release_rendered.set()
+        assert allow_release_return.wait(timeout=2.0)
+        return samples
+
+    monkeypatch.setattr(source._engine, "render", pause_after_release_render)
+    reader = Thread(target=read_block, args=(source, render, audio_format))
+    reader.start()
+    assert release_rendered.wait(timeout=2.0)
+    clear_generation = history.begin_generation()
+
+    def submit_clear() -> None:
+        clear_started.set()
+        source.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+
+    submitter = Thread(target=submit_clear)
+    submitter.start()
+    assert clear_started.wait(timeout=2.0)
+    allow_release_return.set()
+    reader.join(timeout=2.0)
+    submitter.join(timeout=2.0)
+    read_block(source, render, audio_format)
+    qapp.processEvents()
+
+    assert not reader.is_alive()
+    assert not submitter.is_alive()
+    assert idle_generations.count(clear_generation) == 1
+
+
 class FakeSignal:
     def __init__(self) -> None:
         self.callbacks: list[Callable[[], None]] = []
@@ -360,14 +499,23 @@ class FakeMediaDevices:
 class FakeSink(QObject):
     stateChanged = Signal(object)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        *,
+        start_error: object | None = None,
+    ) -> None:
         super().__init__(parent)
         self.source: SynthAudioSource | None = None
         self.reset_count = 0
         self.current_error: object = QAudio.Error.NoError
+        self.start_error = start_error
 
     def start(self, source: SynthAudioSource) -> None:
         self.source = source
+        if self.start_error is not None:
+            self.current_error = self.start_error
+            self.stateChanged.emit(QAudio.State.StoppedState)
 
     def reset(self) -> None:
         self.reset_count += 1
@@ -572,6 +720,55 @@ def test_hotplug_to_null_output_reports_and_force_stops_once(qapp) -> None:
     assert forced_stops == [True]
     assert len(sinks) == 1
     assert sinks[0].reset_count == 1
+
+
+def test_hotplug_sink_start_failure_reuses_stop_then_runtime_failure_stops_once(qapp) -> None:
+    render = RenderConfig(sample_rate_hz=SAMPLE_RATE_HZ, block_frames=4)
+    history = SampleHistory(capacity_frames=64)
+    media_devices = FakeMediaDevices(DefaultDevice({(1, QAudioFormat.SampleFormat.Float)}))
+    start_errors = iter((None, QAudio.Error.OpenError, None))
+    sinks: list[FakeSink] = []
+
+    def sink_factory(_device: object, _format: object, owner: QObject) -> FakeSink:
+        sink = FakeSink(owner, start_error=next(start_errors))
+        sinks.append(sink)
+        return sink
+
+    backend = QtAudioBackend(
+        render,
+        short_patch(),
+        history,
+        media_devices=media_devices,
+        sink_factory=sink_factory,
+    )
+    availability: list[bool] = []
+    forced_stops: list[bool] = []
+    failures: list[str] = []
+    backend.availability_changed.connect(availability.append)
+    backend.force_stop_requested.connect(lambda: forced_stops.append(True))
+    backend.audio_failure.connect(failures.append)
+    backend.start()
+
+    media_devices.audioOutputsChanged.emit()
+
+    assert availability == [True, False]
+    assert forced_stops == [True]
+    assert failures == ["Audio output failed: OpenError"]
+    assert len(sinks) == 2
+
+    media_devices.audioOutputsChanged.emit()
+    assert availability == [True, False, True]
+    recovered_sink = sinks[2]
+    recovered_sink.current_error = QAudio.Error.OpenError
+
+    recovered_sink.stateChanged.emit(QAudio.State.StoppedState)
+
+    assert availability == [True, False, True, False]
+    assert forced_stops == [True, True]
+    assert failures == [
+        "Audio output failed: OpenError",
+        "Audio output failed: OpenError",
+    ]
 
 
 def test_successful_recovery_clears_failure_without_healthy_status_copy(qapp) -> None:
