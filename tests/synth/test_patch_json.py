@@ -52,8 +52,15 @@ def test_patch_json_round_trip_preserves_values() -> None:
     assert loads_patch(dumps_patch(patch)) == patch
 
 
-def test_loads_patch_accepts_leading_and_trailing_json_whitespace() -> None:
-    assert loads_patch(" \t\n" + EXPECTED_DEFAULT + "\r\n ") == SynthPatch()
+@pytest.mark.parametrize("whitespace", [" ", "\t", "\r", "\n", " \t\r\n"])
+def test_loads_patch_accepts_each_json_whitespace_character(whitespace: str) -> None:
+    assert loads_patch(whitespace + EXPECTED_DEFAULT + whitespace) == SynthPatch()
+
+
+@pytest.mark.parametrize("text", ["\u00a0" + EXPECTED_DEFAULT, EXPECTED_DEFAULT + "\u00a0"])
+def test_loads_patch_rejects_non_json_unicode_whitespace(text: str) -> None:
+    with pytest.raises(ValueError):
+        loads_patch(text)
 
 
 @pytest.mark.parametrize(
@@ -108,10 +115,18 @@ def test_loads_patch_rejects_booleans_used_as_numbers(value: str) -> None:
 
 
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_loads_patch_rejects_non_finite_json_constants(value: str) -> None:
+def test_loads_patch_names_output_gain_for_non_finite_json_constants(value: str) -> None:
     text = EXPECTED_DEFAULT.replace("-12.0", value)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="output_gain_dbfs"):
+        loads_patch(text)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_loads_patch_names_envelope_field_for_non_finite_json_constants(value: str) -> None:
+    text = EXPECTED_DEFAULT.replace("0.001", value)
+
+    with pytest.raises(ValueError, match="attack_seconds"):
         loads_patch(text)
 
 

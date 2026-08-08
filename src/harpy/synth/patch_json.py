@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from harpy.synth.models import EnvelopeConfig, OscillatorConfig, OscillatorType, SynthPatch
 
@@ -15,6 +15,11 @@ _ENVELOPE_KEYS = {
     "release_seconds",
     "curve",
 }
+_JSON_WHITESPACE = " \t\r\n"
+
+
+class _NonFiniteConstant(NamedTuple):
+    value: str
 
 
 def loads_patch(text: str) -> SynthPatch:
@@ -27,10 +32,10 @@ def loads_patch(text: str) -> SynthPatch:
 
     decoder = json.JSONDecoder(
         object_pairs_hook=_object_without_duplicates,
-        parse_constant=_reject_non_finite_constant,
+        parse_constant=_non_finite_constant,
     )
     value, end = decoder.raw_decode(text, start)
-    if text[end:].strip():
+    if any(character not in _JSON_WHITESPACE for character in text[end:]):
         raise ValueError("patch JSON contains trailing content")
 
     root = _object(value, "patch")
@@ -104,13 +109,13 @@ def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _reject_non_finite_constant(value: str) -> None:
-    raise ValueError(f"non-finite JSON constant {value}")
+def _non_finite_constant(value: str) -> _NonFiniteConstant:
+    return _NonFiniteConstant(value)
 
 
 def _first_non_whitespace_index(text: str) -> int | None:
     for index, character in enumerate(text):
-        if not character.isspace():
+        if character not in _JSON_WHITESPACE:
             return index
     return None
 
@@ -136,5 +141,7 @@ def _require_schema_version(value: Any) -> None:
 
 
 def _number(value: Any, field_name: str) -> None:
+    if isinstance(value, _NonFiniteConstant):
+        raise ValueError(f"{field_name} must be a finite JSON number")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field_name} must be a JSON number")
