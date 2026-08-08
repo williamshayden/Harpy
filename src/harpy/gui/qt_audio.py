@@ -393,7 +393,8 @@ class QtAudioBackend(QObject):
         ):
             visited.add(forwarded_generation)
             forwarded_generation = self._idle_generation_aliases[forwarded_generation]
-        self._idle_generation_aliases.clear()
+        for aliased_generation in visited:
+            self._idle_generation_aliases.pop(aliased_generation, None)
         self.voice_idle.emit(forwarded_generation)
 
     def _dispose_sink(self) -> None:

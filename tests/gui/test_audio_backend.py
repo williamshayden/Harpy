@@ -962,6 +962,52 @@ def test_voice_idle_is_queued_with_its_old_generation_across_retrigger(qapp) -> 
     assert controller.state.voice_may_be_active
 
 
+def test_unrelated_stale_idle_preserves_newer_clear_alias(qapp) -> None:
+    patch = short_patch(release_frames=4)
+    backend, _, sinks, history, render = backend_setup(patch=patch)
+    received: list[int] = []
+    backend.voice_idle.connect(received.append)
+    backend.start()
+    source = sinks[0].source
+    assert source is not None
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+
+    first_generation = history.begin_generation()
+    backend.submit(
+        AudioCommand(
+            AudioCommandKind.NOTE_ON,
+            frequency_hz=220.0,
+            generation=first_generation,
+        )
+    )
+    read_block(source, render, audio_format)
+    backend.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    read_block(source, render, audio_format)
+
+    second_generation = history.begin_generation()
+    backend.submit(
+        AudioCommand(
+            AudioCommandKind.NOTE_ON,
+            frequency_hz=220.0,
+            generation=second_generation,
+        )
+    )
+    read_block(source, render, audio_format)
+    backend.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    read_block(source, render, audio_format)
+    clear_generation = history.begin_generation()
+    backend.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+
+    qapp.processEvents()
+
+    assert received == [first_generation, clear_generation]
+
+    source.voice_idle.emit(second_generation)
+    qapp.processEvents()
+
+    assert received == [first_generation, clear_generation, second_generation]
+
+
 def test_repeated_shutdown_disconnects_hotplug_and_disposes_once(qapp) -> None:
     backend, media_devices, sinks, _, _ = backend_setup()
     backend.start()
