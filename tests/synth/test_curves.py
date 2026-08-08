@@ -39,6 +39,75 @@ def test_control_level_and_inverse_round_trip(
     assert recovered == pytest.approx(float(curvature), rel=0.0, abs=2e-15)
 
 
+@pytest.mark.parametrize(
+    ("start", "end", "curvature", "expected_control"),
+    [
+        (1.7976931348623157e308, 1.7976931348623157e308, 0.5, 1.7976931348623157e308),
+        (-1e308, 1e308, 0.5, 5e307),
+        (1e308, -1e308, 0.5, -5e307),
+    ],
+    ids=["constant", "rising", "falling"],
+)
+def test_large_finite_control_levels_do_not_overflow(
+    start: float,
+    end: float,
+    curvature: float,
+    expected_control: float,
+) -> None:
+    assert quadratic_control_level(start, end, curvature) == expected_control
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "control", "expected_curvature"),
+    [
+        (-1e308, 1e308, 5e307, 0.5),
+        (1e308, -1e308, -5e307, 0.5),
+    ],
+    ids=["rising", "falling"],
+)
+def test_large_finite_control_levels_have_a_finite_inverse(
+    start: float,
+    end: float,
+    control: float,
+    expected_curvature: float,
+) -> None:
+    assert curvature_from_control_level(start, end, control) == expected_curvature
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "curvature", "position", "expected_level"),
+    [
+        (
+            1.7976931348623157e308,
+            1.7976931348623157e308,
+            0.5,
+            0.1,
+            1.7976931348623157e308,
+        ),
+        (-1e308, 1e308, 0.5, 0.5, 2.5e307),
+        (1e308, -1e308, 0.5, 0.5, -2.5e307),
+    ],
+    ids=["constant", "rising", "falling"],
+)
+def test_large_finite_scalar_segments_do_not_overflow(
+    start: float,
+    end: float,
+    curvature: float,
+    position: float,
+    expected_level: float,
+) -> None:
+    assert evaluate_quadratic_segment(start, end, curvature, position) == expected_level
+
+
+def test_large_finite_array_segment_does_not_overflow() -> None:
+    level = 1.7976931348623157e308
+    positions = np.array([0.0, 0.1, 0.5, 1.0], dtype=np.float64)
+
+    values = evaluate_quadratic_segment(level, level, 0.5, positions)
+
+    np.testing.assert_array_equal(values, np.full(positions.shape, level))
+
+
 def test_inverse_rejects_zero_endpoint_span() -> None:
     with pytest.raises(ValueError, match=r"start_level.*end_level"):
         curvature_from_control_level(0.5, 0.5, 0.5)
