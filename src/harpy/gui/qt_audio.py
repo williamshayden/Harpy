@@ -110,8 +110,7 @@ class SynthAudioSource(QIODevice):
         self._commands: queue.SimpleQueue[AudioCommand] = queue.SimpleQueue()
         self._staging = bytearray()
         self._io_lock = Lock()
-        self._naturally_idle = False
-        self._last_idle_generation: int | None = None
+        self._natural_idle_pending = False
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def submit(self, command: AudioCommand) -> None:
@@ -133,7 +132,7 @@ class SynthAudioSource(QIODevice):
                 self._history.append(mono, self._capture_generation)
                 self._staging.extend(encode_mono_samples(mono, self._audio_format))
                 if not was_idle and self._engine.is_idle:
-                    self._naturally_idle = True
+                    self._natural_idle_pending = True
                 self._emit_natural_idle_if_needed()
             output = bytes(self._staging[:maxlen])
             del self._staging[:maxlen]
@@ -160,8 +159,7 @@ class SynthAudioSource(QIODevice):
                     raise RuntimeError("validated NOTE_ON command lost its payload")
                 self._capture_generation = command.generation
                 self._engine.note_on(command.frequency_hz)
-                self._naturally_idle = False
-                self._last_idle_generation = None
+                self._natural_idle_pending = False
             elif command.kind is AudioCommandKind.RETUNE:
                 if command.frequency_hz is None:
                     raise RuntimeError("validated RETUNE command lost its frequency")
@@ -171,7 +169,7 @@ class SynthAudioSource(QIODevice):
                 was_idle = self._engine.is_idle
                 self._engine.note_off()
                 if not was_idle and self._engine.is_idle:
-                    self._naturally_idle = True
+                    self._natural_idle_pending = True
             elif command.kind is AudioCommandKind.CLEAR_CAPTURE:
                 if command.generation is None:
                     raise RuntimeError("validated CLEAR_CAPTURE command lost its generation")
@@ -182,25 +180,19 @@ class SynthAudioSource(QIODevice):
                 self._staging.clear()
                 self._engine.replace_patch(command.patch)
                 self._capture_generation = command.generation
-                self._naturally_idle = False
-                self._last_idle_generation = None
+                self._natural_idle_pending = False
             elif command.kind is AudioCommandKind.RESET:
                 if command.generation is None:
                     raise RuntimeError("validated RESET command lost its generation")
                 self._staging.clear()
                 self._engine.reset()
                 self._capture_generation = command.generation
-                self._naturally_idle = False
-                self._last_idle_generation = None
+                self._natural_idle_pending = False
         self._emit_natural_idle_if_needed()
 
     def _emit_natural_idle_if_needed(self) -> None:
-        if (
-            self._naturally_idle
-            and self._engine.is_idle
-            and self._last_idle_generation != self._capture_generation
-        ):
-            self._last_idle_generation = self._capture_generation
+        if self._natural_idle_pending and self._engine.is_idle:
+            self._natural_idle_pending = False
             self.voice_idle.emit(self._capture_generation)
 
 
@@ -238,6 +230,7 @@ class QtAudioBackend(QObject):
         self._source: SynthAudioSource | None = None
         self._starting_sink: QAudioSink | None = None
         self._start_failure_requests_force_stop = True
+        self._idle_generation_aliases: dict[int, int] = {}
         self._active_failure_key: str | None = None
         self._disposing = False
         self._shutdown = False
@@ -258,15 +251,24 @@ class QtAudioBackend(QObject):
             if command.patch is None or command.generation is None:
                 raise RuntimeError("validated REPLACE_PATCH command lost its payload")
             validate_renderable_patch(command.patch, self._render)
+            self._idle_generation_aliases.clear()
             self._patch = command.patch
             self._capture_generation = command.generation
-        elif command.kind in (
-            AudioCommandKind.NOTE_ON,
-            AudioCommandKind.CLEAR_CAPTURE,
-            AudioCommandKind.RESET,
-        ):
+        elif command.kind is AudioCommandKind.NOTE_ON:
             if command.generation is None:
-                raise RuntimeError(f"validated {command.kind.name} command lost its generation")
+                raise RuntimeError("validated NOTE_ON command lost its generation")
+            self._idle_generation_aliases.clear()
+            self._capture_generation = command.generation
+        elif command.kind is AudioCommandKind.CLEAR_CAPTURE:
+            if command.generation is None:
+                raise RuntimeError("validated CLEAR_CAPTURE command lost its generation")
+            if self._capture_generation != command.generation:
+                self._idle_generation_aliases[self._capture_generation] = command.generation
+            self._capture_generation = command.generation
+        elif command.kind is AudioCommandKind.RESET:
+            if command.generation is None:
+                raise RuntimeError("validated RESET command lost its generation")
+            self._idle_generation_aliases.clear()
             self._capture_generation = command.generation
         if source is not None:
             source.submit(command)
@@ -383,7 +385,16 @@ class QtAudioBackend(QObject):
 
     @Slot(int)
     def _forward_voice_idle(self, generation: int) -> None:
-        self.voice_idle.emit(generation)
+        forwarded_generation = generation
+        visited: set[int] = set()
+        while (
+            forwarded_generation in self._idle_generation_aliases
+            and forwarded_generation not in visited
+        ):
+            visited.add(forwarded_generation)
+            forwarded_generation = self._idle_generation_aliases[forwarded_generation]
+        self._idle_generation_aliases.clear()
+        self.voice_idle.emit(forwarded_generation)
 
     def _dispose_sink(self) -> None:
         self._disposing = True

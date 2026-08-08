@@ -211,6 +211,23 @@ def test_note_off_releases_and_emits_natural_idle_once_for_current_generation() 
     assert idle_generations == [1]
 
 
+def test_idle_clear_after_reported_completion_does_not_emit_again() -> None:
+    source, history, render, audio_format = source_setup(patch=short_patch(release_frames=4))
+    idle_generations: list[int] = []
+    source.voice_idle.connect(idle_generations.append)
+    source.submit(AudioCommand(AudioCommandKind.NOTE_ON, frequency_hz=220.0, generation=0))
+    read_block(source, render, audio_format)
+    source.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    read_block(source, render, audio_format)
+    assert idle_generations == [0]
+    clear_generation = history.begin_generation()
+    source.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+
+    read_block(source, render, audio_format)
+
+    assert idle_generations == [0]
+
+
 def test_clear_capture_changes_only_the_local_append_generation() -> None:
     source, history, render, audio_format = source_setup()
     source.submit(AudioCommand(AudioCommandKind.NOTE_ON, frequency_hz=220.0, generation=0))
@@ -415,16 +432,38 @@ def test_clear_waiting_on_release_completion_gets_new_generation_idle(
     monkeypatch,
     qapp,
 ) -> None:
-    source, history, render, audio_format = source_setup(patch=short_patch(release_frames=4))
-    idle_generations: list[int] = []
-    source.voice_idle.connect(idle_generations.append)
-    source.submit(AudioCommand(AudioCommandKind.NOTE_ON, frequency_hz=220.0, generation=0))
+    patch = short_patch(release_frames=4)
+    backend, _, sinks, history, render = backend_setup(patch=patch)
+    coordinator = CaptureCoordinator(
+        history,
+        render.sample_rate_hz,
+        AnalysisConfig(
+            waveform_window_seconds=render.block_frames / render.sample_rate_hz,
+            fft_frames=render.block_frames,
+        ),
+    )
+    controller = WorkbenchController(
+        WorkbenchSpec.from_tuning(Tuning()),
+        render,
+        patch,
+        coordinator,
+        backend.submit,
+    )
+    received: list[int] = []
+    backend.voice_idle.connect(received.append)
+    backend.voice_idle.connect(controller.mark_voice_idle)
+    backend.start()
+    source = sinks[0].source
+    assert source is not None
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+    controller.press_play()
     read_block(source, render, audio_format)
-    source.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    controller.release_play()
     release_rendered = Event()
     allow_release_return = Event()
-    clear_started = Event()
+    clear_reached_source = Event()
     original_render = source._engine.render
+    original_submit = source.submit
 
     def pause_after_release_render(frame_count: int) -> np.ndarray:
         samples = original_render(frame_count)
@@ -432,28 +471,78 @@ def test_clear_waiting_on_release_completion_gets_new_generation_idle(
         assert allow_release_return.wait(timeout=2.0)
         return samples
 
+    def observe_clear_submission(command: AudioCommand) -> None:
+        if command.kind is AudioCommandKind.CLEAR_CAPTURE:
+            clear_reached_source.set()
+        original_submit(command)
+
     monkeypatch.setattr(source._engine, "render", pause_after_release_render)
+    monkeypatch.setattr(source, "submit", observe_clear_submission)
     reader = Thread(target=read_block, args=(source, render, audio_format))
     reader.start()
     assert release_rendered.wait(timeout=2.0)
-    clear_generation = history.begin_generation()
+    cleared_states = []
 
     def submit_clear() -> None:
-        clear_started.set()
-        source.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+        cleared_states.append(controller.clear_measurement())
 
     submitter = Thread(target=submit_clear)
     submitter.start()
-    assert clear_started.wait(timeout=2.0)
+    assert clear_reached_source.wait(timeout=2.0)
     allow_release_return.set()
     reader.join(timeout=2.0)
     submitter.join(timeout=2.0)
+    newest_clear_state = controller.clear_measurement()
+    qapp.processEvents()
     read_block(source, render, audio_format)
     qapp.processEvents()
 
     assert not reader.is_alive()
     assert not submitter.is_alive()
-    assert idle_generations.count(clear_generation) == 1
+    assert len(cleared_states) == 1
+    first_clear_generation = cleared_states[0].capture.generation
+    newest_clear_generation = newest_clear_state.capture.generation
+    assert newest_clear_generation > first_clear_generation
+    assert received == [newest_clear_generation]
+    assert not controller.state.voice_may_be_active
+
+
+@pytest.mark.parametrize("kind", [AudioCommandKind.RESET, AudioCommandKind.REPLACE_PATCH])
+def test_reset_and_replace_cancel_pending_clear_idle_alias(
+    qapp,
+    kind: AudioCommandKind,
+) -> None:
+    patch = short_patch(release_frames=4)
+    backend, _, sinks, history, render = backend_setup(patch=patch)
+    received: list[int] = []
+    backend.voice_idle.connect(received.append)
+    backend.start()
+    source = sinks[0].source
+    assert source is not None
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+    note_generation = history.begin_generation()
+    backend.submit(
+        AudioCommand(
+            AudioCommandKind.NOTE_ON,
+            frequency_hz=220.0,
+            generation=note_generation,
+        )
+    )
+    read_block(source, render, audio_format)
+    backend.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+    read_block(source, render, audio_format)
+    clear_generation = history.begin_generation()
+    backend.submit(AudioCommand(AudioCommandKind.CLEAR_CAPTURE, generation=clear_generation))
+    replacement_generation = history.begin_generation()
+    if kind is AudioCommandKind.REPLACE_PATCH:
+        command = AudioCommand(kind, patch=short_patch(), generation=replacement_generation)
+    else:
+        command = AudioCommand(kind, generation=replacement_generation)
+
+    backend.submit(command)
+    qapp.processEvents()
+
+    assert received == [note_generation]
 
 
 class FakeSignal:
@@ -862,10 +951,11 @@ def test_voice_idle_is_queued_with_its_old_generation_across_retrigger(qapp) -> 
     read_block(source, render, audio_format)
     controller.release_play()
     read_block(source, render, audio_format)
+    clear_generation = controller.clear_measurement().capture.generation
     second_generation = controller.press_play().capture.generation
 
     assert received == []
-    assert second_generation > first_generation
+    assert first_generation < clear_generation < second_generation
     assert controller.state.voice_may_be_active
     qapp.processEvents()
     assert received == [first_generation]
