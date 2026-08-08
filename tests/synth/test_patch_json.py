@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,13 @@ def test_loads_patch_names_envelope_field_for_non_finite_json_constants(value: s
         loads_patch(text)
 
 
+def test_loads_patch_turns_an_unrepresentable_json_integer_into_a_named_value_error() -> None:
+    text = EXPECTED_DEFAULT.replace("0.001", "9" * 400)
+
+    with pytest.raises(ValueError, match="attack_seconds"):
+        loads_patch(text)
+
+
 def test_strict_non_finite_callback_always_raises() -> None:
     with pytest.raises(ValueError, match="NaN"):
         patch_json._reject_non_finite_constant("NaN")
@@ -163,3 +171,41 @@ def test_save_and_load_patch_use_utf8_files(tmp_path: Path) -> None:
 
     assert path.read_text(encoding="utf-8") == dumps_patch(patch)
     assert load_patch(path) == patch
+
+
+def test_failed_partial_save_preserves_existing_patch_and_removes_temporary_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "patch.json"
+    path.write_text("existing patch\n", encoding="utf-8")
+    real_fdopen = os.fdopen
+
+    class FailingWriter:
+        def __init__(self, stream) -> None:  # type: ignore[no-untyped-def]
+            self._stream = stream
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self._stream.close()
+
+        def write(self, text: str) -> int:
+            self._stream.write(text[:16])
+            self._stream.flush()
+            raise OSError("injected partial write")
+
+        def flush(self) -> None:
+            self._stream.flush()
+
+    def failing_fdopen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return FailingWriter(real_fdopen(*args, **kwargs))
+
+    monkeypatch.setattr(os, "fdopen", failing_fdopen)
+
+    with pytest.raises(OSError, match="injected partial write"):
+        save_patch(path, SynthPatch(output_gain_dbfs=-3.0))
+
+    assert path.read_text(encoding="utf-8") == "existing patch\n"
+    assert [item.name for item in tmp_path.iterdir()] == ["patch.json"]

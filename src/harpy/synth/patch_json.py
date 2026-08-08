@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -103,7 +105,27 @@ def load_patch(path: Path) -> SynthPatch:
 
 
 def save_patch(path: Path, patch: SynthPatch) -> None:
-    path.write_text(dumps_patch(patch), encoding="utf-8")
+    destination = Path(path)
+    text = dumps_patch(patch)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+        descriptor = -1
+        with stream:
+            written = stream.write(text)
+            if written != len(text):
+                raise OSError("incomplete patch write")
+            stream.flush()
+        os.replace(temporary, destination)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

@@ -18,7 +18,12 @@ from PySide6.QtMultimedia import (
 from harpy.capture import SampleHistory
 from harpy.playback import AudioCommand, AudioCommandKind
 from harpy.synth.engine import SynthEngine
-from harpy.synth.models import RenderConfig, SynthPatch, validate_renderable_patch
+from harpy.synth.models import (
+    RenderConfig,
+    SynthPatch,
+    validate_frequency_hz,
+    validate_renderable_patch,
+)
 
 _FLOAT_SAMPLE_FORMAT = QAudioFormat.SampleFormat["float".title()]
 
@@ -109,6 +114,8 @@ class SynthAudioSource(QIODevice):
     def submit(self, command: AudioCommand) -> None:
         if not isinstance(command, AudioCommand):
             raise ValueError("command must be an AudioCommand")
+        if command.kind in (AudioCommandKind.NOTE_ON, AudioCommandKind.RETUNE):
+            validate_frequency_hz(command.frequency_hz, self._render)
         with self._io_lock:
             self._commands.put(command)
 
@@ -237,6 +244,8 @@ class QtAudioBackend(QObject):
     def submit(self, command: AudioCommand) -> None:
         if not isinstance(command, AudioCommand):
             raise ValueError("command must be an AudioCommand")
+        if command.kind in (AudioCommandKind.NOTE_ON, AudioCommandKind.RETUNE):
+            validate_frequency_hz(command.frequency_hz, self._render)
         source = self._source
         if command.kind is AudioCommandKind.NOTE_ON and source is None:
             raise RuntimeError("audio output is unavailable")

@@ -89,24 +89,54 @@ class RenderConfig:
 
 
 def seconds_to_frames(seconds: float, sample_rate_hz: int) -> int:
+    return _seconds_to_frames(seconds, sample_rate_hz, "seconds")
+
+
+def _seconds_to_frames(seconds: float, sample_rate_hz: int, field_name: str) -> int:
     _positive_integer(sample_rate_hz, "sample_rate_hz")
-    seconds_value = _finite_float(seconds, "seconds")
+    seconds_value = _finite_float(seconds, field_name)
     if seconds_value < 0.0:
-        raise ValueError("seconds must be finite and non-negative")
-    return math.floor(seconds_value * sample_rate_hz + 0.5)
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    frame_count = seconds_value * sample_rate_hz
+    if not math.isfinite(frame_count):
+        raise ValueError(f"{field_name} must produce a finite frame count")
+    return math.floor(frame_count + 0.5)
 
 
 def validate_renderable_patch(patch: SynthPatch, render: RenderConfig) -> None:
     for segment in ("attack", "decay", "release"):
         seconds = getattr(patch.envelope, f"{segment}_seconds")
-        if seconds_to_frames(seconds, render.sample_rate_hz) < 1:
+        if (
+            _seconds_to_frames(
+                seconds,
+                render.sample_rate_hz,
+                f"{segment}_seconds",
+            )
+            < 1
+        ):
             raise ValueError(f"{segment} segment must contain at least one frame")
+
+
+def validate_frequency_hz(frequency_hz: object, render: RenderConfig) -> float:
+    """Return a frequency that the configured renderer can synthesize safely."""
+
+    if not isinstance(render, RenderConfig):
+        raise ValueError("render must be a RenderConfig")
+    if isinstance(frequency_hz, bool):
+        raise ValueError("frequency_hz must be positive, finite, and below Nyquist")
+    try:
+        frequency = float(frequency_hz)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("frequency_hz must be positive, finite, and below Nyquist") from error
+    if not math.isfinite(frequency) or frequency <= 0.0 or frequency >= render.sample_rate_hz / 2.0:
+        raise ValueError("frequency_hz must be positive, finite, and below Nyquist")
+    return frequency
 
 
 def _finite_float(value: object, field_name: str) -> float:
     try:
         number = float(value)
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, OverflowError) as error:
         raise ValueError(f"{field_name} must be finite") from error
     if not math.isfinite(number):
         raise ValueError(f"{field_name} must be finite")

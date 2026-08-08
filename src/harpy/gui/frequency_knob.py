@@ -62,7 +62,6 @@ class FrequencyKnob(QWidget):
         self._frequency_hz = center_hz
         self._drag_origin_y: float | None = None
         self._drag_origin_hz: float | None = None
-        self._drag_shift = False
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Frequency")
         self.setMinimumSize(72, 72)
@@ -93,14 +92,14 @@ class FrequencyKnob(QWidget):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self._drag_origin_y = event.position().y()
             self._drag_origin_hz = self._frequency_hz
-            self._drag_shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_origin_y is not None and self._drag_origin_hz is not None:
-            cents_per_pixel = self._cents_per_pixel * (0.1 if self._drag_shift else 1.0)
+            shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            cents_per_pixel = self._cents_per_pixel * (0.1 if shift_held else 1.0)
             cents = (self._drag_origin_y - event.position().y()) * cents_per_pixel
             self.set_frequency_hz(self._drag_origin_hz * 2 ** (cents / 1200.0), emit=True)
             event.accept()
@@ -111,7 +110,6 @@ class FrequencyKnob(QWidget):
         if event.button() is Qt.MouseButton.LeftButton:
             self._drag_origin_y = None
             self._drag_origin_hz = None
-            self._drag_shift = False
             event.accept()
             return
         super().mouseReleaseEvent(event)

@@ -35,10 +35,14 @@ def test_config_has_no_direct_gui_imports() -> None:
     source = Path(__file__).parents[1] / "src" / "harpy" / "config.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     imports = {
-        alias.name
+        imported
         for node in tree.body
         if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
+        for imported in (
+            [alias.name for alias in node.names]
+            if isinstance(node, ast.Import)
+            else [node.module or ""]
+        )
     }
 
     assert not {name for name in imports if name.startswith("harpy.gui")}

@@ -53,6 +53,13 @@ def test_seconds_to_frames_uses_half_up_rounding() -> None:
     assert seconds_to_frames(2.5 / 48_000, 48_000) == 3
 
 
+def test_finite_duration_too_large_for_a_frame_count_is_a_named_value_error() -> None:
+    patch = replace(SynthPatch(), envelope=EnvelopeConfig(attack_seconds=1e308))
+
+    with pytest.raises(ValueError, match="attack_seconds"):
+        validate_renderable_patch(patch, RenderConfig())
+
+
 def test_configs_are_immutable() -> None:
     patch = SynthPatch()
 

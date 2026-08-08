@@ -5,7 +5,12 @@ import math
 import numpy as np
 
 from harpy.synth.envelope import LinearEnvelope
-from harpy.synth.models import RenderConfig, SynthPatch, validate_renderable_patch
+from harpy.synth.models import (
+    RenderConfig,
+    SynthPatch,
+    validate_frequency_hz,
+    validate_renderable_patch,
+)
 
 
 class SynthEngine:
@@ -81,11 +86,5 @@ class SynthEngine:
         self._envelope.reset()
 
     def _validated_phase_increment(self, frequency_hz: float) -> float:
-        try:
-            frequency = float(frequency_hz)
-        except (TypeError, ValueError) as error:
-            raise ValueError("frequency must be positive, finite, and below Nyquist") from error
-        nyquist_hz = self._render.sample_rate_hz / 2.0
-        if not math.isfinite(frequency) or frequency <= 0.0 or frequency >= nyquist_hz:
-            raise ValueError("frequency must be positive, finite, and below Nyquist")
+        frequency = validate_frequency_hz(frequency_hz, self._render)
         return math.tau * frequency / self._render.sample_rate_hz

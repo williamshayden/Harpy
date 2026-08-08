@@ -1,6 +1,6 @@
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QAccessible, QColor, QWheelEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QAccessible, QColor, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -58,7 +58,17 @@ def test_shift_drag_uses_one_tenth_sensitivity(qtbot) -> None:
         Qt.KeyboardModifier.ShiftModifier,
         QPoint(60, 80),
     )
-    QTest.mouseMove(knob, QPoint(60, 70), delay=1)
+    QApplication.sendEvent(
+        knob,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(60, 70),
+            QPointF(60, 70),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ShiftModifier,
+        ),
+    )
     QTest.mouseRelease(
         knob,
         Qt.MouseButton.LeftButton,
@@ -67,6 +77,32 @@ def test_shift_drag_uses_one_tenth_sensitivity(qtbot) -> None:
     )
 
     assert knob.frequency_hz == pytest.approx(200.0 * 2 ** (12.0 / 1200.0))
+
+
+def test_drag_samples_shift_modifier_from_each_mouse_move(qtbot) -> None:
+    knob = make_knob(qtbot)
+    knob.set_frequency_hz(200.0)
+    QTest.mousePress(
+        knob,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ShiftModifier,
+        QPoint(60, 80),
+    )
+
+    QApplication.sendEvent(
+        knob,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(60, 70),
+            QPointF(60, 70),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, pos=QPoint(60, 70))
+
+    assert knob.frequency_hz == pytest.approx(200.0 * 2 ** (120.0 / 1200.0))
 
 
 def test_keyboard_and_wheel_apply_cent_steps_and_clamp_without_wrapping(qtbot) -> None:

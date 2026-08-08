@@ -193,6 +193,30 @@ def test_retune_after_idle_is_a_harmless_noop() -> None:
     )
 
 
+@pytest.mark.parametrize("frequency_hz", [24_000.0, 24_000.1])
+@pytest.mark.parametrize("kind", [AudioCommandKind.NOTE_ON, AudioCommandKind.RETUNE])
+def test_source_rejects_unrenderable_frequency_before_queueing_for_callback(
+    frequency_hz: float,
+    kind: AudioCommandKind,
+) -> None:
+    source, _, render, audio_format = source_setup()
+    command = (
+        AudioCommand(kind, frequency_hz=frequency_hz, generation=1)
+        if kind is AudioCommandKind.NOTE_ON
+        else AudioCommand(kind, frequency_hz=frequency_hz)
+    )
+
+    with pytest.raises(ValueError, match="Nyquist"):
+        source.submit(command)
+
+    assert source._capture_generation == 0
+    assert source._commands.empty()
+    np.testing.assert_array_equal(
+        read_block(source, render, audio_format),
+        np.zeros(render.block_frames, dtype=np.float32),
+    )
+
+
 def test_note_off_releases_and_emits_natural_idle_once_for_current_generation() -> None:
     source, _, render, audio_format = source_setup(
         patch=short_patch(release_frames=4),
@@ -668,6 +692,38 @@ def test_healthy_start_emits_availability_without_device_copy(qapp) -> None:
     assert failures == []
     assert len(sinks) == 1
     assert sinks[0].source is not None
+
+
+@pytest.mark.parametrize("frequency_hz", [24_000.0, 24_000.1])
+@pytest.mark.parametrize("kind", [AudioCommandKind.NOTE_ON, AudioCommandKind.RETUNE])
+def test_backend_rejects_unrenderable_frequency_before_state_or_callback_queue(
+    qapp,
+    frequency_hz: float,
+    kind: AudioCommandKind,
+) -> None:
+    backend, _, sinks, history, render = backend_setup()
+    backend.start()
+    source = sinks[0].source
+    assert source is not None
+    before_generation = backend._capture_generation
+    generation = history.begin_generation()
+    command = (
+        AudioCommand(kind, frequency_hz=frequency_hz, generation=generation)
+        if kind is AudioCommandKind.NOTE_ON
+        else AudioCommand(kind, frequency_hz=frequency_hz)
+    )
+
+    with pytest.raises(ValueError, match="Nyquist"):
+        backend.submit(command)
+
+    assert backend._capture_generation == before_generation
+    assert source._capture_generation == before_generation
+    assert source._commands.empty()
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+    np.testing.assert_array_equal(
+        read_block(source, render, audio_format),
+        np.zeros(render.block_frames, dtype=np.float32),
+    )
 
 
 def test_default_media_devices_instance_supplies_default_output(qapp, monkeypatch) -> None:

@@ -223,7 +223,9 @@ Requirements:
 - A successful load force-stops audio, replaces the in-memory patch, clears the current
   observation, and preserves the selected performance frequency.
 - Save writes the active patch only. It does not include render settings, selected
-  frequency, window geometry, audio device, or analysis state.
+  frequency, window geometry, audio device, or analysis state. A save completes through
+  a fully written temporary sibling and atomic replacement, so a failed overwrite keeps
+  the prior destination intact.
 - Load and Save As use native file dialogs. Harpy does not remember the path after the
   operation and does not create a recent-file list.
 - JSON serialization is deterministic: equivalent patches produce equivalent parsed
@@ -284,11 +286,11 @@ AnalysisConfig
   window                  = "hann"
 ```
 
-`AnalysisConfig` requires `0 < spectrum_min_hz < spectrum_max_hz <= Nyquist`, a
-positive even FFT length, a positive waveform duration no longer than the FFT window,
-and a finite non-positive floor. The composed default therefore requires a sample rate
-above 40 kHz and is valid at 48 kHz. A non-default render config must provide compatible
-analysis bounds rather than silently clamping them.
+`AnalysisConfig` requires `0 < spectrum_min_hz < spectrum_max_hz <= Nyquist`, an even
+FFT length of at least four, a positive waveform duration no longer than the FFT
+window, and a finite non-positive floor. The composed default therefore requires a
+sample rate above 40 kHz and is valid at 48 kHz. A non-default render config must
+provide compatible analysis bounds rather than silently clamping them.
 
 Waveform duration converts to frames using nearest-integer, half-up rounding:
 `floor(seconds * sample_rate_hz + 0.5)`, matching envelope duration conversion. The

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import operator
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,7 +9,12 @@ from dataclasses import dataclass
 from harpy.capture import CaptureCoordinator, CaptureState, CaptureView
 from harpy.gui.workbench_spec import WorkbenchSpec
 from harpy.playback import AudioCommand, AudioCommandKind
-from harpy.synth.models import RenderConfig, SynthPatch, validate_renderable_patch
+from harpy.synth.models import (
+    RenderConfig,
+    SynthPatch,
+    validate_frequency_hz,
+    validate_renderable_patch,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +51,7 @@ class WorkbenchController:
             raise ValueError("capture must be a CaptureCoordinator")
         if not callable(send_command):
             raise ValueError("send_command must be callable")
-        self._validate_spec(spec)
+        self._validate_spec(spec, render)
         validate_renderable_patch(patch, render)
 
         self._spec = spec
@@ -197,16 +201,9 @@ class WorkbenchController:
         return self.state
 
     def _validated_frequency(self, frequency_hz: float) -> float:
-        if isinstance(frequency_hz, bool):
-            raise ValueError("frequency_hz must be finite and within the workbench range")
-        try:
-            frequency = float(frequency_hz)
-        except (TypeError, ValueError) as error:
-            message = "frequency_hz must be finite and within the workbench range"
-            raise ValueError(message) from error
+        frequency = validate_frequency_hz(frequency_hz, self._render)
         if (
-            not math.isfinite(frequency)
-            or frequency < self._spec.minimum_frequency_hz
+            frequency < self._spec.minimum_frequency_hz
             or frequency > self._spec.maximum_frequency_hz
         ):
             raise ValueError("frequency_hz must be finite and within the workbench range")
@@ -225,7 +222,7 @@ class WorkbenchController:
         return value
 
     @staticmethod
-    def _validate_spec(spec: WorkbenchSpec) -> None:
+    def _validate_spec(spec: WorkbenchSpec, render: RenderConfig) -> None:
         values = (
             spec.minimum_frequency_hz,
             spec.center_frequency_hz,
@@ -238,10 +235,6 @@ class WorkbenchController:
         except (TypeError, ValueError) as error:
             message = "workbench frequencies must be positive, finite, and ordered"
             raise ValueError(message) from error
-        if not (
-            math.isfinite(minimum)
-            and math.isfinite(center)
-            and math.isfinite(maximum)
-            and 0.0 < minimum <= center <= maximum
-        ):
+        if not 0.0 < minimum <= center <= maximum:
             raise ValueError("workbench frequencies must be positive, finite, and ordered")
+        validate_frequency_hz(maximum, render)

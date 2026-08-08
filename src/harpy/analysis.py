@@ -36,15 +36,15 @@ class AudioObservation:
     peak_level_dbfs: float | None
 
     def __post_init__(self) -> None:
-        array_names = (
-            "waveform_samples",
-            "waveform_time_ms",
-            "spectrum_frequency_hz",
-            "spectrum_level_dbfs",
-        )
-        for name in array_names:
-            supplied = np.asarray(getattr(self, name)).reshape(-1)
-            owned = np.array(supplied, copy=True, order="C")
+        array_dtypes = {
+            "waveform_samples": np.float32,
+            "waveform_time_ms": np.float64,
+            "spectrum_frequency_hz": np.float64,
+            "spectrum_level_dbfs": np.float64,
+        }
+        for name, dtype in array_dtypes.items():
+            supplied = np.asarray(getattr(self, name), dtype=dtype).reshape(-1)
+            owned = np.array(supplied, dtype=dtype, copy=True, order="C")
             owned.setflags(write=False)
             object.__setattr__(self, name, owned)
 
@@ -77,9 +77,9 @@ def validate_analysis_config(config: AnalysisConfig, sample_rate_hz: int) -> Non
     try:
         fft_frames = operator.index(config.fft_frames)
     except TypeError as error:
-        raise ValueError("fft_frames must be a positive even integer") from error
-    if isinstance(config.fft_frames, bool) or fft_frames <= 0 or fft_frames % 2:
-        raise ValueError("fft_frames must be a positive even integer")
+        raise ValueError("fft_frames must be an even integer of at least 4") from error
+    if isinstance(config.fft_frames, bool) or fft_frames < 4 or fft_frames % 2:
+        raise ValueError("fft_frames must be an even integer of at least 4")
 
     waveform_frames = _waveform_frames(config, numeric_sample_rate)
     if not 1 <= waveform_frames <= fft_frames:
@@ -173,8 +173,8 @@ def analyze(
     waveform_frames = _waveform_frames(config, float(sample_rate_hz))
     capture = sample_array[-config.fft_frames :]
     trailing_waveform = np.asarray(capture[-waveform_frames:], dtype=np.float64)
-    peak_amplitude = float(np.max(np.abs(trailing_waveform)))
-    if peak_amplitude <= 1e-6:
+    trailing_peak_amplitude = float(np.max(np.abs(trailing_waveform)))
+    if trailing_peak_amplitude <= 1e-6:
         return _empty_observation()
 
     latest_start = config.fft_frames - waveform_frames
@@ -183,6 +183,7 @@ def analyze(
     )
     waveform_start = int(eligible_crossings[-1] + 1) if eligible_crossings.size else latest_start
     waveform = capture[waveform_start : waveform_start + waveform_frames]
+    peak_amplitude = float(np.max(np.abs(np.asarray(waveform, dtype=np.float64))))
     waveform_time_ms = np.arange(waveform_frames, dtype=np.float64) * 1_000.0 / sample_rate_hz
 
     window = _hann_window(config.fft_frames)

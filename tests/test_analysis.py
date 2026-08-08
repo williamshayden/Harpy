@@ -37,10 +37,19 @@ def test_silent_tail_returns_owned_empty_observation(level: float) -> None:
     )
 
 
-@pytest.mark.parametrize("fft_frames", [0, -2, 3])
-def test_validation_rejects_nonpositive_or_odd_fft_size(fft_frames: int) -> None:
-    with pytest.raises(ValueError, match="fft_frames"):
+@pytest.mark.parametrize("fft_frames", [0, -2, 2, 3])
+def test_validation_rejects_fft_sizes_below_four_or_odd(fft_frames: int) -> None:
+    with pytest.raises(ValueError, match="even integer of at least 4"):
         validate_analysis_config(AnalysisConfig(fft_frames=fft_frames), 48_000)
+
+
+def test_four_frame_hann_analysis_has_finite_results() -> None:
+    config = AnalysisConfig(waveform_window_seconds=4 / 48_000, fft_frames=4)
+
+    result = analyze(np.array([-0.25, 0.25, -0.25, 0.25], dtype=np.float32), 48_000, config)
+
+    assert result.has_signal
+    assert np.all(np.isfinite(result.spectrum_level_dbfs))
 
 
 @pytest.mark.parametrize("duration", [0.0, 0.49 / 48_000, 16_384.5 / 48_000])
@@ -136,6 +145,24 @@ def test_audio_observation_is_deeply_immutable_and_owns_flat_arrays() -> None:
     assert observation.waveform_samples.tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
+def test_direct_audio_observation_normalizes_each_public_array_dtype() -> None:
+    observation = AudioObservation(
+        has_signal=True,
+        waveform_samples=np.array([1, -1], dtype=np.int16),
+        waveform_time_ms=np.array([0, 1], dtype=np.float32),
+        spectrum_frequency_hz=np.array([220], dtype=np.float32),
+        spectrum_level_dbfs=np.array([-12], dtype=np.float32),
+        peak_amplitude_fs=1.0,
+        peak_frequency_hz=220.0,
+        peak_level_dbfs=-12.0,
+    )
+
+    assert observation.waveform_samples.dtype == np.float32
+    assert observation.waveform_time_ms.dtype == np.float64
+    assert observation.spectrum_frequency_hz.dtype == np.float64
+    assert observation.spectrum_level_dbfs.dtype == np.float64
+
+
 @pytest.mark.parametrize(
     ("waveform_size", "time_size", "frequency_size", "level_size"),
     [(2, 1, 0, 0), (0, 0, 2, 1)],
@@ -189,6 +216,17 @@ def test_waveform_without_eligible_crossing_uses_trailing_window() -> None:
     result = analyze(samples, 48_000)
 
     np.testing.assert_array_equal(result.waveform_samples, samples[-2_400:])
+
+
+def test_published_peak_amplitude_comes_from_trigger_aligned_waveform() -> None:
+    samples = np.full(16_384, -0.2, dtype=np.float32)
+    samples[13_000:] = 0.2
+    samples[13_010] = 0.8
+
+    result = analyze(samples, 48_000)
+
+    assert np.max(np.abs(result.waveform_samples)) == pytest.approx(0.8)
+    assert result.peak_amplitude_fs == pytest.approx(0.8)
 
 
 def test_signal_validity_comes_from_untriggered_tail() -> None:
@@ -281,6 +319,20 @@ def test_frequency_range_between_fft_bins_has_no_spectral_peak() -> None:
     assert result.spectrum_level_dbfs.size == 0
     assert result.peak_frequency_hz is None
     assert result.peak_level_dbfs is None
+
+
+def test_live_and_empty_analysis_results_publish_declared_array_dtypes() -> None:
+    frames = np.arange(16_384, dtype=np.float64)
+    live_samples = (0.25 * np.sin(math.tau * 440.0 * frames / 48_000)).astype(np.float64)
+
+    live = analyze(live_samples, 48_000)
+    empty = analyze(np.zeros(16_384, dtype=np.float32), 48_000)
+
+    for observation in (live, empty):
+        assert observation.waveform_samples.dtype == np.float32
+        assert observation.waveform_time_ms.dtype == np.float64
+        assert observation.spectrum_frequency_hz.dtype == np.float64
+        assert observation.spectrum_level_dbfs.dtype == np.float64
 
 
 @pytest.mark.parametrize("frequency_hz", np.linspace(130.8127826502993, 523.2511306011972, 1_001))

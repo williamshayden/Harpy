@@ -45,6 +45,25 @@ def make_controller(
     return controller, commands, history
 
 
+def test_high_reference_tuning_cannot_compose_an_out_of_nyquist_workbench() -> None:
+    history = SampleHistory(capacity_frames=8)
+    capture = CaptureCoordinator(history, SAMPLE_RATE_HZ, ANALYSIS_CONFIG)
+    commands: list[AudioCommand] = []
+    spec = WorkbenchSpec.from_tuning(Tuning(reference_hz=30_000.0))
+
+    with pytest.raises(ValueError, match="Nyquist"):
+        WorkbenchController(
+            spec,
+            RenderConfig(sample_rate_hz=SAMPLE_RATE_HZ),
+            SynthPatch(),
+            capture,
+            commands.append,
+        )
+
+    assert history.generation == 0
+    assert commands == []
+
+
 def test_initial_state_is_tuned_c3_and_semantically_idle() -> None:
     controller, commands, _ = make_controller()
 
@@ -262,6 +281,22 @@ def test_unrenderable_patch_leaves_controller_capture_and_commands_unchanged() -
         controller.replace_patch(invalid)
 
     assert controller.state == before_state
+    assert tuple(commands) == before_commands
+
+
+def test_huge_finite_patch_duration_leaves_controller_state_and_capture_unchanged() -> None:
+    controller, commands, history = make_controller()
+    controller.press_play()
+    before_state = controller.state
+    before_commands = tuple(commands)
+    before_generation = history.generation
+    invalid = SynthPatch(envelope=EnvelopeConfig(attack_seconds=1e308))
+
+    with pytest.raises(ValueError, match="attack_seconds"):
+        controller.replace_patch(invalid)
+
+    assert controller.state == before_state
+    assert history.generation == before_generation
     assert tuple(commands) == before_commands
 
 

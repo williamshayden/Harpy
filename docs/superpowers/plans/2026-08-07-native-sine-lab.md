@@ -1,5 +1,12 @@
 # Native Sine Lab Implementation Plan
 
+Status: historical; superseded by the Milestone A foundation workbench
+
+> **Historical record only. Do not execute this plan.** Use the
+> [Milestone A foundation workbench plan](2026-08-07-harpy-milestone-a-foundation-workbench.md)
+> and its authoritative
+> [replacement design](../specs/2026-08-07-harpy-milestone-a-foundation-workbench-design.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a native WSLg desktop lab that deterministically plays and visualizes one configurable sine note with the approved A440 pitch model and linear ADSR envelope.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeyEvent
+from PySide6.QtGui import QCloseEvent, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -60,7 +60,7 @@ class HarpyWindow(QMainWindow):
             spec.maximum_frequency_hz,
         )
         self.frequency_knob.setObjectName("frequencyKnob")
-        self.frequency_knob.setFixedSize(92, 92)
+        self.frequency_knob.setFixedSize(80, 80)
 
         self.frequency_entry = FrequencyEntry(
             spec.minimum_frequency_hz,
@@ -70,6 +70,8 @@ class HarpyWindow(QMainWindow):
         self.frequency_entry.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.frequency_entry.setMinimumWidth(164)
         self.frequency_entry.setMaximumWidth(220)
+        self.frequency_entry.setAccessibleName("Frequency in hertz")
+        self.frequency_entry.setAccessibleDescription("Enter the playback frequency in hertz.")
         hz_suffix = QLabel("Hz")
         hz_suffix.setObjectName("frequencySuffix")
 
@@ -86,7 +88,7 @@ class HarpyWindow(QMainWindow):
         self.transport.setObjectName("transportStrip")
         self.transport.setMaximumHeight(132)
         transport_layout = QHBoxLayout(self.transport)
-        transport_layout.setContentsMargins(14, 10, 14, 10)
+        transport_layout.setContentsMargins(14, 6, 14, 6)
         transport_layout.setSpacing(14)
         transport_layout.addWidget(self.frequency_knob)
         editor_layout = QHBoxLayout()
@@ -100,14 +102,13 @@ class HarpyWindow(QMainWindow):
 
         self.measurement_state_label = QLabel()
         self.measurement_state_label.setObjectName("measurementStateLabel")
-        self.clear_button = QPushButton("Clear")
+        self.clear_button = QPushButton("&Clear")
         self.clear_button.setObjectName("clearButton")
+        self.clear_button.setToolTip("Clear measurement (Ctrl+K)")
         self.clear_button.setMaximumWidth(88)
         measurement_header = QHBoxLayout()
         measurement_header.setContentsMargins(2, 0, 2, 0)
         measurement_header.addWidget(self.measurement_state_label)
-        measurement_header.addStretch(1)
-        measurement_header.addWidget(self.clear_button)
 
         self.waveform_view = WaveformView()
         self.waveform_view.setObjectName("waveformPlot")
@@ -134,7 +135,7 @@ class HarpyWindow(QMainWindow):
         facts_layout.setVerticalSpacing(2)
         self._patch_value_labels: dict[str, QLabel] = {}
         for column, name in enumerate(
-            ("Oscillator", "Output", "Attack", "Decay", "Sustain", "Release")
+            ("Oscillator", "Attack", "Decay", "Sustain", "Release", "Curve", "Output")
         ):
             heading = QLabel(name)
             heading.setObjectName("factName")
@@ -144,10 +145,12 @@ class HarpyWindow(QMainWindow):
             facts_layout.addWidget(value, 1, column)
             self._patch_value_labels[name] = value
 
-        self.load_patch_button = QPushButton("Load")
+        self.load_patch_button = QPushButton("&Load")
         self.load_patch_button.setObjectName("loadPatchButton")
-        self.save_patch_button = QPushButton("Save As…")
+        self.load_patch_button.setToolTip("Load patch (Ctrl+O)")
+        self.save_patch_button = QPushButton("Save &As…")
         self.save_patch_button.setObjectName("savePatchButton")
+        self.save_patch_button.setToolTip("Save patch as (Ctrl+Shift+S)")
         patch_row = QHBoxLayout()
         patch_row.setContentsMargins(0, 0, 0, 0)
         patch_row.setSpacing(10)
@@ -163,13 +166,14 @@ class HarpyWindow(QMainWindow):
         self._error_label.setWordWrap(True)
         error_layout.addWidget(self._error_label)
         self.audio_error_banner.hide()
+        measurement_header.addWidget(self.audio_error_banner, 1)
+        measurement_header.addWidget(self.clear_button)
 
         central = QWidget()
         root = QVBoxLayout(central)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(14, 8, 14, 8)
+        root.setSpacing(7)
         root.addWidget(self.transport)
-        root.addWidget(self.audio_error_banner)
         root.addLayout(measurement_header)
         root.addLayout(plots, 1)
         root.addLayout(patch_row)
@@ -183,6 +187,12 @@ class HarpyWindow(QMainWindow):
         self.clear_button.clicked.connect(self._clear_measurement)
         self.load_patch_button.clicked.connect(self._load_patch)
         self.save_patch_button.clicked.connect(self._save_patch)
+        self._clear_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._load_shortcut = QShortcut(QKeySequence.StandardKey.Open, self)
+        self._save_shortcut = QShortcut(QKeySequence.StandardKey.SaveAs, self)
+        self._clear_shortcut.activated.connect(self._clear_measurement)
+        self._load_shortcut.activated.connect(self._load_patch)
+        self._save_shortcut.activated.connect(self._save_patch)
 
         app = QApplication.instance()
         if app is not None:
@@ -239,6 +249,17 @@ class HarpyWindow(QMainWindow):
         return super().event(event)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if (
+            isinstance(event, QKeyEvent)
+            and event.type() is QEvent.Type.KeyRelease
+            and event.key() == Qt.Key.Key_Space
+            and not event.isAutoRepeat()
+            and self._space_held
+        ):
+            self._space_held = False
+            self.play_button.setDown(False)
+            self._release_play()
+            return True
         if not isinstance(watched, QWidget) or watched.window() is not self:
             return super().eventFilter(watched, event)
         if not isinstance(event, QKeyEvent):
@@ -387,6 +408,7 @@ class HarpyWindow(QMainWindow):
             "Decay": _format_duration(envelope.decay_seconds),
             "Sustain": _format_db(envelope.sustain_db, "dB"),
             "Release": _format_duration(envelope.release_seconds),
+            "Curve": envelope.curve.replace("_", " ").capitalize(),
         }
         for name, text in values.items():
             self._patch_value_labels[name].setText(text)

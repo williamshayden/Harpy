@@ -37,6 +37,7 @@ class _ScientificView(QWidget):
         super().__init__(parent)
         view_box = _LockedViewBox(enableMenu=False)
         self.plot = pg.PlotWidget(viewBox=view_box)
+        self.plot.setMinimumHeight(391)
         self.plot_item = self.plot.getPlotItem()
         self.plot_item.setMenuEnabled(False)
         self.plot_item.setMouseEnabled(x=False, y=False)
@@ -113,6 +114,7 @@ class SpectrumView(_ScientificView):
         self.plot_item.getAxis("bottom").setTicks(
             [[(math.log10(frequency), label) for frequency, label in self._TICKS]]
         )
+        self.plot_item.showGrid(x=True, y=True, alpha=0.3)
         self.plot_item.setXRange(math.log10(20.0), math.log10(20_000.0), padding=0.0)
         self.plot_item.setYRange(-120.0, 0.0, padding=0.0)
         self.plot_item.vb.setLimits(
@@ -137,7 +139,7 @@ class SpectrumView(_ScientificView):
             or observation.peak_frequency_hz <= 0.0
         ):
             self.marker.setData(np.empty(0), np.empty(0))
-            self.readout.setText(self._EMPTY_MESSAGE)
+            self.readout.setText("No in-range spectral peak")
             return
         self.marker.setData([observation.peak_frequency_hz], [observation.peak_level_dbfs])
         self.readout.setText(

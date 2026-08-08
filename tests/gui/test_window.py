@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QPushButton, QWidget
 
 from harpy.analysis import AnalysisConfig, AudioObservation
 from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
@@ -126,6 +126,14 @@ def test_final_widget_contract_and_copy_contains_no_legacy_or_device_status(qtbo
         "healthy",
     ):
         assert forbidden.casefold() not in all_copy.casefold()
+
+
+def test_frequency_editor_has_explicit_hertz_accessibility_copy(qtbot) -> None:
+    window, _, _, _, _ = make_window(qtbot)
+
+    assert window.frequency_entry.accessibleName() == "Frequency in hertz"
+    assert "frequency" in window.frequency_entry.accessibleDescription().casefold()
+    assert "hertz" in window.frequency_entry.accessibleDescription().casefold()
 
 
 def test_knob_and_entry_share_one_frequency_without_feedback_loops(qtbot) -> None:
@@ -308,6 +316,68 @@ def test_window_space_filter_does_not_leak_to_another_top_level(qtbot) -> None:
     assert commands == []
 
 
+def test_space_release_from_owned_modal_top_level_always_releases_held_gate(qtbot) -> None:
+    window, controller, commands, _, _ = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    source = window.findChild(QPushButton, "clearButton")
+    qtbot.keyPress(source, Qt.Key.Key_Space)
+    assert controller.state.gate_held
+
+    dialog = QDialog(window)
+    dialog.setWindowModality(Qt.WindowModality.WindowModal)
+    release_target = QPushButton("Dialog target", dialog)
+    qtbot.addWidget(dialog)
+    window._dialog_chooser_active = True
+    try:
+        dialog.show()
+        qtbot.waitExposed(dialog)
+        QApplication.sendEvent(
+            release_target,
+            QKeyEvent(
+                QEvent.Type.KeyRelease,
+                Qt.Key.Key_Space,
+                Qt.KeyboardModifier.NoModifier,
+            ),
+        )
+    finally:
+        window._dialog_chooser_active = False
+        dialog.close()
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+    assert not controller.state.gate_held
+    assert not window._space_held
+
+
+def test_secondary_actions_have_non_space_keyboard_activation(qtbot) -> None:
+    window, controller, commands, _, dialogs = make_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    window.activateWindow()
+    window.frequency_knob.setFocus()
+    QApplication.processEvents()
+    assert window.isActiveWindow()
+    controller.press_play()
+
+    qtbot.keyClick(window.frequency_knob, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClick(window.frequency_knob, Qt.Key.Key_O, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClick(
+        window.frequency_knob,
+        Qt.Key.Key_S,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.CLEAR_CAPTURE,
+    ]
+    assert dialogs.open_count == 1
+    assert dialogs.save_count == 1
+
+
 def test_live_frequency_edit_retunes_without_retrigger(qtbot) -> None:
     window, _, commands, _, _ = make_window(qtbot)
     button = window.findChild(QPushButton, "playButton")
@@ -370,14 +440,15 @@ def test_measurement_states_and_captured_observation_survive_until_clear(qtbot) 
     assert spectrum.curve.xData is None
 
 
-def test_patch_facts_are_six_separate_labelled_values(qtbot) -> None:
+def test_patch_facts_include_curve_and_keep_output_as_seventh_value(qtbot) -> None:
     window, _, _, _, _ = make_window(qtbot)
     facts = window.findChild(QFrame, "patchFacts")
     labels = [label.text() for label in facts.findChildren(QLabel)]
 
-    for name in ("Oscillator", "Output", "Attack", "Decay", "Sustain", "Release"):
+    for name in ("Oscillator", "Attack", "Decay", "Sustain", "Release", "Curve", "Output"):
         assert labels.count(name) == 1
-    assert len(labels) == 12
+    assert labels.count("Linear amplitude") == 1
+    assert len(labels) == 14
 
 
 def test_modal_load_cancel_is_a_true_noop(qtbot) -> None:
@@ -584,11 +655,20 @@ def test_layout_contract_at_minimum_and_initial_sizes(qtbot, tmp_path) -> None:
         "loadPatchButton",
         "savePatchButton",
     )
-    for size in (QSize(1280, 720), QSize(1024, 640)):
+    geometry_states = (None, "Audio output failed: OpenError")
+    for size, error in (
+        (QSize(1280, 720), None),
+        *[(QSize(1024, 640), state) for state in geometry_states],
+    ):
+        if error is None:
+            window.handle_audio_availability(True)
+        else:
+            window.handle_audio_failure(error)
         window.resize(size)
         window.show()
         qtbot.waitExposed(window)
         qtbot.wait(1)
+        assert window.size() == size
         client = QRect(window.centralWidget().rect())
         assert window.transport.height() <= 144
         assert window.findChild(QFrame, "patchFacts").height() <= 96
@@ -596,6 +676,8 @@ def test_layout_contract_at_minimum_and_initial_sizes(qtbot, tmp_path) -> None:
         spectrum = window.findChild(SpectrumView, "spectrumPlot")
         assert waveform.height() >= 320
         assert spectrum.height() >= 320
+        assert waveform.plot_item.vb.sceneBoundingRect().height() >= 320
+        assert spectrum.plot_item.vb.sceneBoundingRect().height() >= 320
         assert spectrum.width() > waveform.width()
         for name in names:
             widget = window.findChild(QWidget, name)
@@ -603,6 +685,11 @@ def test_layout_contract_at_minimum_and_initial_sizes(qtbot, tmp_path) -> None:
             geometry = QRect(top_left, widget.size())
             assert not geometry.isEmpty(), name
             assert client.contains(geometry), (name, geometry, client)
+        if error is not None:
+            banner = window.findChild(QFrame, "audioErrorBanner")
+            banner_top_left = banner.mapTo(window.centralWidget(), banner.rect().topLeft())
+            assert banner.isVisibleTo(window)
+            assert client.contains(QRect(banner_top_left, banner.size()))
 
     window.resize(1280, 720)
     image = window.grab().toImage()
