@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 
 from harpy.synth.envelope import EnvelopeStage, LinearEnvelope
-from harpy.synth.specs import EnvelopeSpec
+from harpy.synth.models import EnvelopeConfig
 
 
-def half_sustain_spec() -> EnvelopeSpec:
-    return EnvelopeSpec(
+def half_sustain_config() -> EnvelopeConfig:
+    return EnvelopeConfig(
         attack_seconds=1.0,
         decay_seconds=1.0,
         sustain_db=20.0 * math.log10(0.5),
@@ -17,7 +17,7 @@ def half_sustain_spec() -> EnvelopeSpec:
 
 
 def test_attack_decay_and_sustain_emit_exact_endpoints() -> None:
-    envelope = LinearEnvelope(half_sustain_spec(), sample_rate_hz=4)
+    envelope = LinearEnvelope(half_sustain_config(), sample_rate_hz=4)
     envelope.note_on()
     np.testing.assert_allclose(envelope.render(4), [0.25, 0.5, 0.75, 1.0])
     assert envelope.stage is EnvelopeStage.DECAY
@@ -27,7 +27,7 @@ def test_attack_decay_and_sustain_emit_exact_endpoints() -> None:
 
 
 def test_early_note_off_releases_from_last_emitted_level() -> None:
-    envelope = LinearEnvelope(half_sustain_spec(), sample_rate_hz=4)
+    envelope = LinearEnvelope(half_sustain_config(), sample_rate_hz=4)
     envelope.note_on()
     np.testing.assert_allclose(envelope.render(1), [0.25])
     envelope.note_off()
@@ -38,7 +38,7 @@ def test_early_note_off_releases_from_last_emitted_level() -> None:
 
 
 def test_note_off_is_idempotent_during_release() -> None:
-    envelope = LinearEnvelope(half_sustain_spec(), sample_rate_hz=4)
+    envelope = LinearEnvelope(half_sustain_config(), sample_rate_hz=4)
     envelope.note_on()
     envelope.render(4)
     envelope.note_off()
@@ -49,7 +49,7 @@ def test_note_off_is_idempotent_during_release() -> None:
 
 
 def test_retrigger_restarts_attack_from_zero() -> None:
-    envelope = LinearEnvelope(half_sustain_spec(), sample_rate_hz=4)
+    envelope = LinearEnvelope(half_sustain_config(), sample_rate_hz=4)
     envelope.note_on()
     envelope.render(3)
     envelope.note_on()
@@ -58,6 +58,6 @@ def test_retrigger_restarts_attack_from_zero() -> None:
 
 @pytest.mark.parametrize("frame_count", [-1, 1.5, True])
 def test_render_rejects_invalid_frame_counts(frame_count: object) -> None:
-    envelope = LinearEnvelope(half_sustain_spec(), sample_rate_hz=4)
+    envelope = LinearEnvelope(half_sustain_config(), sample_rate_hz=4)
     with pytest.raises((TypeError, ValueError)):
         envelope.render(frame_count)  # type: ignore[arg-type]

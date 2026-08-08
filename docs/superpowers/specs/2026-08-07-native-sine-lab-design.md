@@ -2,7 +2,13 @@
 
 Date: 2026-08-07
 
-Status: approved for implementation
+Status: historical; superseded by the Milestone A foundation workbench
+
+> **Historical record only. Do not use this document for current implementation.**
+> The authoritative replacement is the
+> [Milestone A foundation workbench design](2026-08-07-harpy-milestone-a-foundation-workbench-design.md),
+> implemented through the
+> [Milestone A foundation workbench plan](../plans/2026-08-07-harpy-milestone-a-foundation-workbench.md).
 
 ## Purpose
 
