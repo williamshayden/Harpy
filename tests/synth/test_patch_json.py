@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from harpy.synth import patch_json
 from harpy.synth.models import EnvelopeConfig, SynthPatch
 from harpy.synth.patch_json import dumps_patch, load_patch, loads_patch, save_patch
 
@@ -115,7 +116,9 @@ def test_loads_patch_rejects_booleans_used_as_numbers(value: str) -> None:
 
 
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_loads_patch_names_output_gain_for_non_finite_json_constants(value: str) -> None:
+def test_loads_patch_names_output_gain_and_never_returns_a_patch_for_non_finite_constants(
+    value: str,
+) -> None:
     text = EXPECTED_DEFAULT.replace("-12.0", value)
 
     with pytest.raises(ValueError, match="output_gain_dbfs"):
@@ -128,6 +131,11 @@ def test_loads_patch_names_envelope_field_for_non_finite_json_constants(value: s
 
     with pytest.raises(ValueError, match="attack_seconds"):
         loads_patch(text)
+
+
+def test_strict_non_finite_callback_always_raises() -> None:
+    with pytest.raises(ValueError, match="NaN"):
+        patch_json._reject_non_finite_constant("NaN")
 
 
 @pytest.mark.parametrize(

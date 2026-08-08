@@ -32,9 +32,15 @@ def loads_patch(text: str) -> SynthPatch:
 
     decoder = json.JSONDecoder(
         object_pairs_hook=_object_without_duplicates,
-        parse_constant=_non_finite_constant,
+        parse_constant=_reject_non_finite_constant,
     )
-    value, end = decoder.raw_decode(text, start)
+    try:
+        value, end = decoder.raw_decode(text, start)
+    except _NonFiniteConstantError as error:
+        field_name = _diagnose_non_finite_field(text, start)
+        if field_name is not None:
+            raise ValueError(f"{field_name} must be a finite JSON number") from error
+        raise
     if any(character not in _JSON_WHITESPACE for character in text[end:]):
         raise ValueError("patch JSON contains trailing content")
 
@@ -109,8 +115,35 @@ def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_non_finite_constant(value: str) -> None:
+    raise _NonFiniteConstantError(value)
+
+
 def _non_finite_constant(value: str) -> _NonFiniteConstant:
     return _NonFiniteConstant(value)
+
+
+def _diagnose_non_finite_field(text: str, start: int) -> str | None:
+    diagnostic_decoder = json.JSONDecoder(
+        object_pairs_hook=_object_without_duplicates,
+        parse_constant=_non_finite_constant,
+    )
+    try:
+        document, _ = diagnostic_decoder.raw_decode(text, start)
+    except ValueError:
+        return None
+
+    if not isinstance(document, dict):
+        return None
+    if isinstance(document.get("output_gain_dbfs"), _NonFiniteConstant):
+        return "output_gain_dbfs"
+    envelope = document.get("envelope")
+    if not isinstance(envelope, dict):
+        return None
+    for field_name in ("attack_seconds", "decay_seconds", "sustain_db", "release_seconds"):
+        if isinstance(envelope.get(field_name), _NonFiniteConstant):
+            return f"envelope.{field_name}"
+    return None
 
 
 def _first_non_whitespace_index(text: str) -> int | None:
@@ -141,7 +174,9 @@ def _require_schema_version(value: Any) -> None:
 
 
 def _number(value: Any, field_name: str) -> None:
-    if isinstance(value, _NonFiniteConstant):
-        raise ValueError(f"{field_name} must be a finite JSON number")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field_name} must be a JSON number")
+
+
+class _NonFiniteConstantError(ValueError):
+    pass
