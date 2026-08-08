@@ -1,179 +1,411 @@
 from __future__ import annotations
 
-import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
-    QSlider,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from harpy.config import AppConfig
-from harpy.gui.controller import ControllerState, LabController
-from harpy.gui.qt_audio import QtAudioEngine
-from harpy.gui.visualizer import SampleRingBuffer, spectrum_dbfs, waveform_time_ms
-from harpy.note_names import format_tuning_readout
+from harpy.capture import CaptureState
+from harpy.gui.frequency_entry import FrequencyEntry
+from harpy.gui.frequency_knob import FrequencyKnob
+from harpy.gui.patch_dialogs import PatchDialogPort
+from harpy.gui.signal_views import SpectrumView, WaveformView
+from harpy.gui.workbench_controller import WorkbenchController, WorkbenchState
+from harpy.gui.workbench_spec import WorkbenchSpec
+from harpy.synth.models import SynthPatch
+from harpy.synth.patch_json import load_patch, save_patch
+from harpy.tuning import Tuning
 
 
 class HarpyWindow(QMainWindow):
+    """Native workbench view backed by one semantic controller."""
+
+    shutdown_requested = Signal()
+
     def __init__(
         self,
-        config: AppConfig,
-        controller: LabController,
-        audio_engine: QtAudioEngine,
-        sample_history: SampleRingBuffer,
+        controller: WorkbenchController,
+        tuning: Tuning,
+        spec: WorkbenchSpec,
+        patch_dialogs: PatchDialogPort,
     ) -> None:
         super().__init__()
-        self._config = config
         self._controller = controller
-        self._audio_engine = audio_engine
-        self._sample_history = sample_history
-        self.setWindowTitle("Harpy · Sine Lab")
+        self._tuning = tuning
+        self._patch_dialogs = patch_dialogs
+        self._shutdown_prepared = False
+        self._local_error: str | None = None
+        self._space_held = False
+
+        self.setWindowTitle("Harpy")
+        self.setMinimumSize(1_024, 640)
         self.resize(1_280, 720)
 
-        self.status_label = QLabel("Audio output not initialized")
-        self.pitch_readout = QLabel()
-        self.tuning_readout = QLabel(format_tuning_readout(config.tuning))
-        self.patch_label = QLabel(
-            "Sine · Peak \N{MINUS SIGN}12 dBFS · A 1 ms · D 600 ms · "
-            "S \N{MINUS SIGN}6 dB · R 600 ms · Linear amplitude"
+        self.frequency_knob = FrequencyKnob(
+            spec.minimum_frequency_hz,
+            spec.center_frequency_hz,
+            spec.maximum_frequency_hz,
         )
-        self.pitch_slider = QSlider(Qt.Orientation.Horizontal)
-        self.pitch_slider.setRange(
-            config.keyboard.minimum_note.number,
-            config.keyboard.maximum_note.number,
+        self.frequency_knob.setObjectName("frequencyKnob")
+        self.frequency_knob.setFixedSize(92, 92)
+
+        self.frequency_entry = FrequencyEntry(
+            spec.minimum_frequency_hz,
+            spec.maximum_frequency_hz,
         )
-        self.pitch_slider.setSingleStep(1)
-        self.pitch_slider.setPageStep(1)
-        self.play_button = QPushButton("Hold to Play")
+        self.frequency_entry.setObjectName("frequencyEntry")
+        self.frequency_entry.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.frequency_entry.setMinimumWidth(164)
+        self.frequency_entry.setMaximumWidth(220)
+        hz_suffix = QLabel("Hz")
+        hz_suffix.setObjectName("frequencySuffix")
+
+        self.derived_pitch_label = QLabel()
+        self.derived_pitch_label.setObjectName("derivedPitchLabel")
+        self.derived_pitch_label.setMinimumWidth(116)
+        self.play_button = QPushButton("Play")
         self.play_button.setObjectName("playButton")
-        self.play_button.setMinimumHeight(76)
-        self.waveform_plot = pg.PlotWidget(title="Recent waveform")
-        self.spectrum_plot = pg.PlotWidget(title="Spectrum")
-        self._waveform_curve = self.waveform_plot.plot(pen=pg.mkPen("#68d6ff", width=2))
-        self._spectrum_curve = self.spectrum_plot.plot(pen=pg.mkPen("#b388ff", width=2))
+        self.play_button.setAccessibleDescription("Press and hold to play")
+        self.play_button.setMinimumSize(112, 44)
+        self.play_button.setMaximumHeight(48)
 
-        header = QHBoxLayout()
-        title = QLabel("Harpy · Sine Lab")
-        title.setObjectName("title")
-        header.addWidget(title)
-        header.addStretch(1)
-        header.addWidget(self.status_label)
+        self.transport = QFrame()
+        self.transport.setObjectName("transportStrip")
+        self.transport.setMaximumHeight(132)
+        transport_layout = QHBoxLayout(self.transport)
+        transport_layout.setContentsMargins(14, 10, 14, 10)
+        transport_layout.setSpacing(14)
+        transport_layout.addWidget(self.frequency_knob)
+        editor_layout = QHBoxLayout()
+        editor_layout.setSpacing(7)
+        editor_layout.addWidget(self.frequency_entry)
+        editor_layout.addWidget(hz_suffix)
+        transport_layout.addLayout(editor_layout)
+        transport_layout.addWidget(self.derived_pitch_label)
+        transport_layout.addStretch(1)
+        transport_layout.addWidget(self.play_button)
 
-        pitch_panel = QFrame()
-        pitch_layout = QVBoxLayout(pitch_panel)
-        pitch_layout.addWidget(self.pitch_readout)
-        pitch_layout.addWidget(self.pitch_slider)
-        pitch_layout.addWidget(self.tuning_readout)
-        pitch_layout.addWidget(self.patch_label)
-        pitch_layout.addWidget(self.play_button)
+        self.measurement_state_label = QLabel()
+        self.measurement_state_label.setObjectName("measurementStateLabel")
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setObjectName("clearButton")
+        self.clear_button.setMaximumWidth(88)
+        measurement_header = QHBoxLayout()
+        measurement_header.setContentsMargins(2, 0, 2, 0)
+        measurement_header.addWidget(self.measurement_state_label)
+        measurement_header.addStretch(1)
+        measurement_header.addWidget(self.clear_button)
 
+        self.waveform_view = WaveformView()
+        self.waveform_view.setObjectName("waveformPlot")
+        self.waveform_view.setMinimumHeight(320)
+        self.waveform_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.waveform_view.plot_item.setTitle("Waveform")
+        self.spectrum_view = SpectrumView()
+        self.spectrum_view.setObjectName("spectrumPlot")
+        self.spectrum_view.setMinimumHeight(320)
+        self.spectrum_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.spectrum_view.plot_item.setTitle("Spectrum")
         plots = QHBoxLayout()
-        plots.addWidget(self.waveform_plot, 1)
-        plots.addWidget(self.spectrum_plot, 1)
+        plots.setContentsMargins(0, 0, 0, 0)
+        plots.setSpacing(12)
+        plots.addWidget(self.waveform_view, 4)
+        plots.addWidget(self.spectrum_view, 6)
 
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        layout.addLayout(header)
-        layout.addWidget(pitch_panel)
-        layout.addLayout(plots, 1)
-        self.setCentralWidget(root)
+        self.patch_facts = QFrame()
+        self.patch_facts.setObjectName("patchFacts")
+        self.patch_facts.setMaximumHeight(90)
+        facts_layout = QGridLayout(self.patch_facts)
+        facts_layout.setContentsMargins(12, 8, 12, 8)
+        facts_layout.setHorizontalSpacing(18)
+        facts_layout.setVerticalSpacing(2)
+        self._patch_value_labels: dict[str, QLabel] = {}
+        for column, name in enumerate(
+            ("Oscillator", "Output", "Attack", "Decay", "Sustain", "Release")
+        ):
+            heading = QLabel(name)
+            heading.setObjectName("factName")
+            value = QLabel()
+            value.setObjectName("factValue")
+            facts_layout.addWidget(heading, 0, column)
+            facts_layout.addWidget(value, 1, column)
+            self._patch_value_labels[name] = value
 
-        self.pitch_slider.valueChanged.connect(self._on_note_changed)
-        self.play_button.pressed.connect(self._on_play_pressed)
-        self.play_button.released.connect(self._on_play_released)
-        audio_engine.status_changed.connect(self._on_audio_status)
-        audio_engine.force_stop_requested.connect(self._force_stop)
+        self.load_patch_button = QPushButton("Load")
+        self.load_patch_button.setObjectName("loadPatchButton")
+        self.save_patch_button = QPushButton("Save As…")
+        self.save_patch_button.setObjectName("savePatchButton")
+        patch_row = QHBoxLayout()
+        patch_row.setContentsMargins(0, 0, 0, 0)
+        patch_row.setSpacing(10)
+        patch_row.addWidget(self.patch_facts, 1)
+        patch_row.addWidget(self.load_patch_button)
+        patch_row.addWidget(self.save_patch_button)
 
-        self._plot_timer = QTimer(self)
-        self._plot_timer.setInterval(33)
-        self._plot_timer.timeout.connect(self._update_plots)
-        self._plot_timer.start()
-        self._audio_playable = False
-        self._apply_state(controller.state)
+        self.audio_error_banner = QFrame()
+        self.audio_error_banner.setObjectName("audioErrorBanner")
+        error_layout = QHBoxLayout(self.audio_error_banner)
+        error_layout.setContentsMargins(12, 6, 12, 6)
+        self._error_label = QLabel()
+        self._error_label.setWordWrap(True)
+        error_layout.addWidget(self._error_label)
+        self.audio_error_banner.hide()
+
+        central = QWidget()
+        root = QVBoxLayout(central)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(8)
+        root.addWidget(self.transport)
+        root.addWidget(self.audio_error_banner)
+        root.addLayout(measurement_header)
+        root.addLayout(plots, 1)
+        root.addLayout(patch_row)
+        self.setCentralWidget(central)
+
+        self.frequency_knob.frequency_changed.connect(self._set_frequency)
+        self.frequency_entry.frequency_committed.connect(self._set_frequency)
+        self.frequency_entry.validation_failed.connect(self._show_local_error)
+        self.play_button.pressed.connect(self._press_play)
+        self.play_button.released.connect(self._release_play)
+        self.clear_button.clicked.connect(self._clear_measurement)
+        self.load_patch_button.clicked.connect(self._load_patch)
+        self.save_patch_button.clicked.connect(self._save_patch)
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(34)
+        self._refresh_timer.timeout.connect(self.refresh_capture)
+        self._refresh_timer.start()
+
         self._apply_style()
+        self._apply_state(controller.state)
+
+    @Slot(bool)
+    def handle_audio_availability(self, available: bool) -> None:
+        state = self._controller.set_audio_availability(available)
+        if available:
+            self._local_error = None
+            self._apply_state(state)
+
+    @Slot(str)
+    def handle_audio_failure(self, message: str) -> None:
+        self._local_error = None
+        self._apply_state(self._controller.set_audio_availability(False, message))
+
+    @Slot()
+    def handle_force_stop(self) -> None:
+        self.play_button.setDown(False)
+        self._space_held = False
+        self._apply_state(self._controller.force_stop())
+
+    @Slot(int)
+    def handle_voice_idle(self, generation: int) -> None:
+        self._apply_state(self._controller.mark_voice_idle(generation))
+
+    @Slot()
+    def refresh_capture(self) -> None:
+        self._apply_state(self._controller.refresh_capture())
+
+    @Slot()
+    def prepare_shutdown(self) -> None:
+        if self._shutdown_prepared:
+            return
+        self._shutdown_prepared = True
+        self._refresh_timer.stop()
+        self.handle_force_stop()
+        self.shutdown_requested.emit()
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() is QEvent.Type.WindowDeactivate:
+            self.handle_force_stop()
+        return super().event(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if (
+            event.key() == Qt.Key.Key_Space
+            and not event.isAutoRepeat()
+            and QApplication.focusWidget() is not self.frequency_entry
+        ):
+            if not self._space_held and self.play_button.isEnabled():
+                self._space_held = True
+                self.play_button.setDown(True)
+                self._press_play()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if (
+            event.key() == Qt.Key.Key_Space
+            and not event.isAutoRepeat()
+            and QApplication.focusWidget() is not self.frequency_entry
+        ):
+            if self._space_held:
+                self._space_held = False
+                self.play_button.setDown(False)
+                self._release_play()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.prepare_shutdown()
+        event.accept()
+
+    @Slot(float)
+    def _set_frequency(self, frequency_hz: float) -> None:
+        self._apply_state(self._controller.set_frequency(frequency_hz))
+
+    @Slot()
+    def _press_play(self) -> None:
+        self._apply_state(self._controller.press_play())
+
+    @Slot()
+    def _release_play(self) -> None:
+        self._apply_state(self._controller.release_play())
+
+    @Slot()
+    def _clear_measurement(self) -> None:
+        self._apply_state(self._controller.clear_measurement())
+
+    @Slot()
+    def _load_patch(self) -> None:
+        path = self._patch_dialogs.choose_open_path(self)
+        if path is None:
+            return
+        try:
+            patch = load_patch(path)
+        except (OSError, ValueError) as error:
+            self._show_local_error(str(error))
+            return
+        self._local_error = None
+        self._apply_state(self._controller.replace_patch(patch))
+
+    @Slot()
+    def _save_patch(self) -> None:
+        path = self._patch_dialogs.choose_save_path(self)
+        if path is None:
+            return
+        try:
+            save_patch(path, self._controller.state.patch)
+        except (OSError, ValueError) as error:
+            self._show_local_error(str(error))
+            return
+        self._local_error = None
+        self._apply_state(self._controller.state)
+
+    @Slot(str)
+    def _show_local_error(self, message: str) -> None:
+        self._local_error = message
+        self._apply_state(self._controller.state)
+
+    def _apply_state(self, state: WorkbenchState) -> None:
+        frequency = state.selected_frequency_hz
+        self.frequency_knob.set_frequency_hz(frequency)
+        self.frequency_entry.set_frequency_hz(frequency)
+        reading = self._tuning.describe_frequency(frequency)
+        cents = 0.0 if abs(reading.cents) < 0.05 else reading.cents
+        self.derived_pitch_label.setText(f"{reading.name} {cents:+.1f}¢")
+        self.play_button.setEnabled(state.audio_available)
+        self.play_button.setDown(state.gate_held or self._space_held)
+
+        capture_labels = {
+            CaptureState.EMPTY: "",
+            CaptureState.MEASURING: "Measuring…",
+            CaptureState.LIVE: "Live",
+            CaptureState.CAPTURED: "Captured",
+        }
+        self.measurement_state_label.setText(capture_labels[state.capture.state])
+        self.waveform_view.set_observation(state.capture.observation)
+        self.spectrum_view.set_observation(state.capture.observation)
+        self._set_patch_facts(state.patch)
+
+        error = state.audio_error or self._local_error
+        self._error_label.setText(error or "")
+        self.audio_error_banner.setVisible(error is not None)
+
+    def _set_patch_facts(self, patch: SynthPatch) -> None:
+        envelope = patch.envelope
+        values = {
+            "Oscillator": patch.oscillator.type.value.title(),
+            "Output": _format_db(patch.output_gain_dbfs, "dBFS"),
+            "Attack": _format_duration(envelope.attack_seconds),
+            "Decay": _format_duration(envelope.decay_seconds),
+            "Sustain": _format_db(envelope.sustain_db, "dB"),
+            "Release": _format_duration(envelope.release_seconds),
+        }
+        for name, text in values.items():
+            self._patch_value_labels[name].setText(text)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background: #111318; color: #eef2f7; }
-            QFrame { background: #181c23; border: 1px solid #2a313d; border-radius: 12px; }
-            QLabel#title { font-size: 24px; font-weight: 700; }
-            QLabel { font-size: 15px; }
-            QPushButton#playButton {
-                background: #68d6ff; color: #071017; border: 0; border-radius: 12px;
-                font-size: 20px; font-weight: 700; padding: 16px;
+            QMainWindow, QWidget {
+                background: #11151b;
+                color: #e8edf4;
+                font-size: 12px;
             }
-            QPushButton#playButton:pressed { background: #b388ff; }
-            QPushButton#playButton:disabled { background: #343b46; color: #7f8998; }
-            QSlider::groove:horizontal { height: 8px; background: #2a313d; border-radius: 4px; }
-            QSlider::handle:horizontal {
-                width: 22px; margin: -8px 0; background: #68d6ff; border-radius: 11px;
+            QLabel { background: transparent; border: none; }
+            QFrame#transportStrip, QFrame#patchFacts {
+                background: #181e27;
+                border: 1px solid #2a3441;
+                border-radius: 8px;
+            }
+            QLineEdit#frequencyEntry {
+                background: #0d1117;
+                border: 1px solid #465364;
+                border-radius: 5px;
+                color: #f4f7fb;
+                font-family: monospace;
+                font-size: 22px;
+                padding: 6px 8px;
+            }
+            QLineEdit#frequencyEntry:focus { border: 2px solid #65d8ff; }
+            QLineEdit#frequencyEntry[validationState="error"] { border: 2px solid #ff6b72; }
+            QLabel#derivedPitchLabel {
+                color: #65d8ff;
+                font-family: monospace;
+                font-size: 20px;
+                font-weight: 600;
+            }
+            QLabel#measurementStateLabel { color: #bd8cff; font-weight: 600; }
+            QLabel#factName { color: #95a2b2; font-size: 12px; }
+            QLabel#factValue { color: #f1f4f8; font-family: monospace; font-size: 13px; }
+            QPushButton {
+                background: #252e3a;
+                border: 1px solid #3a4655;
+                border-radius: 6px;
+                color: #eef3f8;
+                min-height: 32px;
+                padding: 4px 12px;
+            }
+            QPushButton:hover, QPushButton:focus { border-color: #65d8ff; }
+            QPushButton#playButton { background: #65d8ff; color: #081218; font-weight: 700; }
+            QPushButton#playButton:pressed { background: #bd8cff; }
+            QPushButton#playButton:disabled { background: #313945; color: #778290; }
+            QFrame#audioErrorBanner {
+                background: #321b21;
+                border: 1px solid #ff6b72;
+                border-radius: 6px;
             }
             """
         )
 
-    def _apply_state(self, state: ControllerState) -> None:
-        self.pitch_slider.blockSignals(True)
-        self.pitch_slider.setValue(state.note.number)
-        self.pitch_slider.blockSignals(False)
-        self.pitch_readout.setText(state.readout)
-        self.pitch_slider.setEnabled(state.selector_enabled)
-        self.play_button.setEnabled(self._audio_playable)
 
-    def _on_note_changed(self, number: int) -> None:
-        self._apply_state(self._controller.set_note(number))
+def _format_duration(seconds: float) -> str:
+    milliseconds = seconds * 1_000.0
+    return f"{milliseconds:g} ms" if milliseconds < 1_000.0 else f"{seconds:g} s"
 
-    def _on_play_pressed(self) -> None:
-        self._apply_state(self._controller.press_play())
 
-    def _on_play_released(self) -> None:
-        self._apply_state(self._controller.release_play())
-
-    def _force_stop(self) -> None:
-        self.play_button.setDown(False)
-        self._sample_history.clear()
-        self._apply_state(self._controller.force_stop())
-
-    def _on_audio_status(self, message: str, playable: bool) -> None:
-        self._audio_playable = playable
-        self.status_label.setText(message)
-        self._apply_state(self._controller.state)
-
-    def _update_plots(self) -> None:
-        try:
-            waveform = self._sample_history.snapshot(2_048)
-            time_ms = waveform_time_ms(waveform.size, self._config.render.sample_rate_hz)
-            self._waveform_curve.setData(time_ms, waveform)
-            frequencies, levels = spectrum_dbfs(
-                self._sample_history.snapshot(4_096),
-                self._config.render.sample_rate_hz,
-            )
-            self._spectrum_curve.setData(frequencies, levels)
-            self.waveform_plot.setLabel("bottom", "Time", units="ms")
-            self.spectrum_plot.setLabel("bottom", "Frequency", units="Hz")
-            self.spectrum_plot.setLabel("left", "Level", units="dBFS")
-            self.spectrum_plot.setYRange(-120.0, 0.0)
-            self.spectrum_plot.setXRange(0.0, 2_000.0)
-        except (FloatingPointError, RuntimeError, ValueError) as error:
-            self._plot_timer.stop()
-            message = f"Visualization disabled: {error}"
-            self.waveform_plot.setTitle(message)
-            self.spectrum_plot.setTitle(message)
-
-    def event(self, event: QEvent) -> bool:
-        if event.type() is QEvent.Type.WindowDeactivate:
-            self._force_stop()
-        return super().event(event)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        self._plot_timer.stop()
-        self._force_stop()
-        self._audio_engine.shutdown()
-        event.accept()
+def _format_db(value: float, unit: str) -> str:
+    text = f"{value:g}".replace("-", "\N{MINUS SIGN}")
+    return f"{text} {unit}"

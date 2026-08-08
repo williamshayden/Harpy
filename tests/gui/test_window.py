@@ -1,112 +1,403 @@
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from __future__ import annotations
 
-from harpy.config import DEFAULT_CONFIG
-from harpy.gui.controller import AudioCommand, AudioCommandKind, LabController
-from harpy.gui.visualizer import SampleRingBuffer
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pytest
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QWidget
+
+from harpy.analysis import AnalysisConfig, AudioObservation
+from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
+from harpy.gui.frequency_entry import FrequencyEntry
+from harpy.gui.frequency_knob import FrequencyKnob
+from harpy.gui.signal_views import SpectrumView, WaveformView
 from harpy.gui.window import HarpyWindow
+from harpy.gui.workbench_controller import WorkbenchController
+from harpy.gui.workbench_spec import WorkbenchSpec
+from harpy.playback import AudioCommand, AudioCommandKind
+from harpy.synth.models import EnvelopeConfig, RenderConfig, SynthPatch
+from harpy.synth.patch_json import dumps_patch, load_patch
+from harpy.tuning import Tuning
+
+SAMPLE_RATE = 48_000
+ANALYSIS = AnalysisConfig(waveform_window_seconds=4 / SAMPLE_RATE, fft_frames=4)
 
 
-class FakeAudioEngine(QObject):
-    status_changed = Signal(str, bool)
-    force_stop_requested = Signal()
+@dataclass
+class Dialogs:
+    open_path: Path | None = None
+    save_path: Path | None = None
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.commands: list[AudioCommand] = []
-        self.lifecycle_events: list[str] = []
-        self.shutdown_count = 0
+    def choose_open_path(self, _parent) -> Path | None:
+        return self.open_path
 
-    def submit(self, command: AudioCommand) -> None:
-        self.commands.append(command)
-        self.lifecycle_events.append(f"submit:{command.kind.name}")
-
-    def shutdown(self) -> None:
-        self.shutdown_count += 1
-        self.lifecycle_events.append("shutdown")
+    def choose_save_path(self, _parent) -> Path | None:
+        return self.save_path
 
 
-def make_window(qtbot) -> tuple[HarpyWindow, FakeAudioEngine]:
-    audio = FakeAudioEngine()
-    controller = LabController(DEFAULT_CONFIG, audio.submit)
-    history = SampleRingBuffer(capacity_frames=48_000)
-    window = HarpyWindow(DEFAULT_CONFIG, controller, audio, history)
+def observed_signal() -> AudioObservation:
+    return AudioObservation(
+        has_signal=True,
+        waveform_samples=np.array([0.0, 0.2, -0.1, 0.0]),
+        waveform_time_ms=np.array([0.0, 1.0, 2.0, 3.0]),
+        spectrum_frequency_hz=np.array([20.0, 261.6, 20_000.0]),
+        spectrum_level_dbfs=np.array([-80.0, -12.0, -100.0]),
+        peak_amplitude_fs=0.2,
+        peak_frequency_hz=261.6,
+        peak_level_dbfs=-12.0,
+    )
+
+
+def observed_silence() -> AudioObservation:
+    return AudioObservation(
+        has_signal=False,
+        waveform_samples=np.empty(0),
+        waveform_time_ms=np.empty(0),
+        spectrum_frequency_hz=np.empty(0),
+        spectrum_level_dbfs=np.empty(0),
+        peak_amplitude_fs=None,
+        peak_frequency_hz=None,
+        peak_level_dbfs=None,
+    )
+
+
+def make_window(qtbot, *, analyzer=None, send_command=None):
+    tuning = Tuning()
+    spec = WorkbenchSpec.from_tuning(tuning)
+    render = RenderConfig(sample_rate_hz=SAMPLE_RATE)
+    history = SampleHistory(capacity_frames=8)
+    kwargs = {} if analyzer is None else {"analyzer": analyzer}
+    capture = CaptureCoordinator(history, SAMPLE_RATE, ANALYSIS, **kwargs)
+    commands: list[AudioCommand] = []
+    sender = commands.append if send_command is None else send_command
+    controller = WorkbenchController(spec, render, SynthPatch(), capture, sender)
+    dialogs = Dialogs()
+    window = HarpyWindow(controller, tuning, spec, dialogs)
     qtbot.addWidget(window)
-    audio.status_changed.emit("Fake speakers · 48 kHz", True)
-    return window, audio
+    return window, controller, commands, history, dialogs
 
 
-def test_window_starts_at_middle_c_with_fixed_patch_copy(qtbot) -> None:
-    window, _ = make_window(qtbot)
-    assert window.pitch_slider.value() == 60
-    assert window.pitch_readout.text() == "C3 · MIDI 60 · 261.626 Hz"
-    assert window.tuning_readout.text() == "Concert A reference (MIDI 69) · 440.0 Hz"
-    assert "Sine" in window.patch_label.text()
-    assert "\N{MINUS SIGN}12 dBFS" in window.patch_label.text()
-    assert "1 ms" in window.patch_label.text()
-    assert "600 ms" in window.patch_label.text()
-    assert "\N{MINUS SIGN}6 dB" in window.patch_label.text()
+def test_final_widget_contract_and_copy_contains_no_legacy_or_device_status(qtbot) -> None:
+    window, _, _, _, _ = make_window(qtbot)
+
+    assert window.windowTitle() == "Harpy"
+    expected = {
+        "frequencyKnob": FrequencyKnob,
+        "frequencyEntry": FrequencyEntry,
+        "derivedPitchLabel": QLabel,
+        "playButton": QPushButton,
+        "measurementStateLabel": QLabel,
+        "clearButton": QPushButton,
+        "waveformPlot": WaveformView,
+        "spectrumPlot": SpectrumView,
+        "patchFacts": QFrame,
+        "loadPatchButton": QPushButton,
+        "savePatchButton": QPushButton,
+        "audioErrorBanner": QFrame,
+    }
+    for object_name, widget_type in expected.items():
+        widget = window.findChild(widget_type, object_name)
+        assert widget is not None, object_name
+    all_copy = " ".join(label.text() for label in window.findChildren(QLabel))
+    for forbidden in (
+        "Harpy Sine Lab",
+        "Native Sine Lab",
+        "Synth Engine",
+        "MIDI ",
+        "backend",
+        "device",
+        "channel",
+        "sample format",
+        "Output ready",
+        "healthy",
+    ):
+        assert forbidden.casefold() not in all_copy.casefold()
 
 
-def test_hold_button_locks_pitch_and_sends_note_on_off(qtbot) -> None:
-    window, audio = make_window(qtbot)
-    qtbot.mousePress(window.play_button, Qt.MouseButton.LeftButton)
-    assert not window.pitch_slider.isEnabled()
-    assert [command.kind for command in audio.commands] == [AudioCommandKind.NOTE_ON]
-    qtbot.mouseRelease(window.play_button, Qt.MouseButton.LeftButton)
-    assert window.pitch_slider.isEnabled()
-    assert [command.kind for command in audio.commands] == [
+def test_knob_and_entry_share_one_frequency_without_feedback_loops(qtbot) -> None:
+    window, controller, commands, _, _ = make_window(qtbot)
+    knob = window.findChild(FrequencyKnob, "frequencyKnob")
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+    label = window.findChild(QLabel, "derivedPitchLabel")
+
+    knob.set_frequency_hz(330.0, emit=True)
+    assert controller.state.selected_frequency_hz == 330.0
+    assert entry.text() == "330.000"
+    assert commands == []
+
+    entry.setText("261.625565")
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+    assert controller.state.selected_frequency_hz == pytest.approx(261.625565)
+    assert knob.frequency_hz == pytest.approx(261.625565)
+    assert label.text() == "C3 +0.0¢"
+    assert commands == []
+
+
+def test_mouse_and_space_hold_emit_one_note_pair_and_editor_owns_space(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    button = window.findChild(QPushButton, "playButton")
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+    qtbot.mouseRelease(button, Qt.MouseButton.LeftButton)
+    qtbot.keyPress(window, Qt.Key.Key_Space)
+    qtbot.keyRelease(window, Qt.Key.Key_Space)
+    entry.setFocus()
+    qtbot.keyPress(entry, Qt.Key.Key_Space)
+    qtbot.keyRelease(entry, Qt.Key.Key_Space)
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
         AudioCommandKind.NOTE_ON,
         AudioCommandKind.NOTE_OFF,
     ]
 
 
-def test_slider_updates_readout_when_idle(qtbot) -> None:
-    window, _ = make_window(qtbot)
-    window.pitch_slider.setValue(61)
-    assert window.pitch_readout.text().startswith("C♯3 · MIDI 61")
+def test_live_frequency_edit_retunes_without_retrigger(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    button = window.findChild(QPushButton, "playButton")
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+    entry.setText("330")
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.RETUNE,
+    ]
 
 
-def test_deactivation_forces_stop_and_raises_button(qtbot) -> None:
-    window, audio = make_window(qtbot)
-    qtbot.mousePress(window.play_button, Qt.MouseButton.LeftButton)
-    event = QEvent(QEvent.Type.WindowDeactivate)
-    window.event(event)
-    assert [command.kind for command in audio.commands] == [
+def test_natural_idle_stops_retune_and_clear_enters_empty(qtbot) -> None:
+    window, controller, commands, _, _ = make_window(qtbot)
+    button = window.findChild(QPushButton, "playButton")
+    entry = window.findChild(FrequencyEntry, "frequencyEntry")
+    generation = controller.state.capture.generation + 1
+
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+    qtbot.mouseRelease(button, Qt.MouseButton.LeftButton)
+    window.handle_voice_idle(generation)
+    entry.setText("330")
+    qtbot.keyClick(entry, Qt.Key.Key_Return)
+    qtbot.mouseClick(window.findChild(QPushButton, "clearButton"), Qt.MouseButton.LeftButton)
+
+    assert AudioCommandKind.RETUNE not in [command.kind for command in commands]
+    assert controller.state.capture.state is CaptureState.EMPTY
+
+
+def test_measurement_states_and_captured_observation_survive_until_clear(qtbot) -> None:
+    observation = observed_signal()
+    analyses = iter((observation, observed_silence()))
+    window, controller, _, history, _ = make_window(qtbot, analyzer=lambda *_args: next(analyses))
+    button = window.findChild(QPushButton, "playButton")
+    label = window.findChild(QLabel, "measurementStateLabel")
+    waveform = window.findChild(WaveformView, "waveformPlot")
+    spectrum = window.findChild(SpectrumView, "spectrumPlot")
+
+    assert label.text() == ""
+    assert waveform.curve.xData is None
+    assert spectrum.curve.xData is None
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+    assert label.text() == "Measuring…"
+    generation = controller.state.capture.generation
+    history.append(np.ones(4, dtype=np.float32), generation)
+    window.refresh_capture()
+    assert label.text() == "Live"
+    qtbot.mouseRelease(button, Qt.MouseButton.LeftButton)
+    window.handle_voice_idle(generation)
+    window.refresh_capture()
+    assert label.text() == "Captured"
+    assert waveform.curve.xData is not None
+    assert spectrum.curve.xData is not None
+    qtbot.mouseClick(window.findChild(QPushButton, "clearButton"), Qt.MouseButton.LeftButton)
+    assert label.text() == ""
+    assert waveform.curve.xData is None
+    assert spectrum.curve.xData is None
+
+
+def test_patch_facts_are_six_separate_labelled_values(qtbot) -> None:
+    window, _, _, _, _ = make_window(qtbot)
+    facts = window.findChild(QFrame, "patchFacts")
+    labels = [label.text() for label in facts.findChildren(QLabel)]
+
+    for name in ("Oscillator", "Output", "Attack", "Decay", "Sustain", "Release"):
+        assert labels.count(name) == 1
+    assert len(labels) == 12
+
+
+def test_load_cancel_is_a_noop_and_invalid_load_is_atomic(qtbot, tmp_path) -> None:
+    window, controller, commands, history, dialogs = make_window(qtbot)
+    before = controller.state
+    window.findChild(QPushButton, "loadPatchButton").click()
+    assert controller.state == before
+    assert commands == []
+
+    generation = controller.press_play().capture.generation
+    history.append(np.ones(4, dtype=np.float32), generation)
+    window.refresh_capture()
+    before = controller.state
+    bad = tmp_path / "bad.json"
+    document = json.loads(dumps_patch(SynthPatch()))
+    document["envelope"]["attack_seconds"] = "fast"
+    bad.write_text(json.dumps(document), encoding="utf-8")
+    dialogs.open_path = bad
+    window.findChild(QPushButton, "loadPatchButton").click()
+
+    assert controller.state == before
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+    banner = window.findChild(QFrame, "audioErrorBanner")
+    assert "envelope.attack_seconds" in banner.findChild(QLabel).text()
+
+
+def test_valid_load_preserves_frequency_force_stops_and_replaces_patch(qtbot, tmp_path) -> None:
+    window, controller, commands, _, dialogs = make_window(qtbot)
+    replacement = SynthPatch(
+        envelope=EnvelopeConfig(attack_seconds=0.025, sustain_db=-9.0),
+        output_gain_dbfs=-18.0,
+    )
+    path = tmp_path / "replacement.json"
+    path.write_text(dumps_patch(replacement), encoding="utf-8")
+    dialogs.open_path = path
+    controller.set_frequency(330.0)
+    controller.press_play()
+
+    window.findChild(QPushButton, "loadPatchButton").click()
+
+    assert controller.state.selected_frequency_hz == 330.0
+    assert controller.state.patch == replacement
+    assert controller.state.capture.state is CaptureState.EMPTY
+    assert not controller.state.voice_may_be_active
+    assert commands[-1].kind is AudioCommandKind.REPLACE_PATCH
+    facts = " ".join(
+        label.text() for label in window.findChild(QFrame, "patchFacts").findChildren(QLabel)
+    )
+    assert "25 ms" in facts
+    assert "\N{MINUS SIGN}18 dBFS" in facts
+
+
+def test_valid_load_while_unavailable_updates_patch_and_command_cache(qtbot, tmp_path) -> None:
+    cached: list[AudioCommand] = []
+    window, controller, _, _, dialogs = make_window(qtbot, send_command=cached.append)
+    replacement = SynthPatch(output_gain_dbfs=-24.0)
+    path = tmp_path / "replacement.json"
+    path.write_text(dumps_patch(replacement), encoding="utf-8")
+    dialogs.open_path = path
+    window.handle_audio_availability(False)
+    window.handle_audio_failure("No default audio output")
+
+    window.findChild(QPushButton, "loadPatchButton").click()
+
+    assert controller.state.patch == replacement
+    assert not controller.state.audio_available
+    assert cached[-1].kind is AudioCommandKind.REPLACE_PATCH
+    assert cached[-1].patch == replacement
+
+
+def test_save_as_writes_only_canonical_patch_and_failure_does_not_mutate(qtbot, tmp_path) -> None:
+    window, controller, commands, _, dialogs = make_window(qtbot)
+    target = tmp_path / "saved.json"
+    dialogs.save_path = target
+    window.findChild(QPushButton, "savePatchButton").click()
+
+    assert load_patch(target) == controller.state.patch
+    assert target.read_text(encoding="utf-8") == dumps_patch(controller.state.patch)
+    before = controller.state
+    dialogs.save_path = tmp_path / "missing" / "saved.json"
+    window.findChild(QPushButton, "savePatchButton").click()
+    assert controller.state == before
+    assert commands == []
+    assert window.findChild(QFrame, "audioErrorBanner").isVisibleTo(window)
+
+
+def test_audio_failure_is_single_concise_banner_and_recovery_has_no_success_copy(qtbot) -> None:
+    window, controller, _, _, _ = make_window(qtbot)
+    button = window.findChild(QPushButton, "playButton")
+    banner = window.findChild(QFrame, "audioErrorBanner")
+
+    window.handle_audio_availability(False)
+    assert button.isEnabled()
+    window.handle_audio_failure("Audio output failed: OpenError")
+    window.handle_audio_failure("Audio output failed: OpenError")
+
+    assert not controller.state.audio_available
+    assert not button.isEnabled()
+    assert banner.findChild(QLabel).text() == "Audio output failed: OpenError"
+    assert len(window.findChildren(QFrame, "audioErrorBanner")) == 1
+    window.handle_force_stop()
+    assert banner.findChild(QLabel).text() == "Audio output failed: OpenError"
+    assert not button.isEnabled()
+
+    window.handle_audio_availability(True)
+    assert controller.state.audio_available
+    assert button.isEnabled()
+    assert banner.isHidden()
+    assert "ready" not in " ".join(label.text() for label in window.findChildren(QLabel)).lower()
+
+
+def test_deactivate_and_shutdown_converge_on_idempotent_force_stop(qtbot) -> None:
+    window, _, commands, _, _ = make_window(qtbot)
+    button = window.findChild(QPushButton, "playButton")
+    shutdowns: list[bool] = []
+    window.shutdown_requested.connect(lambda: shutdowns.append(True))
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+
+    window.event(QEvent(QEvent.Type.WindowDeactivate))
+    window.prepare_shutdown()
+    window.prepare_shutdown()
+
+    assert [command.kind for command in commands] == [
         AudioCommandKind.NOTE_ON,
         AudioCommandKind.RESET,
     ]
-    assert not window.play_button.isDown()
-    assert window.pitch_slider.isEnabled()
+    assert not button.isDown()
+    assert shutdowns == [True]
+    assert not window._refresh_timer.isActive()
 
 
-def test_audio_failure_disables_play_and_forces_stop(qtbot) -> None:
-    window, audio = make_window(qtbot)
-    qtbot.mousePress(window.play_button, Qt.MouseButton.LeftButton)
-    audio.force_stop_requested.emit()
-    audio.status_changed.emit("Audio output failed: OpenError", False)
-    assert not window.play_button.isEnabled()
-    assert window.status_label.text() == "Audio output failed: OpenError"
-    assert audio.commands[-1].kind is AudioCommandKind.RESET
+def test_layout_contract_at_minimum_and_initial_sizes(qtbot, tmp_path) -> None:
+    window, _, _, _, _ = make_window(qtbot)
+    assert window.minimumSize() == QSize(1024, 640)
+    assert window.size() == QSize(1280, 720)
+    names = (
+        "frequencyKnob",
+        "frequencyEntry",
+        "derivedPitchLabel",
+        "playButton",
+        "measurementStateLabel",
+        "clearButton",
+        "waveformPlot",
+        "spectrumPlot",
+        "patchFacts",
+        "loadPatchButton",
+        "savePatchButton",
+    )
+    for size in (QSize(1280, 720), QSize(1024, 640)):
+        window.resize(size)
+        window.show()
+        qtbot.waitExposed(window)
+        qtbot.wait(1)
+        client = QRect(window.centralWidget().rect())
+        assert window.transport.height() <= 144
+        assert window.findChild(QFrame, "patchFacts").height() <= 96
+        waveform = window.findChild(WaveformView, "waveformPlot")
+        spectrum = window.findChild(SpectrumView, "spectrumPlot")
+        assert waveform.height() >= 320
+        assert spectrum.height() >= 320
+        assert spectrum.width() > waveform.width()
+        for name in names:
+            widget = window.findChild(QWidget, name)
+            top_left = widget.mapTo(window.centralWidget(), widget.rect().topLeft())
+            geometry = QRect(top_left, widget.size())
+            assert not geometry.isEmpty(), name
+            assert client.contains(geometry), (name, geometry, client)
 
-
-def test_close_forces_stop_and_shuts_down_audio(qtbot) -> None:
-    window, audio = make_window(qtbot)
-    qtbot.mousePress(window.play_button, Qt.MouseButton.LeftButton)
-    assert window._plot_timer.isActive()
-    window.close()
-    assert audio.commands[-1].kind is AudioCommandKind.RESET
-    assert audio.lifecycle_events[-2:] == ["submit:RESET", "shutdown"]
-    assert audio.shutdown_count == 1
-    assert not window._plot_timer.isActive()
-
-
-def test_plot_failure_stops_visual_timer_without_touching_audio(qtbot, monkeypatch) -> None:
-    window, audio = make_window(qtbot)
-
-    def fail_spectrum(*_args: object, **_kwargs: object) -> tuple[object, object]:
-        raise RuntimeError("plot calculation failed")
-
-    monkeypatch.setattr("harpy.gui.window.spectrum_dbfs", fail_spectrum)
-    window._update_plots()
-    assert not window._plot_timer.isActive()
-    assert audio.commands == []
+    window.resize(1280, 720)
+    image = window.grab().toImage()
+    if image.isNull() or image.size() != QSize(1280, 720):
+        image.save(str(tmp_path / "workbench-layout-failure.png"))
+    assert not image.isNull()
+    assert image.size() == QSize(1280, 720)
