@@ -4,7 +4,7 @@ from enum import StrEnum
 
 import numpy as np
 
-from harpy.synth.specs import EnvelopeSpec
+from harpy.synth.models import EnvelopeConfig, seconds_to_frames
 
 
 class EnvelopeStage(StrEnum):
@@ -16,12 +16,12 @@ class EnvelopeStage(StrEnum):
 
 
 class LinearEnvelope:
-    def __init__(self, spec: EnvelopeSpec, sample_rate_hz: int) -> None:
+    def __init__(self, spec: EnvelopeConfig, sample_rate_hz: int) -> None:
         self.spec = spec
         self.sample_rate_hz = sample_rate_hz
-        self._attack_frames = spec.attack_frames(sample_rate_hz)
-        self._decay_frames = spec.decay_frames(sample_rate_hz)
-        self._release_frames = spec.release_frames(sample_rate_hz)
+        self._attack_frames = seconds_to_frames(spec.attack_seconds, sample_rate_hz)
+        self._decay_frames = seconds_to_frames(spec.decay_seconds, sample_rate_hz)
+        self._release_frames = seconds_to_frames(spec.release_seconds, sample_rate_hz)
         if min(self._attack_frames, self._decay_frames, self._release_frames) < 1:
             raise ValueError("every envelope stage must contain at least one frame")
         self.reset()
