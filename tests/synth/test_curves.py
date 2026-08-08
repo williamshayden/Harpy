@@ -1,11 +1,17 @@
+import math
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from harpy.synth.curves import (
+    EnvelopePreview,
     curvature_from_control_level,
     evaluate_quadratic_segment,
     quadratic_control_level,
+    sample_envelope_preview,
 )
+from harpy.synth.models import EnvelopeConfig, RenderConfig
 
 
 @pytest.mark.parametrize("curvature", [-1.0, -0.25, 0.0, 0.25, 1.0])
@@ -223,3 +229,81 @@ def test_curve_output_is_independent_of_supplied_position_array() -> None:
     positions[:] = 0.0
 
     np.testing.assert_array_equal(values, expected)
+
+
+def test_nominal_preview_uses_the_shared_curve_at_renderer_positions() -> None:
+    render = RenderConfig(sample_rate_hz=4, block_frames=2)
+    envelope = EnvelopeConfig(
+        attack_seconds=1.0,
+        decay_seconds=1.0,
+        sustain_db=20.0 * math.log10(0.5),
+        release_seconds=1.0,
+        attack_curve=-0.5,
+        decay_curve=0.25,
+        release_curve=1.0,
+    )
+    preview = sample_envelope_preview(envelope, render, samples_per_stage=5)
+    assert isinstance(preview, EnvelopePreview)
+    np.testing.assert_array_equal(preview.position, np.linspace(0.0, 1.0, 5))
+    np.testing.assert_array_equal(
+        preview.attack_level,
+        evaluate_quadratic_segment(0.0, 1.0, -0.5, preview.position),
+    )
+    np.testing.assert_array_equal(
+        preview.decay_level,
+        evaluate_quadratic_segment(1.0, 0.5, 0.25, preview.position),
+    )
+    np.testing.assert_array_equal(
+        preview.release_level,
+        evaluate_quadratic_segment(0.5, 0.0, 1.0, preview.position),
+    )
+    assert preview.sustain_level == 0.5
+    assert (preview.attack_frames, preview.decay_frames, preview.release_frames) == (4, 4, 4)
+
+
+def test_preview_arrays_are_owned_read_only_contiguous_float64_vectors() -> None:
+    preview = sample_envelope_preview(EnvelopeConfig(), RenderConfig())
+
+    for values in (
+        preview.position,
+        preview.attack_level,
+        preview.decay_level,
+        preview.release_level,
+    ):
+        assert values.ndim == 1
+        assert values.dtype == np.float64
+        assert values.flags.owndata
+        assert values.flags.c_contiguous
+        assert not values.flags.writeable
+
+
+@pytest.mark.parametrize("stage", ["attack", "decay", "release"])
+@pytest.mark.parametrize("seconds", [1e-12, 1e308])
+def test_preview_rejects_unrenderable_envelope(stage: str, seconds: float) -> None:
+    envelope = replace(EnvelopeConfig(), **{f"{stage}_seconds": seconds})
+
+    with pytest.raises(ValueError, match=stage):
+        sample_envelope_preview(envelope, RenderConfig())
+
+
+@pytest.mark.parametrize("samples_per_stage", [True, False, 1, 1.5, "129"])
+def test_preview_requires_at_least_two_integer_samples(samples_per_stage: object) -> None:
+    with pytest.raises(ValueError, match="samples_per_stage"):
+        sample_envelope_preview(
+            EnvelopeConfig(),
+            RenderConfig(),
+            samples_per_stage=samples_per_stage,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("envelope", "render", "field"),
+    [(object(), RenderConfig(), "envelope"), (EnvelopeConfig(), object(), "render")],
+)
+def test_preview_requires_runtime_config_types(
+    envelope: object,
+    render: object,
+    field: str,
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        sample_envelope_preview(envelope, render)  # type: ignore[arg-type]

@@ -401,6 +401,7 @@ class HarpyWindow(QMainWindow):
 
     def _set_patch_facts(self, patch: SynthPatch) -> None:
         envelope = patch.envelope
+        curves = (envelope.attack_curve, envelope.decay_curve, envelope.release_curve)
         values = {
             "Oscillator": patch.oscillator.type.value.title(),
             "Output": _format_db(patch.output_gain_dbfs, "dBFS"),
@@ -408,7 +409,7 @@ class HarpyWindow(QMainWindow):
             "Decay": _format_duration(envelope.decay_seconds),
             "Sustain": _format_db(envelope.sustain_db, "dB"),
             "Release": _format_duration(envelope.release_seconds),
-            "Curve": envelope.curve.replace("_", " ").capitalize(),
+            "Curve": "Linear" if curves == (0.0, 0.0, 0.0) else "Curved",
         }
         for name, text in values.items():
             self._patch_value_labels[name].setText(text)

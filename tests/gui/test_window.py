@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -75,7 +75,7 @@ def observed_silence() -> AudioObservation:
     )
 
 
-def make_window(qtbot, *, analyzer=None, send_command=None):
+def make_window(qtbot, *, patch: SynthPatch | None = None, analyzer=None, send_command=None):
     tuning = Tuning()
     spec = WorkbenchSpec.from_tuning(tuning)
     render = RenderConfig(sample_rate_hz=SAMPLE_RATE)
@@ -84,7 +84,13 @@ def make_window(qtbot, *, analyzer=None, send_command=None):
     capture = CaptureCoordinator(history, SAMPLE_RATE, ANALYSIS, **kwargs)
     commands: list[AudioCommand] = []
     sender = commands.append if send_command is None else send_command
-    controller = WorkbenchController(spec, render, SynthPatch(), capture, sender)
+    controller = WorkbenchController(
+        spec,
+        render,
+        SynthPatch() if patch is None else patch,
+        capture,
+        sender,
+    )
     dialogs = Dialogs()
     window = HarpyWindow(controller, tuning, spec, dialogs)
     qtbot.addWidget(window)
@@ -447,8 +453,20 @@ def test_patch_facts_include_curve_and_keep_output_as_seventh_value(qtbot) -> No
 
     for name in ("Oscillator", "Attack", "Decay", "Sustain", "Release", "Curve", "Output"):
         assert labels.count(name) == 1
-    assert labels.count("Linear amplitude") == 1
+    assert labels.count("Linear") == 1
     assert len(labels) == 14
+
+    curved_patch = replace(
+        SynthPatch(),
+        envelope=replace(SynthPatch().envelope, attack_curve=0.25),
+    )
+    curved_window, _, _, _, _ = make_window(qtbot, patch=curved_patch)
+    curved_facts = curved_window.findChild(QFrame, "patchFacts")
+    curved_labels = [label.text() for label in curved_facts.findChildren(QLabel)]
+
+    assert curved_labels.count("Curved") == 1
+    assert curved_labels.count("Output") == 1
+    assert len(curved_labels) == 14
 
 
 def test_modal_load_cancel_is_a_true_noop(qtbot) -> None:

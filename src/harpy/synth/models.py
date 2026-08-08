@@ -24,7 +24,9 @@ class EnvelopeConfig:
     decay_seconds: float = 0.600
     sustain_db: float = -6.0
     release_seconds: float = 0.600
-    curve: str = "linear_amplitude"
+    attack_curve: float = 0.0
+    decay_curve: float = 0.0
+    release_curve: float = 0.0
 
     def __post_init__(self) -> None:
         for name in ("attack_seconds", "decay_seconds", "release_seconds"):
@@ -36,10 +38,16 @@ class EnvelopeConfig:
         sustain = _finite_float(self.sustain_db, "sustain_db")
         if sustain > 0.0:
             raise ValueError("sustain_db must be finite and no greater than 0 dB")
-        object.__setattr__(self, "sustain_db", sustain)
+        object.__setattr__(self, "sustain_db", 0.0 if sustain == 0.0 else sustain)
 
-        if self.curve != "linear_amplitude":
-            raise ValueError("curve must be linear_amplitude")
+        for field_name in ("attack_curve", "decay_curve", "release_curve"):
+            raw_value = getattr(self, field_name)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
+                raise ValueError(f"{field_name} must be finite and within -1..1")
+            value = _finite_float(raw_value, field_name)
+            if not -1.0 <= value <= 1.0:
+                raise ValueError(f"{field_name} must be finite and within -1..1")
+            object.__setattr__(self, field_name, 0.0 if value == 0.0 else value)
 
     @property
     def sustain_amplitude(self) -> float:
@@ -61,7 +69,7 @@ class SynthPatch:
         gain = _finite_float(self.output_gain_dbfs, "output_gain_dbfs")
         if gain > 0.0:
             raise ValueError("output_gain_dbfs must be finite and no greater than 0 dBFS")
-        object.__setattr__(self, "output_gain_dbfs", gain)
+        object.__setattr__(self, "output_gain_dbfs", 0.0 if gain == 0.0 else gain)
 
     @property
     def output_gain(self) -> float:
@@ -134,6 +142,8 @@ def validate_frequency_hz(frequency_hz: object, render: RenderConfig) -> float:
 
 
 def _finite_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be finite")
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError) as error:
