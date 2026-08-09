@@ -309,15 +309,17 @@ class EnvelopeGraph(QWidget):
         self.select_stage(stage)
         self.stage_selected.emit(stage.value)
 
-    def _update_curve_readout(self, stage_name: str) -> None:
-        handle = self._handles[CurveStage(stage_name)]
-        if not handle.is_contextual:
+    def _update_curve_readout(self, _stage_name: str) -> None:
+        stage = next(
+            (stage for stage in CurveStage if self._handles[stage].is_contextual),
+            None,
+        )
+        if stage is None:
             self._curve_readout.hide()
             return
-        self._curve_readout.setText(
-            f"Curve {format_envelope_curvature(self._curve_value(CurveStage(stage_name)))}"
-        )
+        self._curve_readout.setText(f"Curve {format_envelope_curvature(self._curve_value(stage))}")
         self._curve_readout.adjustSize()
+        handle = self._handles[stage]
         position = handle.geometry().bottomLeft()
         self._curve_readout.move(
             round(min(position.x(), self.width() - self._curve_readout.width())),
@@ -327,14 +329,16 @@ class EnvelopeGraph(QWidget):
 
     def accept_exact_edit(self, field_name: str, value: float) -> None:
         control = self._value_control(field_name)
-        if control is not None:
-            self._accepted_exact_field = field_name
-            control.accept_exact_value(value)
+        if control is None or control is not self._editing_control:
+            return
+        self._accepted_exact_field = field_name
+        control.accept_exact_value(value)
 
     def reject_exact_edit(self, field_name: str, message: str) -> None:
         control = self._value_control(field_name)
-        if control is not None:
-            control.reject_exact_value(message)
+        if control is None or control is not self._editing_control:
+            return
+        control.reject_exact_value(message)
 
     def mark_field_error(self, field_name: str, message: str) -> None:
         control = self._value_control(field_name)

@@ -338,6 +338,185 @@ def test_curve_readout_uses_full_model_precision_only_while_handle_is_contextual
     assert readout.isHidden()
 
 
+def test_curve_readout_survives_owner_loopback_while_its_handle_is_focused(qtbot) -> None:
+    # Reconciling each unrelated handle independently must not hide active attack context.
+    graph = make_graph(qtbot, EnvelopeConfig(attack_curve=0.25))
+    accept_graph_proposals(graph)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    readout = graph.findChild(QLabel, "curveValueReadout")
+    assert handle is not None
+    assert readout is not None
+
+    handle.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    QTest.keyClick(handle, Qt.Key.Key_Right)
+
+    assert graph.envelope.attack_curve == 0.26
+    assert readout.isVisible()
+    assert readout.text() == "Curve 0.26"
+
+
+def test_stale_exact_accept_after_cancellation_cannot_suppress_a_later_revert(qtbot) -> None:
+    # Remembering a canceled owner response would make a later draft close as if accepted.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    assert attack is not None
+    reverts: list[str] = []
+    graph.field_reverted.connect(reverts.append)
+
+    attack.open_exact_editor()
+    graph.cancel_interactions()
+    reverts.clear()
+    graph.accept_exact_edit("attack_seconds", graph.envelope.attack_seconds)
+    attack.open_exact_editor()
+    graph.setFocus(Qt.FocusReason.OtherFocusReason)
+    QApplication.processEvents()
+
+    assert reverts == ["attack_seconds"]
+
+
+def test_stale_or_mismatched_exact_rejection_is_a_noop(qtbot) -> None:
+    # Routing a response to an inactive field would surface an error unrelated to the open draft.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    assert attack is not None
+    failures: list[tuple[str, str]] = []
+    graph.field_validation_failed.connect(lambda field, message: failures.append((field, message)))
+
+    attack.open_exact_editor()
+    graph.reject_exact_edit("decay_seconds", "late owner response")
+    graph.cancel_interactions()
+    graph.reject_exact_edit("attack_seconds", "late owner response")
+
+    assert failures == []
+
+
+def test_curve_readout_survives_owner_loopback_during_drag_without_focus(qtbot) -> None:
+    # Drag context must keep the readout visible even after focus has moved elsewhere.
+    graph = make_graph(qtbot, EnvelopeConfig(attack_curve=0.25))
+    accept_graph_proposals(graph)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    readout = graph.findChild(QLabel, "curveValueReadout")
+    assert handle is not None
+    assert readout is not None
+    origin = handle.rect().center()
+    press_global = handle.mapToGlobal(origin)
+
+    QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=origin)
+    graph.setFocus(Qt.FocusReason.OtherFocusReason)
+    global_position = press_global + QPoint(0, -20)
+    QApplication.sendEvent(
+        handle,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(handle.mapFromGlobal(global_position)),
+            QPointF(handle.mapFromGlobal(global_position)),
+            QPointF(global_position),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+
+    assert readout.isVisible()
+    assert readout.text() != "Curve 0.25"
+    graph.cancel_interactions()
+
+
+def test_curve_release_after_out_of_bounds_drag_commits_once_without_later_revert(qtbot) -> None:
+    # A late capture-loss event must not undo a completed out-of-bounds release.
+    graph = make_graph(qtbot)
+    accept_graph_proposals(graph)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    assert handle is not None
+    commits: list[tuple[str, float]] = []
+    reverts: list[str] = []
+    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.curve_reverted.connect(reverts.append)
+
+    send_handle_drag(handle, y_offsets=[-20, -10_000])
+    QApplication.sendEvent(handle, QEvent(QEvent.Type.UngrabMouse))
+
+    assert len(commits) == 1
+    assert reverts == []
+
+
+def test_curve_ungrab_and_graph_cancel_revert_each_preview_once_without_commit(qtbot) -> None:
+    # Cancellation must clear capture before release so the owner receives one
+    # revert, never a commit.
+    for cancellation in ("ungrab", "graph"):
+        graph = make_graph(qtbot)
+        handle = graph.findChild(QWidget, "attackCurveHandle")
+        assert handle is not None
+        reverts: list[str] = []
+        commits: list[tuple[str, float]] = []
+        graph.curve_reverted.connect(reverts.append)
+        graph.curve_commit_requested.connect(
+            lambda stage, value, commits=commits: commits.append((stage, value))
+        )
+        origin = handle.rect().center()
+        press_global = handle.mapToGlobal(origin)
+        QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=origin)
+        global_position = press_global + QPoint(0, -20)
+        QApplication.sendEvent(
+            handle,
+            QMouseEvent(
+                QEvent.Type.MouseMove,
+                QPointF(handle.mapFromGlobal(global_position)),
+                QPointF(handle.mapFromGlobal(global_position)),
+                QPointF(global_position),
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            ),
+        )
+        if cancellation == "ungrab":
+            QApplication.sendEvent(handle, QEvent(QEvent.Type.UngrabMouse))
+        else:
+            graph.cancel_interactions()
+
+        assert reverts == ["attack"], cancellation
+        assert commits == [], cancellation
+
+
+def test_second_editor_cancels_first_and_same_envelope_refresh_preserves_invalid_text(
+    qtbot,
+) -> None:
+    # A model refresh must neither retain two overlays nor erase text the model did not accept.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    decay = graph.findChild(EnvelopeStageControl, "decayValueControl")
+    assert attack is not None
+    assert decay is not None
+
+    attack.open_exact_editor()
+    first = graph.findChild(EnvelopeValueEntry, "envelopeInlineEditor")
+    assert first is not None
+    first.setText("not a duration")
+    graph.set_envelope(graph.envelope)
+    assert first.text() == "not a duration"
+    decay.open_exact_editor()
+    editors = graph.findChildren(EnvelopeValueEntry, "envelopeInlineEditor")
+
+    assert len(editors) == 1
+    assert editors[0].hasFocus()
+
+
+def test_focus_loss_cancellation_preserves_the_new_control_target(qtbot) -> None:
+    # Returning focus to the closed editor's owner would steal the user's intended target.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    decay = graph.findChild(EnvelopeStageControl, "decayValueControl")
+    assert attack is not None
+    assert decay is not None
+
+    attack.open_exact_editor()
+    decay.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+
+    assert decay.hasFocus()
+
+
 def test_graph_forwards_exact_value_editor_lifecycle_and_owner_responses(qtbot) -> None:
     # Closing before owner acceptance would discard a rejected exact draft and its focus.
     graph = make_graph(qtbot)
