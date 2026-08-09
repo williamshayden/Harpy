@@ -62,6 +62,7 @@ def build_runtime(
         controller,
         config.tuning,
         spec,
+        config.render,
         patch_dialogs if patch_dialogs is not None else NativePatchDialogs(),
     )
 

@@ -9,7 +9,7 @@ def test_public_import_smoke_is_silent() -> None:
             "-c",
             (
                 "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
-                "import harpy.gui.app; "
+                "import harpy.gui.app, harpy.gui.envelope_editor, harpy.gui.window; "
                 "import harpy.synth.curves, harpy.synth.engine, harpy.synth.patch_json"
             ),
         ],

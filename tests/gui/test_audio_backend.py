@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from enum import Enum
 from threading import Event, Thread
 
@@ -19,7 +20,7 @@ from harpy.gui.qt_audio import (
     choose_audio_format,
     encode_mono_samples,
 )
-from harpy.gui.workbench_controller import WorkbenchController
+from harpy.gui.workbench_controller import PatchApplyState, WorkbenchController
 from harpy.gui.workbench_spec import WorkbenchSpec
 from harpy.playback import AudioCommand, AudioCommandKind
 from harpy.synth.models import EnvelopeConfig, RenderConfig, SynthPatch
@@ -281,6 +282,76 @@ def test_natural_idle_waits_until_release_bearing_pcm_leaves_staging() -> None:
     assert idle_generations == [7]
     assert first_half + second_half == control.readData(block_bytes)
     assert np.frombuffer(second_half, dtype=np.float32)[-1] == 0.0
+
+
+def test_pending_authoring_waits_for_release_watermark_and_preserves_release_bytes() -> None:
+    # Applying at envelope-idle instead of byte-drained idle truncates already-rendered release PCM.
+    patch = short_patch(release_frames=4)
+    source, history, render, audio_format = source_setup(patch=patch)
+    control, _, _, _ = source_setup(patch=patch)
+    coordinator = CaptureCoordinator(
+        history,
+        render.sample_rate_hz,
+        AnalysisConfig(
+            waveform_window_seconds=render.block_frames / render.sample_rate_hz,
+            fft_frames=render.block_frames,
+        ),
+    )
+    commands: list[AudioCommand] = []
+
+    def submit(command: AudioCommand) -> None:
+        commands.append(command)
+        source.submit(command)
+
+    controller = WorkbenchController(
+        WorkbenchSpec.from_tuning(Tuning()),
+        render,
+        patch,
+        coordinator,
+        submit,
+    )
+    idle: list[int] = []
+    source.voice_idle.connect(idle.append)
+    note_state = controller.press_play()
+    note = commands[-1]
+    control.submit(note)
+    block_bytes = render.block_frames * audio_format.bytesPerFrame()
+    assert source.readData(block_bytes) == control.readData(block_bytes)
+    controller.release_play()
+    control.submit(AudioCommand(AudioCommandKind.NOTE_OFF))
+
+    half_bytes = 2 * audio_format.bytesPerFrame()
+    first_release_half = source.readData(half_bytes)
+    assert source._engine.is_idle
+    assert idle == []
+    first_authored = replace(patch, output_gain_dbfs=-18.0)
+    latest_authored = replace(patch, output_gain_dbfs=-24.0)
+    controller.commit_authored_patch(first_authored)
+    controller.commit_authored_patch(latest_authored)
+
+    assert controller.state.patch_apply_state is PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+    second_release_half = source.readData(half_bytes)
+
+    assert idle == [note_state.capture.generation]
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+    assert first_release_half + second_release_half == control.readData(block_bytes)
+    controller.mark_voice_idle(idle[0])
+
+    assert controller.state.patch_apply_state is PatchApplyState.APPLIED
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert commands[-1].patch == latest_authored
+    assert commands[-1].generation == controller.state.capture.generation
 
 
 @pytest.mark.parametrize(
@@ -1161,6 +1232,131 @@ def test_successful_recovery_clears_failure_without_healthy_status_copy(qapp) ->
     assert availability == [False, True]
     assert failures == ["No default audio output"]
     assert len(sinks) == 1
+
+
+def test_controller_authoring_while_unavailable_rebuilds_idle_with_latest_patch(qapp) -> None:
+    # Dropping replacement commands while no source exists would recover with a stale patch.
+    patch = short_patch()
+    latest = replace(patch, output_gain_dbfs=-24.0)
+    backend, media_devices, sinks, history, render = backend_setup(
+        device=NullDevice(),
+        patch=patch,
+    )
+    coordinator = CaptureCoordinator(
+        history,
+        render.sample_rate_hz,
+        AnalysisConfig(
+            waveform_window_seconds=render.block_frames / render.sample_rate_hz,
+            fft_frames=render.block_frames,
+        ),
+    )
+    commands: list[AudioCommand] = []
+
+    def submit(command: AudioCommand) -> None:
+        commands.append(command)
+        backend.submit(command)
+
+    controller = WorkbenchController(
+        WorkbenchSpec.from_tuning(Tuning()),
+        render,
+        patch,
+        coordinator,
+        submit,
+    )
+    backend.availability_changed.connect(controller.set_audio_availability)
+    backend.start()
+
+    controller.commit_authored_patch(latest)
+
+    assert not controller.state.audio_available
+    assert controller.state.patch == latest
+    assert [command.kind for command in commands] == [AudioCommandKind.REPLACE_PATCH]
+    assert commands[0].generation == controller.state.capture.generation
+    media_devices.device = DefaultDevice({(1, QAudioFormat.SampleFormat.Float)})
+    media_devices.audioOutputsChanged.emit()
+    source = sinks[0].source
+    assert source is not None
+    assert source._engine.patch == latest
+    assert source._engine.is_idle
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+    np.testing.assert_array_equal(
+        read_block(source, render, audio_format),
+        np.zeros(render.block_frames, dtype=np.float32),
+    )
+
+
+def test_device_failure_before_idle_handoff_caches_one_pending_replacement(qapp) -> None:
+    # Failure after rendered release but before its watermark must not duplicate reset/replacement.
+    patch = short_patch(release_frames=4)
+    latest = replace(patch, output_gain_dbfs=-24.0)
+    backend, media_devices, sinks, history, render = backend_setup(patch=patch)
+    coordinator = CaptureCoordinator(
+        history,
+        render.sample_rate_hz,
+        AnalysisConfig(
+            waveform_window_seconds=render.block_frames / render.sample_rate_hz,
+            fft_frames=render.block_frames,
+        ),
+    )
+    commands: list[AudioCommand] = []
+
+    def submit(command: AudioCommand) -> None:
+        commands.append(command)
+        backend.submit(command)
+
+    controller = WorkbenchController(
+        WorkbenchSpec.from_tuning(Tuning()),
+        render,
+        patch,
+        coordinator,
+        submit,
+    )
+    backend.availability_changed.connect(controller.set_audio_availability)
+    backend.force_stop_requested.connect(controller.force_stop)
+    backend.voice_idle.connect(controller.mark_voice_idle)
+    backend.start()
+    old_sink = sinks[0]
+    old_source = old_sink.source
+    assert old_source is not None
+    audio_format = audio_format_candidates(render.sample_rate_hz)[1]
+    held_generation = controller.press_play().capture.generation
+    read_block(old_source, render, audio_format)
+    controller.release_play()
+    half_bytes = 2 * audio_format.bytesPerFrame()
+    old_source.readData(half_bytes)
+    assert old_source._engine.is_idle
+    controller.commit_authored_patch(latest)
+    assert controller.state.patch_apply_state is PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+    old_sink.current_error = QAudio.Error.OpenError
+    old_sink.stateChanged.emit(QAudio.State.StoppedState)
+
+    assert not controller.state.audio_available
+    assert controller.state.patch_apply_state is PatchApplyState.APPLIED
+    replacements = [
+        command for command in commands if command.kind is AudioCommandKind.REPLACE_PATCH
+    ]
+    assert len(replacements) == 1
+    assert replacements[0].patch == latest
+    assert replacements[0].generation == controller.state.capture.generation
+    assert AudioCommandKind.RESET not in [command.kind for command in commands]
+    assert backend._patch == latest
+    assert backend._capture_generation == replacements[0].generation
+    assert old_sink.reset_count == 1
+
+    backend.voice_idle.emit(held_generation)
+    assert len(commands) == 3
+    assert controller.state.patch_apply_state is PatchApplyState.APPLIED
+    media_devices.audioOutputsChanged.emit()
+    recovered_source = sinks[1].source
+    assert recovered_source is not None
+    assert recovered_source._engine.patch == latest
+    assert recovered_source._engine.is_idle
+    assert old_sink.reset_count == 1
 
 
 def test_control_commands_cache_while_unavailable_and_rebuild_idle(qapp) -> None:

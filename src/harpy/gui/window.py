@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeyEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QSizePolicy,
@@ -16,13 +16,18 @@ from PySide6.QtWidgets import (
 )
 
 from harpy.capture import CaptureState
+from harpy.gui.envelope_editor import EnvelopeEditor
 from harpy.gui.frequency_entry import FrequencyEntry
 from harpy.gui.frequency_knob import FrequencyKnob
 from harpy.gui.patch_dialogs import PatchDialogPort
 from harpy.gui.signal_views import SpectrumView, WaveformView
-from harpy.gui.workbench_controller import WorkbenchController, WorkbenchState
+from harpy.gui.workbench_controller import (
+    PatchApplyState,
+    WorkbenchController,
+    WorkbenchState,
+)
 from harpy.gui.workbench_spec import WorkbenchSpec
-from harpy.synth.models import SynthPatch
+from harpy.synth.models import RenderConfig, SynthPatch
 from harpy.synth.patch_json import load_patch, save_patch
 from harpy.tuning import Tuning
 
@@ -37,6 +42,7 @@ class HarpyWindow(QMainWindow):
         controller: WorkbenchController,
         tuning: Tuning,
         spec: WorkbenchSpec,
+        render: RenderConfig,
         patch_dialogs: PatchDialogPort,
     ) -> None:
         super().__init__()
@@ -44,8 +50,9 @@ class HarpyWindow(QMainWindow):
         self._tuning = tuning
         self._patch_dialogs = patch_dialogs
         self._shutdown_prepared = False
-        self._local_error: str | None = None
-        self._entry_error: str | None = None
+        self._frequency_error: str | None = None
+        self._editor_error: str | None = None
+        self._file_error: str | None = None
         self._space_held = False
         self._dialog_chooser_active = False
         self._space_filter_installed = False
@@ -60,7 +67,7 @@ class HarpyWindow(QMainWindow):
             spec.maximum_frequency_hz,
         )
         self.frequency_knob.setObjectName("frequencyKnob")
-        self.frequency_knob.setFixedSize(80, 80)
+        self.frequency_knob.setFixedSize(88, 88)
 
         self.frequency_entry = FrequencyEntry(
             spec.minimum_frequency_hz,
@@ -68,8 +75,8 @@ class HarpyWindow(QMainWindow):
         )
         self.frequency_entry.setObjectName("frequencyEntry")
         self.frequency_entry.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.frequency_entry.setMinimumWidth(164)
-        self.frequency_entry.setMaximumWidth(220)
+        self.frequency_entry.setMinimumWidth(154)
+        self.frequency_entry.setMaximumWidth(190)
         self.frequency_entry.setAccessibleName("Frequency in hertz")
         self.frequency_entry.setAccessibleDescription("Enter the playback frequency in hertz.")
         hz_suffix = QLabel("Hz")
@@ -78,6 +85,28 @@ class HarpyWindow(QMainWindow):
         self.derived_pitch_label = QLabel()
         self.derived_pitch_label.setObjectName("derivedPitchLabel")
         self.derived_pitch_label.setMinimumWidth(116)
+
+        frequency_label = QLabel("Frequency")
+        frequency_label.setObjectName("frequencyLabel")
+        self.frequency_control_group = QFrame()
+        self.frequency_control_group.setObjectName("frequencyControlGroup")
+        frequency_group_layout = QVBoxLayout(self.frequency_control_group)
+        frequency_group_layout.setContentsMargins(10, 3, 10, 6)
+        frequency_group_layout.setSpacing(1)
+        frequency_group_layout.addWidget(frequency_label)
+        frequency_row = QHBoxLayout()
+        frequency_row.setContentsMargins(0, 0, 0, 0)
+        frequency_row.setSpacing(7)
+        frequency_row.addWidget(self.frequency_knob)
+        entry_row = QHBoxLayout()
+        entry_row.setContentsMargins(0, 0, 0, 0)
+        entry_row.setSpacing(6)
+        entry_row.addWidget(self.frequency_entry)
+        entry_row.addWidget(hz_suffix)
+        frequency_row.addLayout(entry_row)
+        frequency_row.addWidget(self.derived_pitch_label)
+        frequency_group_layout.addLayout(frequency_row)
+
         self.play_button = QPushButton("Play")
         self.play_button.setObjectName("playButton")
         self.play_button.setAccessibleDescription("Press and hold to play")
@@ -90,13 +119,7 @@ class HarpyWindow(QMainWindow):
         transport_layout = QHBoxLayout(self.transport)
         transport_layout.setContentsMargins(14, 6, 14, 6)
         transport_layout.setSpacing(14)
-        transport_layout.addWidget(self.frequency_knob)
-        editor_layout = QHBoxLayout()
-        editor_layout.setSpacing(7)
-        editor_layout.addWidget(self.frequency_entry)
-        editor_layout.addWidget(hz_suffix)
-        transport_layout.addLayout(editor_layout)
-        transport_layout.addWidget(self.derived_pitch_label)
+        transport_layout.addWidget(self.frequency_control_group)
         transport_layout.addStretch(1)
         transport_layout.addWidget(self.play_button)
 
@@ -120,43 +143,33 @@ class HarpyWindow(QMainWindow):
         self.spectrum_view.setMinimumHeight(320)
         self.spectrum_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.spectrum_view.plot_item.setTitle("Spectrum")
-        plots = QHBoxLayout()
-        plots.setContentsMargins(0, 0, 0, 0)
-        plots.setSpacing(12)
-        plots.addWidget(self.waveform_view, 4)
-        plots.addWidget(self.spectrum_view, 6)
-
-        self.patch_facts = QFrame()
-        self.patch_facts.setObjectName("patchFacts")
-        self.patch_facts.setMaximumHeight(90)
-        facts_layout = QGridLayout(self.patch_facts)
-        facts_layout.setContentsMargins(12, 8, 12, 8)
-        facts_layout.setHorizontalSpacing(18)
-        facts_layout.setVerticalSpacing(2)
-        self._patch_value_labels: dict[str, QLabel] = {}
-        for column, name in enumerate(
-            ("Oscillator", "Attack", "Decay", "Sustain", "Release", "Curve", "Output")
-        ):
-            heading = QLabel(name)
-            heading.setObjectName("factName")
-            value = QLabel()
-            value.setObjectName("factValue")
-            facts_layout.addWidget(heading, 0, column)
-            facts_layout.addWidget(value, 1, column)
-            self._patch_value_labels[name] = value
-
-        self.load_patch_button = QPushButton("&Load")
-        self.load_patch_button.setObjectName("loadPatchButton")
-        self.load_patch_button.setToolTip("Load patch (Ctrl+O)")
-        self.save_patch_button = QPushButton("Save &As…")
-        self.save_patch_button.setObjectName("savePatchButton")
-        self.save_patch_button.setToolTip("Save patch as (Ctrl+Shift+S)")
-        patch_row = QHBoxLayout()
-        patch_row.setContentsMargins(0, 0, 0, 0)
-        patch_row.setSpacing(10)
-        patch_row.addWidget(self.patch_facts, 1)
-        patch_row.addWidget(self.load_patch_button)
-        patch_row.addWidget(self.save_patch_button)
+        plot_container = QWidget()
+        plot_container.setObjectName("plotContainer")
+        plot_layout = QHBoxLayout(plot_container)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
+        plot_layout.setSpacing(12)
+        plot_layout.addWidget(self.waveform_view, 4)
+        plot_layout.addWidget(self.spectrum_view, 6)
+        self.envelope_editor = EnvelopeEditor(render, controller.state.patch)
+        self.envelope_editor.setObjectName("envelopeEditor")
+        self.envelope_editor.setFixedWidth(288)
+        self._reset_curves_button = self.envelope_editor.findChild(
+            QPushButton,
+            "resetCurvesButton",
+        )
+        if self._reset_curves_button is None:
+            raise RuntimeError("EnvelopeEditor is missing resetCurvesButton")
+        self._reset_curves_button.setToolTip("Reset curves to linear (Ctrl+R)")
+        self._reset_curves_action = QAction(self)
+        self._reset_curves_action.setObjectName("resetCurvesAction")
+        self._reset_curves_action.setShortcut(QKeySequence("Ctrl+R"))
+        self._reset_curves_action.triggered.connect(self._reset_curves_button.click)
+        self.addAction(self._reset_curves_action)
+        main_row = QHBoxLayout()
+        main_row.setContentsMargins(0, 0, 0, 0)
+        main_row.setSpacing(12)
+        main_row.addWidget(plot_container, 1)
+        main_row.addWidget(self.envelope_editor)
 
         self.audio_error_banner = QFrame()
         self.audio_error_banner.setObjectName("audioErrorBanner")
@@ -175,18 +188,20 @@ class HarpyWindow(QMainWindow):
         root.setSpacing(7)
         root.addWidget(self.transport)
         root.addLayout(measurement_header)
-        root.addLayout(plots, 1)
-        root.addLayout(patch_row)
+        root.addLayout(main_row, 1)
         self.setCentralWidget(central)
 
         self.frequency_knob.frequency_changed.connect(self._set_frequency)
         self.frequency_entry.frequency_committed.connect(self._set_frequency)
-        self.frequency_entry.validation_failed.connect(self._show_entry_error)
+        self.frequency_entry.validation_failed.connect(self._show_frequency_error)
         self.play_button.pressed.connect(self._press_play)
         self.play_button.released.connect(self._release_play)
         self.clear_button.clicked.connect(self._clear_measurement)
-        self.load_patch_button.clicked.connect(self._load_patch)
-        self.save_patch_button.clicked.connect(self._save_patch)
+        self.envelope_editor.patch_commit_requested.connect(self._commit_authored_patch)
+        self.envelope_editor.validation_failed.connect(self._show_editor_error)
+        self.envelope_editor.validation_cleared.connect(self._clear_editor_error)
+        self.envelope_editor.load_requested.connect(self._load_patch)
+        self.envelope_editor.save_requested.connect(self._save_patch)
         self._clear_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self._load_shortcut = QShortcut(QKeySequence.StandardKey.Open, self)
         self._save_shortcut = QShortcut(QKeySequence.StandardKey.SaveAs, self)
@@ -209,14 +224,10 @@ class HarpyWindow(QMainWindow):
 
     @Slot(bool)
     def handle_audio_availability(self, available: bool) -> None:
-        state = self._controller.set_audio_availability(available)
-        if available:
-            self._local_error = None
-            self._apply_state(state)
+        self._apply_state(self._controller.set_audio_availability(available))
 
     @Slot(str)
     def handle_audio_failure(self, message: str) -> None:
-        self._local_error = None
         self._apply_state(self._controller.set_audio_availability(False, message))
 
     @Slot()
@@ -239,6 +250,8 @@ class HarpyWindow(QMainWindow):
             return
         self._shutdown_prepared = True
         self._refresh_timer.stop()
+        self.envelope_editor.discard_draft()
+        self._editor_error = None
         self.handle_force_stop()
         self._remove_space_event_filter()
         self.shutdown_requested.emit()
@@ -266,11 +279,11 @@ class HarpyWindow(QMainWindow):
             return super().eventFilter(watched, event)
         if event.type() is QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
             if watched is self.frequency_entry:
-                self._entry_error = None
+                self._frequency_error = None
                 self._apply_state(self._controller.state, sync_frequency=True)
                 return True
             return super().eventFilter(watched, event)
-        if event.key() != Qt.Key.Key_Space or watched is self.frequency_entry:
+        if event.key() != Qt.Key.Key_Space or isinstance(watched, QLineEdit):
             return super().eventFilter(watched, event)
         if event.type() is QEvent.Type.KeyPress:
             if not event.isAutoRepeat() and not self._space_held and self.play_button.isEnabled():
@@ -292,11 +305,15 @@ class HarpyWindow(QMainWindow):
 
     @Slot(float)
     def _set_frequency(self, frequency_hz: float) -> None:
-        self._entry_error = None
+        self._frequency_error = None
         self._apply_state(
             self._controller.set_frequency(frequency_hz),
             sync_frequency=True,
         )
+
+    @Slot(object)
+    def _commit_authored_patch(self, patch: SynthPatch) -> None:
+        self._apply_state(self._controller.commit_authored_patch(patch))
 
     @Slot()
     def _press_play(self) -> None:
@@ -318,15 +335,18 @@ class HarpyWindow(QMainWindow):
         try:
             patch = load_patch(path)
         except (OSError, ValueError) as error:
-            self._show_local_error(str(error))
+            self._show_file_error(str(error))
             return
         try:
             state = self._controller.replace_patch(patch)
         except ValueError as error:
-            self._show_local_error(str(error))
+            self._show_file_error(str(error))
             return
-        self._local_error = None
-        self._apply_state(state)
+        self.play_button.setDown(False)
+        self._space_held = False
+        self._file_error = None
+        self._editor_error = None
+        self._apply_state(state, discard_editor_draft=True)
 
     @Slot()
     def _save_patch(self) -> None:
@@ -336,22 +356,38 @@ class HarpyWindow(QMainWindow):
         try:
             save_patch(path, self._controller.state.patch)
         except (OSError, ValueError) as error:
-            self._show_local_error(str(error))
+            self._show_file_error(str(error))
             return
-        self._local_error = None
+        self._file_error = None
         self._apply_state(self._controller.state)
 
     @Slot(str)
-    def _show_local_error(self, message: str) -> None:
-        self._local_error = message
+    def _show_file_error(self, message: str) -> None:
+        self._file_error = message
         self._apply_state(self._controller.state)
 
     @Slot(str)
-    def _show_entry_error(self, message: str) -> None:
-        self._entry_error = message
+    def _show_frequency_error(self, message: str) -> None:
+        self._frequency_error = message
         self._apply_state(self._controller.state)
 
-    def _apply_state(self, state: WorkbenchState, *, sync_frequency: bool = False) -> None:
+    @Slot(str)
+    def _show_editor_error(self, message: str) -> None:
+        self._editor_error = message
+        self._apply_state(self._controller.state)
+
+    @Slot()
+    def _clear_editor_error(self) -> None:
+        self._editor_error = None
+        self._apply_state(self._controller.state)
+
+    def _apply_state(
+        self,
+        state: WorkbenchState,
+        *,
+        sync_frequency: bool = False,
+        discard_editor_draft: bool = False,
+    ) -> None:
         frequency = state.selected_frequency_hz
         self.frequency_knob.set_frequency_hz(frequency)
         if sync_frequency or not self.frequency_entry.isModified():
@@ -359,7 +395,11 @@ class HarpyWindow(QMainWindow):
         reading = self._tuning.describe_frequency(frequency)
         cents = 0.0 if abs(reading.cents) < 0.05 else reading.cents
         self.derived_pitch_label.setText(f"{reading.name} {cents:+.1f}¢")
-        self.play_button.setEnabled(state.audio_available)
+        can_release_held_gate = state.gate_held
+        can_start_new_voice = (
+            state.audio_available and state.patch_apply_state is PatchApplyState.APPLIED
+        )
+        self.play_button.setEnabled(can_release_held_gate or can_start_new_voice)
         self.play_button.setDown(state.gate_held or self._space_held)
 
         capture_labels = {
@@ -371,9 +411,13 @@ class HarpyWindow(QMainWindow):
         self.measurement_state_label.setText(capture_labels[state.capture.state])
         self.waveform_view.set_observation(state.capture.observation)
         self.spectrum_view.set_observation(state.capture.observation)
-        self._set_patch_facts(state.patch)
+        self.envelope_editor.set_patch_state(
+            state.patch,
+            state.patch_apply_state,
+            discard_draft=discard_editor_draft,
+        )
 
-        error = state.audio_error or self._entry_error or self._local_error
+        error = state.audio_error or self._file_error or self._editor_error or self._frequency_error
         self._error_label.setText(error or "")
         self.audio_error_banner.setVisible(error is not None)
 
@@ -399,21 +443,6 @@ class HarpyWindow(QMainWindow):
             app.removeEventFilter(self)
         self._space_filter_installed = False
 
-    def _set_patch_facts(self, patch: SynthPatch) -> None:
-        envelope = patch.envelope
-        curves = (envelope.attack_curve, envelope.decay_curve, envelope.release_curve)
-        values = {
-            "Oscillator": patch.oscillator.type.value.title(),
-            "Output": _format_db(patch.output_gain_dbfs, "dBFS"),
-            "Attack": _format_duration(envelope.attack_seconds),
-            "Decay": _format_duration(envelope.decay_seconds),
-            "Sustain": _format_db(envelope.sustain_db, "dB"),
-            "Release": _format_duration(envelope.release_seconds),
-            "Curve": "Linear" if curves == (0.0, 0.0, 0.0) else "Curved",
-        }
-        for name, text in values.items():
-            self._patch_value_labels[name].setText(text)
-
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
@@ -423,10 +452,15 @@ class HarpyWindow(QMainWindow):
                 font-size: 12px;
             }
             QLabel { background: transparent; border: none; }
-            QFrame#transportStrip, QFrame#patchFacts {
+            QFrame#transportStrip, QFrame#frequencyControlGroup {
                 background: #181e27;
                 border: 1px solid #2a3441;
                 border-radius: 8px;
+            }
+            QLabel#frequencyLabel {
+                color: #95a2b2;
+                font-size: 12px;
+                font-weight: 600;
             }
             QLineEdit#frequencyEntry {
                 background: #0d1117;
@@ -446,8 +480,6 @@ class HarpyWindow(QMainWindow):
                 font-weight: 600;
             }
             QLabel#measurementStateLabel { color: #bd8cff; font-weight: 600; }
-            QLabel#factName { color: #95a2b2; font-size: 12px; }
-            QLabel#factValue { color: #f1f4f8; font-family: monospace; font-size: 13px; }
             QPushButton {
                 background: #252e3a;
                 border: 1px solid #3a4655;
@@ -467,13 +499,3 @@ class HarpyWindow(QMainWindow):
             }
             """
         )
-
-
-def _format_duration(seconds: float) -> str:
-    milliseconds = seconds * 1_000.0
-    return f"{milliseconds:g} ms" if milliseconds < 1_000.0 else f"{seconds:g} s"
-
-
-def _format_db(value: float, unit: str) -> str:
-    text = f"{value:g}".replace("-", "\N{MINUS SIGN}")
-    return f"{text} {unit}"
