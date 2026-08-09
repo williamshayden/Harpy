@@ -363,6 +363,36 @@ def test_curve_readout_survives_owner_loopback_while_its_handle_is_focused(qtbot
     assert readout.text() == "Curve 0.26"
 
 
+def test_curve_readout_prefers_decay_hover_over_attack_focus_through_owner_loopback(
+    qtbot,
+) -> None:
+    # Falling back to enum order would keep showing Attack while Decay is hovered.
+    graph = make_graph(
+        qtbot,
+        EnvelopeConfig(attack_curve=0.25, decay_curve=-0.375),
+    )
+    attack = graph.findChild(QWidget, "attackCurveHandle")
+    decay = graph.findChild(QWidget, "decayCurveHandle")
+    readout = graph.findChild(QLabel, "curveValueReadout")
+    assert attack is not None
+    assert decay is not None
+    assert readout is not None
+
+    attack.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.mouseMove(decay, decay.rect().center())
+    QApplication.processEvents()
+
+    assert attack.hasFocus()
+    assert readout.isVisible()
+    assert readout.text() == "Curve -0.375"
+
+    graph.set_envelope(replace(graph.envelope, decay_curve=-0.4))
+
+    assert attack.hasFocus()
+    assert readout.isVisible()
+    assert readout.text() == "Curve -0.4"
+
+
 def test_stale_exact_accept_after_cancellation_cannot_suppress_a_later_revert(qtbot) -> None:
     # Remembering a canceled owner response would make a later draft close as if accepted.
     graph = make_graph(qtbot)
@@ -396,6 +426,25 @@ def test_stale_or_mismatched_exact_rejection_is_a_noop(qtbot) -> None:
     graph.reject_exact_edit("attack_seconds", "late owner response")
 
     assert failures == []
+
+
+def test_clear_field_error_restores_an_open_exact_entry_description(qtbot) -> None:
+    # Clearing only the painted stage widget would leave the transient editor in error.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    assert attack is not None
+    attack.open_exact_editor()
+    entry = graph.findChild(EnvelopeValueEntry, "envelopeInlineEditor")
+    assert entry is not None
+    base_description = entry.accessibleDescription()
+
+    graph.reject_exact_edit("attack_seconds", "Attack duration is invalid.")
+    assert entry.property("validationState") == "error"
+
+    graph.clear_field_error("attack_seconds")
+
+    assert entry.property("validationState") is None
+    assert entry.accessibleDescription() == base_description
 
 
 def test_curve_readout_survives_owner_loopback_during_drag_without_focus(qtbot) -> None:
@@ -589,6 +638,12 @@ def test_handle_accessibility_reports_owner_value_and_adjusts_by_patch_request(
     assert interface is not None
     assert interface.role() == QAccessible.Role.Slider
     assert stage.value in interface.text(QAccessible.Text.Name).lower()
+    description = interface.text(QAccessible.Text.Description).lower()
+    assert "vertical drag" in description
+    assert "arrow" in description
+    assert "shift" in description
+    assert "home" in description
+    assert "linear" in description
     value_interface = interface.valueInterface()
     assert value_interface is not None
     assert value_interface.currentValue() == curves[stage.value]

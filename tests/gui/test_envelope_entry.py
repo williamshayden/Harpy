@@ -80,6 +80,21 @@ def test_parser_rejection_announces_and_restores_clean_accessibility(qtbot, monk
     assert len(events) == 1
 
 
+def test_public_error_clear_restores_the_accessible_description(qtbot) -> None:
+    # A private-only clear boundary forces owner widgets to reach into entry internals.
+    entry = EnvelopeValueEntry("Attack", EnvelopeFieldKind.DURATION)
+    qtbot.addWidget(entry)
+    base_description = "Milliseconds or seconds."
+    entry.set_editor_accessibility("Attack duration", base_description)
+    entry.set_exact_value(0.001)
+    entry.mark_commit_rejected("Attack duration is invalid.")
+
+    entry.clear_error()
+
+    assert entry.property("validationState") is None
+    assert entry.accessibleDescription() == base_description
+
+
 def assert_invalid_commit(qtbot, entry: EnvelopeValueEntry, text: str, field: str) -> None:
     # Removing any grammar or bounds check would allow an invalid proposal through.
     initial = {

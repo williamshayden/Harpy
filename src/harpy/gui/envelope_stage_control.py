@@ -238,7 +238,7 @@ class EnvelopeStageControl(QWidget):
 
     def clear_error(self) -> None:
         if self._exact_entry is not None:
-            self._exact_entry._clear_error()
+            self._exact_entry.clear_error()
 
     def _request_exact_commit(self, value: float) -> None:
         self.value_commit_requested.emit(self._stage.field_name, value)

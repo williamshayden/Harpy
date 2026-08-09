@@ -315,11 +315,25 @@ class EnvelopeGraph(QWidget):
         stage = CurveStage(stage_name)
         self.select_stage(stage)
 
-    def _update_curve_readout(self, _stage_name: str) -> None:
-        stage = next(
-            (stage for stage in CurveStage if self._handles[stage].is_contextual),
-            None,
-        )
+    def _update_curve_readout(self, stage_name: str) -> None:
+        triggering_stage = CurveStage(stage_name)
+        triggering_handle = self._handles[triggering_stage]
+        stage = triggering_stage if triggering_handle.is_contextual else None
+        if stage is None:
+            stage = next(
+                (stage for stage in CurveStage if self._handles[stage]._dragging),
+                None,
+            )
+        if stage is None:
+            stage = next(
+                (stage for stage in CurveStage if self._handles[stage].underMouse()),
+                None,
+            )
+        if stage is None:
+            stage = next(
+                (stage for stage in CurveStage if self._handles[stage].hasFocus()),
+                None,
+            )
         if stage is None:
             self._curve_readout.hide()
             return
@@ -375,6 +389,8 @@ class EnvelopeGraph(QWidget):
 
     def clear_field_error(self, field_name: str) -> None:
         control = self._value_control(field_name)
+        if control is not None:
+            control.clear_error()
         widget = control if control is not None else self._curve_handle(field_name)
         if widget is None:
             return
@@ -535,6 +551,10 @@ class _CurveHandle(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setAccessibleName(f"{stage.value.title()} curve")
+        self.setAccessibleDescription(
+            "Vertical drag adjusts curvature. Arrow keys adjust; "
+            "hold Shift for fine steps; Home resets to linear."
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
     @property

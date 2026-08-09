@@ -85,6 +85,26 @@ def test_v1_loaded_then_saved_becomes_canonical_v2() -> None:
     assert dumps_patch(loads_patch(V1_DEFAULT)) == V2_DEFAULT
 
 
+@pytest.mark.parametrize(
+    ("curve_value", "message"),
+    [
+        ("0", "envelope.curve must be a string"),
+        ('"exponential"', "envelope.curve is unsupported"),
+    ],
+)
+def test_v1_curve_diagnostics_use_the_exact_field_path(
+    curve_value: str,
+    message: str,
+) -> None:
+    # Dropping the dot breaks the codec's field-path diagnostic contract.
+    text = V1_DEFAULT.replace('"linear_amplitude"', curve_value, 1)
+
+    with pytest.raises(ValueError) as error:
+        loads_patch(text)
+
+    assert str(error.value) == message
+
+
 def test_v2_negative_zero_numbers_rewrite_as_canonical_positive_zero() -> None:
     dumped = dumps_patch(loads_patch(V2_NEGATIVE_ZERO))
 

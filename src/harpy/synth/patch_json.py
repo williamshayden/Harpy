@@ -79,9 +79,9 @@ def loads_patch(text: str) -> SynthPatch:
         _number(envelope_data[field_name], f"envelope.{field_name}")
     if schema_version == 1:
         if not isinstance(envelope_data["curve"], str):
-            raise ValueError("envelope curve must be a string")
+            raise ValueError("envelope.curve must be a string")
         if envelope_data["curve"] != "linear_amplitude":
-            raise ValueError("envelope curve is unsupported")
+            raise ValueError("envelope.curve is unsupported")
         envelope_arguments = {
             field_name: envelope_data[field_name] for field_name in numeric_fields
         }

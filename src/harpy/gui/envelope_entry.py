@@ -84,13 +84,13 @@ class EnvelopeValueEntry(QLineEdit):
         """Render and cache an exact model value without proposing a commit."""
 
         self._remember_and_render(self._validated_value(value))
-        self._clear_error()
+        self.clear_error()
 
     def accept_proposed_value(self, value: float) -> None:
         """Cache and canonicalize a proposal accepted by the owning editor."""
 
         self._remember_and_render(self._validated_value(value))
-        self._clear_error()
+        self.clear_error()
 
     def mark_commit_rejected(self, message: str) -> None:
         """Mark a parent-rejected draft without changing its text or accepted cache."""
@@ -108,7 +108,7 @@ class EnvelopeValueEntry(QLineEdit):
         """Restore the last parent-accepted canonical rendering without emitting."""
 
         self.setText(self._last_rendered_text)
-        self._clear_error()
+        self.clear_error()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
@@ -132,7 +132,7 @@ class EnvelopeValueEntry(QLineEdit):
         except ValueError as error:
             self._set_error(str(error))
             return
-        self._clear_error()
+        self.clear_error()
         self.value_commit_requested.emit(value)
 
     def _parse(self, text: str) -> float:
@@ -192,7 +192,9 @@ class EnvelopeValueEntry(QLineEdit):
         QAccessible.updateAccessibility(QAccessibleAnnouncementEvent(self, message))
         self.validation_failed.emit(message)
 
-    def _clear_error(self) -> None:
+    def clear_error(self) -> None:
+        """Restore the clean validation and accessibility state."""
+
         self.setProperty("validationState", None)
         self._repolish()
         if self._base_accessible_description is not None:
