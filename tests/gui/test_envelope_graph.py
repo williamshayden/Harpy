@@ -36,28 +36,28 @@ def send_handle_drag(
     x_offsets: list[int] | None = None,
 ) -> None:
     origin = handle.rect().center()
+    press_global = handle.mapToGlobal(origin)
     horizontal = x_offsets if x_offsets is not None else [0] * len(y_offsets)
     assert len(horizontal) == len(y_offsets)
     QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=origin)
     for x_offset, y_offset in zip(horizontal, y_offsets, strict=True):
-        position = QPointF(origin.x() + x_offset, origin.y() + y_offset)
+        global_position = press_global + QPoint(x_offset, y_offset)
+        position = QPointF(handle.mapFromGlobal(global_position))
         event = QMouseEvent(
             QEvent.Type.MouseMove,
             position,
             position,
-            handle.mapToGlobal(position.toPoint()),
+            QPointF(global_position),
             Qt.MouseButton.NoButton,
             Qt.MouseButton.LeftButton,
             Qt.KeyboardModifier.NoModifier,
         )
         QApplication.sendEvent(handle, event)
+    release_global = press_global + QPoint(horizontal[-1], y_offsets[-1])
     QTest.mouseRelease(
         handle,
         Qt.MouseButton.LeftButton,
-        pos=QPoint(
-            origin.x() + horizontal[-1],
-            origin.y() + y_offsets[-1],
-        ),
+        pos=handle.mapFromGlobal(release_global),
     )
 
 
@@ -74,6 +74,14 @@ def render_widget(widget: QWidget) -> QImage:
 
 def image_bytes(image: QImage) -> bytes:
     return bytes(image.constBits()[: image.sizeInBytes()])
+
+
+def send_native_double_click_sequence(handle: QWidget) -> None:
+    position = handle.rect().center()
+    QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=position)
+    QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=position)
+    QTest.mouseDClick(handle, Qt.MouseButton.LeftButton, pos=position)
+    QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=position)
 
 
 def test_stage_fractions_keep_fixed_sustain_and_log_distribute_durations() -> None:
@@ -129,6 +137,23 @@ def test_vertical_drag_previews_each_move_and_commits_once_on_release(qtbot) -> 
     assert len(previews) == 3
     assert all(stage == "attack" and -1.0 <= value <= 1.0 for stage, value in previews)
     assert commits == [previews[-1]]
+
+
+def test_owner_loopback_relayout_keeps_release_at_last_global_pointer_position(qtbot) -> None:
+    # Child-local deltas feed handle relayout back into the next move and corrupt release value.
+    graph = make_graph(qtbot)
+    accept_graph_proposals(graph)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    assert handle is not None
+    previews: list[tuple[str, float]] = []
+    commits: list[tuple[str, float]] = []
+    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
+    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+
+    send_handle_drag(handle, y_offsets=[-6, -12, -18])
+
+    assert commits == [previews[-1]]
+    assert len(previews) == 3
 
 
 def test_horizontal_motion_cannot_change_drag_curvature(qtbot) -> None:
@@ -309,6 +334,21 @@ def test_escape_reverts_without_commit_and_double_click_commits_only_stage_zero(
     QTest.mouseDClick(handle, Qt.MouseButton.LeftButton, pos=handle.rect().center())
     assert reverts == [stage.value]
     assert commits == [(stage.value, 0.0)]
+
+
+def test_native_double_click_sequence_emits_only_one_zero_reset_commit(qtbot) -> None:
+    # Committing the first click's unchanged value creates an extra patch before the reset.
+    graph = make_graph(qtbot, EnvelopeConfig(attack_curve=0.4))
+    accept_graph_proposals(graph)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    assert handle is not None
+    commits: list[tuple[str, float]] = []
+    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+
+    send_native_double_click_sequence(handle)
+
+    assert commits == [("attack", 0.0)]
+    assert graph.envelope.attack_curve == 0.0
 
 
 @pytest.mark.parametrize("stage", list(CurveStage))

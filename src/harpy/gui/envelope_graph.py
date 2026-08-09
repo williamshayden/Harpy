@@ -354,8 +354,9 @@ class _CurveHandle(QWidget):
         super().__init__(parent)
         self._stage = stage
         self._current_curve = current_curve
-        self._drag_origin_y: float | None = None
+        self._drag_origin_global_y: float | None = None
         self._drag_origin_curve: float | None = None
+        self._drag_had_preview = False
         self._selecting_from_press = False
         self.setObjectName(f"{stage.value}CurveHandle")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -387,16 +388,18 @@ class _CurveHandle(QWidget):
             self.selected.emit(self._stage.value)
             graph = self.parentWidget()
             if isinstance(graph, EnvelopeGraph) and graph._stage_mouse_adjustable(self._stage):
-                self._drag_origin_y = event.position().y()
+                self._drag_origin_global_y = event.globalPosition().y()
                 self._drag_origin_curve = self.current_curve
+                self._drag_had_preview = False
                 self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        value = self._drag_value(event.position().y())
+        value = self._drag_value(event.globalPosition().y())
         if value is not None and value != self.current_curve:
+            self._drag_had_preview = True
             self.previewed.emit(self._stage.value, value)
         if self._drag_origin_curve is not None:
             event.accept()
@@ -405,11 +408,13 @@ class _CurveHandle(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() is Qt.MouseButton.LeftButton and self._drag_origin_curve is not None:
-            value = self._drag_value(event.position().y())
-            self._drag_origin_y = None
+            value = self._drag_value(event.globalPosition().y())
+            had_preview = self._drag_had_preview
+            self._drag_origin_global_y = None
             self._drag_origin_curve = None
+            self._drag_had_preview = False
             self.releaseMouse()
-            if value is not None:
+            if value is not None and had_preview:
                 self.commit_requested.emit(self._stage.value, value)
             event.accept()
             return
@@ -417,6 +422,7 @@ class _CurveHandle(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() is Qt.MouseButton.LeftButton:
+            self._cancel_drag()
             self.commit_requested.emit(self._stage.value, 0.0)
             event.accept()
             return
@@ -474,13 +480,14 @@ class _CurveHandle(QWidget):
 
     def _cancel_drag(self) -> None:
         was_dragging = self._drag_origin_curve is not None
-        self._drag_origin_y = None
+        self._drag_origin_global_y = None
         self._drag_origin_curve = None
+        self._drag_had_preview = False
         if was_dragging:
             self.releaseMouse()
 
-    def _drag_value(self, pointer_y: float) -> float | None:
-        if self._drag_origin_y is None or self._drag_origin_curve is None:
+    def _drag_value(self, pointer_global_y: float) -> float | None:
+        if self._drag_origin_global_y is None or self._drag_origin_curve is None:
             return None
         graph = self.parentWidget()
         if not isinstance(graph, EnvelopeGraph):
@@ -488,7 +495,7 @@ class _CurveHandle(QWidget):
         return graph._curve_from_vertical_delta(
             self._stage,
             self._drag_origin_curve,
-            pointer_y - self._drag_origin_y,
+            pointer_global_y - self._drag_origin_global_y,
         )
 
 
