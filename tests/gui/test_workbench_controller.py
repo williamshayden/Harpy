@@ -5,6 +5,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 
+import harpy.gui.workbench_controller as workbench_controller
 from harpy.analysis import AnalysisConfig, AudioObservation
 from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
 from harpy.gui.workbench_controller import WorkbenchController
@@ -74,6 +75,7 @@ def test_initial_state_is_tuned_c3_and_semantically_idle() -> None:
     assert not state.gate_held
     assert not state.voice_may_be_active
     assert state.patch == SynthPatch()
+    assert state.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
     assert state.capture.state is CaptureState.EMPTY
     assert state.capture.observation is None
     assert state.audio_available
@@ -270,6 +272,177 @@ def test_replace_patch_is_one_atomic_audio_command() -> None:
     assert state.capture.state is CaptureState.EMPTY
 
 
+def test_immediate_loaded_patch_discards_pending_and_stops_voice() -> None:
+    controller, commands, _ = make_controller()
+    voice_generation = controller.press_play().capture.generation
+    controller.commit_authored_patch(SynthPatch(envelope=EnvelopeConfig(attack_curve=0.5)))
+    loaded = SynthPatch(envelope=EnvelopeConfig(release_curve=-0.75))
+
+    state = controller.replace_patch(loaded)
+    stale = controller.mark_voice_idle(voice_generation)
+
+    assert state == stale
+    assert state.patch == loaded
+    assert state.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert not state.gate_held
+    assert not state.voice_may_be_active
+    assert state.capture.state is CaptureState.EMPTY
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert commands[-1].patch == loaded
+    assert commands[-1].generation == state.capture.generation
+
+
+def test_idle_authoring_applies_one_complete_patch_and_clears_capture() -> None:
+    controller, commands, _ = make_controller()
+    patch = SynthPatch(envelope=EnvelopeConfig(attack_curve=0.5))
+
+    state = controller.commit_authored_patch(patch)
+
+    assert state.patch == patch
+    assert state.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert state.capture.state is CaptureState.EMPTY
+    assert [command.kind for command in commands] == [AudioCommandKind.REPLACE_PATCH]
+    assert commands[0].patch == patch
+    assert commands[0].generation == state.capture.generation
+
+
+def test_held_authoring_changes_intent_without_touching_current_voice_or_capture() -> None:
+    controller, commands, _ = make_controller()
+    active = controller.press_play()
+    patch = SynthPatch(envelope=EnvelopeConfig(decay_curve=-0.5))
+
+    state = controller.commit_authored_patch(patch)
+
+    assert state.patch == patch
+    assert state.patch_apply_state is workbench_controller.PatchApplyState.PENDING
+    assert state.gate_held
+    assert state.voice_may_be_active
+    assert state.capture is active.capture
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+
+
+def test_pending_authoring_coalesces_until_matching_idle_then_next_play() -> None:
+    controller, commands, _ = make_controller()
+    original_generation = controller.press_play().capture.generation
+    patch_a = SynthPatch(envelope=EnvelopeConfig(attack_curve=0.25))
+    patch_b = SynthPatch(envelope=EnvelopeConfig(decay_curve=-0.75))
+    controller.commit_authored_patch(patch_a)
+    controller.commit_authored_patch(patch_b)
+    controller.release_play()
+    pending = controller.state
+
+    blocked = controller.press_play()
+    stale = controller.mark_voice_idle(original_generation - 1)
+
+    assert blocked == pending
+    assert stale == pending
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+    applied = controller.mark_voice_idle(original_generation)
+
+    assert applied.patch == patch_b
+    assert applied.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert applied.capture.generation == original_generation + 1
+    assert applied.capture.state is CaptureState.EMPTY
+    assert commands[-1].patch == patch_b
+    assert commands[-1].generation == applied.capture.generation
+
+    replayed = controller.press_play()
+
+    assert replayed.capture.generation == applied.capture.generation + 1
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+        AudioCommandKind.REPLACE_PATCH,
+        AudioCommandKind.NOTE_ON,
+    ]
+
+
+def test_release_phase_authoring_waits_for_matching_idle() -> None:
+    controller, commands, _ = make_controller()
+    generation = controller.press_play().capture.generation
+    controller.release_play()
+    patch = SynthPatch(envelope=EnvelopeConfig(release_curve=0.5))
+
+    pending = controller.commit_authored_patch(patch)
+
+    assert not pending.gate_held
+    assert pending.voice_may_be_active
+    assert pending.patch_apply_state is workbench_controller.PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+    applied = controller.mark_voice_idle(generation)
+
+    assert not applied.voice_may_be_active
+    assert applied.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert commands[-1].kind is AudioCommandKind.REPLACE_PATCH
+    assert commands[-1].patch == patch
+
+
+def test_active_clear_aliases_only_current_idle_for_pending_patch() -> None:
+    controller, commands, _ = make_controller()
+    note_generation = controller.press_play().capture.generation
+    patch = SynthPatch(envelope=EnvelopeConfig(attack_curve=-0.25))
+    controller.commit_authored_patch(patch)
+
+    cleared = controller.clear_measurement()
+    clear_generation = cleared.capture.generation
+    stale = controller.mark_voice_idle(note_generation)
+    controller.release_play()
+
+    assert clear_generation == note_generation + 1
+    assert cleared.patch_apply_state is workbench_controller.PatchApplyState.PENDING
+    assert cleared.capture.state is CaptureState.MEASURING
+    assert stale.voice_may_be_active
+    assert stale.patch_apply_state is workbench_controller.PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.CLEAR_CAPTURE,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+    applied = controller.mark_voice_idle(clear_generation)
+
+    assert not applied.voice_may_be_active
+    assert applied.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert applied.capture.generation == clear_generation + 1
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.CLEAR_CAPTURE,
+        AudioCommandKind.NOTE_OFF,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert commands[-1].patch == patch
+
+
+def test_authoring_applied_patch_cancels_pending_without_replacement() -> None:
+    controller, commands, _ = make_controller()
+    applied_patch = controller.state.patch
+    generation = controller.press_play().capture.generation
+    controller.commit_authored_patch(SynthPatch(envelope=EnvelopeConfig(decay_curve=0.5)))
+
+    reverted = controller.commit_authored_patch(applied_patch)
+    controller.release_play()
+    idle = controller.mark_voice_idle(generation)
+
+    assert reverted.patch == applied_patch
+    assert reverted.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert idle.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+
 def test_unrenderable_patch_leaves_controller_capture_and_commands_unchanged() -> None:
     controller, commands, _ = make_controller()
     controller.press_play()
@@ -336,7 +509,30 @@ def test_force_stop_is_idempotent_and_allocates_one_reset_generation() -> None:
     assert stopped == stopped_again
     assert not stopped.gate_held
     assert not stopped.voice_may_be_active
+    assert stopped.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
     assert stopped.capture.state is CaptureState.EMPTY
+
+
+def test_force_stop_applies_latest_pending_patch_once_instead_of_reset() -> None:
+    controller, commands, _ = make_controller()
+    controller.press_play()
+    latest = SynthPatch(envelope=EnvelopeConfig(release_curve=0.75))
+    controller.commit_authored_patch(latest)
+
+    stopped = controller.force_stop()
+    stopped_again = controller.force_stop()
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert commands[-1].patch == latest
+    assert commands[-1].generation == stopped.capture.generation
+    assert stopped == stopped_again
+    assert stopped.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert stopped.capture.state is CaptureState.EMPTY
+    assert not stopped.gate_held
+    assert not stopped.voice_may_be_active
 
 
 def test_force_stop_resets_capture_retained_after_voice_becomes_idle() -> None:
@@ -406,3 +602,95 @@ def test_device_failure_callback_orders_share_one_idempotent_force_stop_path(
     assert not final.audio_available
     assert final.audio_error == "device failed"
     assert final.capture.state is CaptureState.EMPTY
+
+
+@pytest.mark.parametrize("availability_first", [True, False])
+def test_pending_device_failure_callback_orders_apply_latest_patch_once(
+    availability_first: bool,
+) -> None:
+    controller, commands, _ = make_controller()
+    controller.press_play()
+    latest = SynthPatch(envelope=EnvelopeConfig(decay_curve=-0.5))
+    controller.commit_authored_patch(latest)
+
+    if availability_first:
+        controller.set_audio_availability(False, "device failed")
+        controller.force_stop()
+    else:
+        controller.force_stop()
+        controller.set_audio_availability(False, "device failed")
+    controller.force_stop()
+    final = controller.set_audio_availability(False, "device failed")
+
+    replacements = [
+        command for command in commands if command.kind is AudioCommandKind.REPLACE_PATCH
+    ]
+    assert len(replacements) == 1
+    assert replacements[0].patch == latest
+    assert replacements[0].generation == final.capture.generation
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert final.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert not final.audio_available
+    assert final.audio_error == "device failed"
+    assert final.capture.state is CaptureState.EMPTY
+
+
+def test_idle_authoring_while_unavailable_updates_backend_patch_cache() -> None:
+    controller, commands, _ = make_controller()
+    controller.set_audio_availability(False, "device missing")
+    patch = SynthPatch(envelope=EnvelopeConfig(attack_curve=0.75))
+
+    state = controller.commit_authored_patch(patch)
+
+    assert state.patch == patch
+    assert state.patch_apply_state is workbench_controller.PatchApplyState.APPLIED
+    assert not state.audio_available
+    assert state.audio_error == "device missing"
+    assert [command.kind for command in commands] == [AudioCommandKind.REPLACE_PATCH]
+    assert commands[0].patch == patch
+    assert commands[0].generation == state.capture.generation
+
+
+@pytest.mark.parametrize(
+    ("candidate", "message"),
+    [
+        (
+            SynthPatch(envelope=EnvelopeConfig(attack_seconds=1e-12)),
+            "at least one frame",
+        ),
+        (
+            SynthPatch(envelope=EnvelopeConfig(attack_seconds=1e308)),
+            "attack_seconds",
+        ),
+        (EnvelopeConfig(), "SynthPatch"),
+        (None, "SynthPatch"),
+    ],
+)
+def test_invalid_authored_patch_is_atomic(candidate: object, message: str) -> None:
+    controller, commands, history = make_controller()
+    controller.press_play()
+    before_state = controller.state
+    before_commands = tuple(commands)
+    before_generation = history.generation
+
+    with pytest.raises(ValueError, match=message):
+        controller.commit_authored_patch(candidate)  # type: ignore[arg-type]
+
+    assert controller.state == before_state
+    assert history.generation == before_generation
+    assert tuple(commands) == before_commands
+
+
+def test_same_patch_idle_authoring_commit_is_exact_no_op() -> None:
+    controller, commands, history = make_controller()
+    before = controller.state
+    before_generation = history.generation
+
+    same = controller.commit_authored_patch(before.patch)
+
+    assert same == before
+    assert history.generation == before_generation
+    assert commands == []
