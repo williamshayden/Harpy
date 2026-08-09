@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleValueChangeEvent,
@@ -23,9 +23,10 @@ from PySide6.QtGui import (
     QPen,
     QResizeEvent,
 )
-from PySide6.QtWidgets import QAccessibleWidget, QWidget
+from PySide6.QtWidgets import QAccessibleWidget, QApplication, QLabel, QWidget
 
-from harpy.gui.envelope_entry import format_envelope_duration
+from harpy.gui.envelope_entry import format_envelope_curvature
+from harpy.gui.envelope_stage_control import EnvelopeStageControl, EnvelopeValueStage
 from harpy.synth.curves import (
     curvature_from_control_level,
     quadratic_control_level,
@@ -44,7 +45,7 @@ class CurveStage(StrEnum):
 class EnvelopeGraphGeometry:
     contents: QRectF
     stage_rects: tuple[tuple[str, QRectF], ...]
-    label_rects: tuple[QRectF, ...]
+    stage_control_rects: tuple[tuple[str, QRectF], ...]
     handle_centers: tuple[tuple[CurveStage, QPointF], ...]
 
 
@@ -80,6 +81,11 @@ class EnvelopeGraph(QWidget):
     curve_commit_requested = Signal(str, float)
     curve_reverted = Signal(str)
     stage_selected = Signal(str)
+    field_previewed = Signal(str, float)
+    field_commit_requested = Signal(str, float)
+    field_reverted = Signal(str)
+    field_validation_failed = Signal(str, str)
+    field_editing_changed = Signal(str, bool)
 
     def __init__(self, render: RenderConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -90,12 +96,35 @@ class EnvelopeGraph(QWidget):
         self._selected_stage = CurveStage.ATTACK
         self._geometry = self._calculate_geometry()
         self._handles: dict[CurveStage, _CurveHandle] = {}
+        self._stage_controls: dict[EnvelopeValueStage, EnvelopeStageControl] = {}
+        self._editing_control: EnvelopeStageControl | None = None
+        self._accepted_exact_field: str | None = None
+        self._suppress_field_revert = False
+        self._curve_readout = QLabel(self)
+        self._curve_readout.setObjectName("curveValueReadout")
+        self._curve_readout.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._curve_readout.hide()
+        for stage in EnvelopeValueStage:
+            control = EnvelopeStageControl(
+                stage,
+                self._render,
+                lambda stage=stage: getattr(self._envelope, stage.field_name),
+                self,
+            )
+            control.setToolTip(f"Adjust {stage.value} value")
+            control.value_previewed.connect(self.field_previewed)
+            control.value_commit_requested.connect(self.field_commit_requested)
+            control.value_reverted.connect(self.field_reverted)
+            control.validation_failed.connect(self.field_validation_failed)
+            control.editing_changed.connect(self._stage_editing_changed)
+            self._stage_controls[stage] = control
         for stage in CurveStage:
             handle = _CurveHandle(stage, lambda stage=stage: self._curve_value(stage), self)
             handle.previewed.connect(self.curve_previewed)
             handle.commit_requested.connect(self.curve_commit_requested)
             handle.reverted.connect(self.curve_reverted)
             handle.selected.connect(self._handle_selected)
+            handle.context_changed.connect(self._update_curve_readout)
             self._handles[stage] = handle
         self.setMinimumSize(240, 150)
         self._layout_graph()
@@ -107,12 +136,18 @@ class EnvelopeGraph(QWidget):
         self._envelope = envelope
         self._layout_graph()
         self.update()
+        for stage, control in self._stage_controls.items():
+            old_value = getattr(previous, stage.field_name)
+            new_value = getattr(envelope, stage.field_name)
+            if old_value != new_value:
+                control.owner_value_changed(old_value, new_value)
         for stage, handle in self._handles.items():
             handle.update()
             old_value = getattr(previous, f"{stage.value}_curve")
             new_value = getattr(envelope, f"{stage.value}_curve")
             if old_value != new_value:
                 QAccessible.updateAccessibility(QAccessibleValueChangeEvent(handle, new_value))
+            handle.context_changed.emit(stage.value)
 
     def select_stage(self, stage: CurveStage) -> None:
         selected = CurveStage(stage)
@@ -147,7 +182,9 @@ class EnvelopeGraph(QWidget):
         return EnvelopeGraphGeometry(
             contents=QRectF(geometry.contents),
             stage_rects=tuple((name, QRectF(rect)) for name, rect in geometry.stage_rects),
-            label_rects=tuple(QRectF(rect) for rect in geometry.label_rects),
+            stage_control_rects=tuple(
+                (name, QRectF(rect)) for name, rect in geometry.stage_control_rects
+            ),
             handle_centers=tuple(
                 (stage, QPointF(center)) for stage, center in geometry.handle_centers
             ),
@@ -225,24 +262,6 @@ class EnvelopeGraph(QWidget):
             QPointF(sustain_rect.right(), sustain_y),
         )
 
-        label_font = painter.font()
-        label_font.setPixelSize(10)
-        label_font.setBold(True)
-        painter.setFont(label_font)
-        painter.setPen(QColor("#aab7c8"))
-        duration_labels = (
-            f"A  {format_envelope_duration(self._envelope.attack_seconds)}",
-            f"D  {format_envelope_duration(self._envelope.decay_seconds)}",
-            "S  hold",
-            f"R  {format_envelope_duration(self._envelope.release_seconds)}",
-        )
-        for rect, text in zip(geometry.label_rects, duration_labels, strict=True):
-            painter.drawText(
-                rect,
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                text,
-            )
-
     def _curve_value(self, stage: CurveStage) -> float:
         return getattr(self._envelope, f"{stage.value}_curve")
 
@@ -290,14 +309,131 @@ class EnvelopeGraph(QWidget):
         self.select_stage(stage)
         self.stage_selected.emit(stage.value)
 
+    def _update_curve_readout(self, stage_name: str) -> None:
+        handle = self._handles[CurveStage(stage_name)]
+        if not handle.is_contextual:
+            self._curve_readout.hide()
+            return
+        self._curve_readout.setText(
+            f"Curve {format_envelope_curvature(self._curve_value(CurveStage(stage_name)))}"
+        )
+        self._curve_readout.adjustSize()
+        position = handle.geometry().bottomLeft()
+        self._curve_readout.move(
+            round(min(position.x(), self.width() - self._curve_readout.width())),
+            round(min(position.y() + 4, self.height() - self._curve_readout.height())),
+        )
+        self._curve_readout.show()
+
+    def accept_exact_edit(self, field_name: str, value: float) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            self._accepted_exact_field = field_name
+            control.accept_exact_value(value)
+
+    def reject_exact_edit(self, field_name: str, message: str) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            control.reject_exact_value(message)
+
+    def mark_field_error(self, field_name: str, message: str) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            control.mark_error(message)
+            return
+        handle = self._curve_handle(field_name)
+        if handle is not None:
+            handle.mark_error(message)
+
+    def clear_field_error(self, field_name: str) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            control.clear_error()
+            return
+        handle = self._curve_handle(field_name)
+        if handle is not None:
+            handle.clear_error()
+
+    def cancel_interactions(self, emit_revert: bool = True) -> None:
+        if self._editing_control is not None:
+            self._suppress_field_revert = not emit_revert
+            try:
+                self._editing_control._close_exact_editor(return_focus=False)
+            finally:
+                self._suppress_field_revert = False
+        for control in self._stage_controls.values():
+            control.cancel_interaction(emit_revert=emit_revert)
+        for handle in self._handles.values():
+            handle.cancel_interaction(emit_revert=emit_revert)
+
+    def _value_control(self, field_name: str) -> EnvelopeStageControl | None:
+        for stage, control in self._stage_controls.items():
+            if stage.field_name == field_name:
+                return control
+        return None
+
+    def _curve_handle(self, field_name: str) -> _CurveHandle | None:
+        for stage, handle in self._handles.items():
+            if field_name == f"{stage.value}_curve":
+                return handle
+        return None
+
+    def _stage_editing_changed(self, field_name: str, is_editing: bool) -> None:
+        control = self._value_control(field_name)
+        if is_editing and control is not None:
+            if self._editing_control is not None and self._editing_control is not control:
+                self._suppress_field_revert = True
+                try:
+                    self._editing_control._close_exact_editor(return_focus=False)
+                finally:
+                    self._suppress_field_revert = False
+            self._editing_control = control
+        elif control is self._editing_control:
+            self._editing_control = None
+        if not is_editing:
+            if self._accepted_exact_field == field_name:
+                self._accepted_exact_field = None
+            elif not self._suppress_field_revert:
+                self.field_reverted.emit(field_name)
+        self.field_editing_changed.emit(field_name, is_editing)
+
     def _layout_graph(self) -> None:
         self._geometry = self._calculate_geometry()
         centers = dict(self._geometry.handle_centers)
+        control_rects = dict(self._geometry.stage_control_rects)
+        for stage, control in self._stage_controls.items():
+            rect = control_rects[stage.value]
+            left = math.ceil(rect.left())
+            top = math.ceil(rect.top())
+            right = math.floor(rect.right())
+            bottom = math.floor(rect.bottom())
+            control.setGeometry(left, top, max(24, right - left), max(24, bottom - top))
         for stage, handle in self._handles.items():
             center = centers[stage]
-            handle.resize(18, 18)
-            handle.move(round(center.x()) - 9, round(center.y()) - 9)
+            handle.resize(24, 24)
+            handle.move(round(center.x()) - 12, round(center.y()) - 12)
             handle.raise_()
+        for first, second in zip(
+            (
+                self._stage_controls[EnvelopeValueStage.ATTACK],
+                self._handles[CurveStage.ATTACK],
+                self._stage_controls[EnvelopeValueStage.DECAY],
+                self._handles[CurveStage.DECAY],
+                self._stage_controls[EnvelopeValueStage.SUSTAIN],
+                self._stage_controls[EnvelopeValueStage.RELEASE],
+                self._handles[CurveStage.RELEASE],
+            ),
+            (
+                self._handles[CurveStage.ATTACK],
+                self._stage_controls[EnvelopeValueStage.DECAY],
+                self._handles[CurveStage.DECAY],
+                self._stage_controls[EnvelopeValueStage.SUSTAIN],
+                self._stage_controls[EnvelopeValueStage.RELEASE],
+                self._handles[CurveStage.RELEASE],
+            ),
+            strict=False,
+        ):
+            QWidget.setTabOrder(first, second)
 
     def _calculate_geometry(self) -> EnvelopeGraphGeometry:
         contents = QRectF(
@@ -307,7 +443,7 @@ class EnvelopeGraph(QWidget):
             max(1.0, self.height() - 20.0),
         )
         plot_top = contents.top() + 20.0
-        plot_bottom = max(plot_top + 1.0, contents.bottom() - 28.0)
+        plot_bottom = max(plot_top + 1.0, contents.bottom() - 32.0)
         plot_height = plot_bottom - plot_top
         fractions = envelope_stage_fractions(self._envelope, self._render)
         stage_rects: list[tuple[str, QRectF]] = []
@@ -316,8 +452,9 @@ class EnvelopeGraph(QWidget):
             right = contents.right() if index == 3 else x + contents.width() * fractions[name]
             stage_rects.append((name, QRectF(x, plot_top, right - x, plot_height)))
             x = right
-        label_rects = tuple(
-            QRectF(rect.left(), plot_bottom + 4.0, rect.width(), 18.0) for _, rect in stage_rects
+        stage_control_rects = tuple(
+            (name, QRectF(rect.left(), plot_bottom + 4.0, rect.width(), 24.0))
+            for name, rect in stage_rects
         )
         rect_by_name = dict(stage_rects)
         handle_centers = []
@@ -334,7 +471,7 @@ class EnvelopeGraph(QWidget):
         return EnvelopeGraphGeometry(
             contents=contents,
             stage_rects=tuple(stage_rects),
-            label_rects=label_rects,
+            stage_control_rects=stage_control_rects,
             handle_centers=tuple(handle_centers),
         )
 
@@ -344,6 +481,7 @@ class _CurveHandle(QWidget):
     commit_requested = Signal(str, float)
     reverted = Signal(str)
     selected = Signal(str)
+    context_changed = Signal(str)
 
     def __init__(
         self,
@@ -355,8 +493,11 @@ class _CurveHandle(QWidget):
         self._stage = stage
         self._current_curve = current_curve
         self._drag_origin_global_y: float | None = None
+        self._drag_origin_global_x: float | None = None
         self._drag_origin_curve: float | None = None
         self._drag_had_preview = False
+        self._dragging = False
+        self._error_message: str | None = None
         self._selecting_from_press = False
         self.setObjectName(f"{stage.value}CurveHandle")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -368,15 +509,30 @@ class _CurveHandle(QWidget):
     def current_curve(self) -> float:
         return self._current_curve()
 
+    @property
+    def is_contextual(self) -> bool:
+        return self.underMouse() or self.hasFocus() or self._dragging
+
     def focusInEvent(self, event: QFocusEvent) -> None:
         if not self._selecting_from_press:
             self.selected.emit(self._stage.value)
         self.update()
+        self.context_changed.emit(self._stage.value)
         super().focusInEvent(event)
 
     def focusOutEvent(self, event: QFocusEvent) -> None:
         self.update()
+        self.context_changed.emit(self._stage.value)
         super().focusOutEvent(event)
+
+    def enterEvent(self, event: QEvent) -> None:
+        self.context_changed.emit(self._stage.value)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        if not self._dragging:
+            self.context_changed.emit(self._stage.value)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() is Qt.MouseButton.LeftButton:
@@ -389,14 +545,28 @@ class _CurveHandle(QWidget):
             graph = self.parentWidget()
             if isinstance(graph, EnvelopeGraph) and graph._stage_mouse_adjustable(self._stage):
                 self._drag_origin_global_y = event.globalPosition().y()
+                self._drag_origin_global_x = event.globalPosition().x()
                 self._drag_origin_curve = self.current_curve
                 self._drag_had_preview = False
-                self.grabMouse()
+                self._dragging = False
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_origin_curve is not None and not self._dragging:
+            if (
+                math.hypot(
+                    event.globalPosition().x() - self._drag_origin_global_x,
+                    event.globalPosition().y() - self._drag_origin_global_y,
+                )
+                < QApplication.startDragDistance()
+            ):
+                event.accept()
+                return
+            self._dragging = True
+            self.grabMouse()
+            self.context_changed.emit(self._stage.value)
         value = self._drag_value(event.globalPosition().y())
         if value is not None and value != self.current_curve:
             self._drag_had_preview = True
@@ -410,36 +580,31 @@ class _CurveHandle(QWidget):
         if event.button() is Qt.MouseButton.LeftButton and self._drag_origin_curve is not None:
             value = self._drag_value(event.globalPosition().y())
             had_preview = self._drag_had_preview
+            was_dragging = self._dragging
             self._drag_origin_global_y = None
+            self._drag_origin_global_x = None
             self._drag_origin_curve = None
             self._drag_had_preview = False
-            self.releaseMouse()
-            if value is not None and had_preview:
+            self._dragging = False
+            if was_dragging:
+                self.releaseMouse()
+            if was_dragging and value is not None and had_preview:
                 self.commit_requested.emit(self._stage.value, value)
+            self.context_changed.emit(self._stage.value)
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() is Qt.MouseButton.LeftButton:
-            self._cancel_drag()
-            self.commit_requested.emit(self._stage.value, 0.0)
+            self.cancel_interaction(emit_revert=False)
+            self._request_curve(0.0)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
-        handled_keys = {
-            Qt.Key.Key_Up,
-            Qt.Key.Key_Right,
-            Qt.Key.Key_Down,
-            Qt.Key.Key_Left,
-            Qt.Key.Key_Home,
-        }
-        if event.isAutoRepeat() and key in handled_keys:
-            event.accept()
-            return
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Right):
             step = 0.001 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 0.01
             self._request_curve(self.current_curve + step)
@@ -455,11 +620,16 @@ class _CurveHandle(QWidget):
             event.accept()
             return
         if key == Qt.Key.Key_Escape:
-            self._cancel_drag()
-            self.reverted.emit(self._stage.value)
+            self.cancel_interaction()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.UngrabMouse and self._dragging:
+            self.cancel_interaction()
+            return True
+        return super().event(event)
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -475,16 +645,34 @@ class _CurveHandle(QWidget):
         painter.setBrush(QColor("#bd8cff") if selected else QColor("#69dcff"))
         painter.drawEllipse(center, 5.5, 5.5)
 
-    def _request_curve(self, value: float) -> None:
-        self.commit_requested.emit(self._stage.value, min(max(float(value), -1.0), 1.0))
+    def mark_error(self, message: str) -> None:
+        self._error_message = message
+        self.setProperty("validationState", "error")
+        self.update()
 
-    def _cancel_drag(self) -> None:
-        was_dragging = self._drag_origin_curve is not None
+    def clear_error(self) -> None:
+        self._error_message = None
+        self.setProperty("validationState", None)
+        self.update()
+
+    def _request_curve(self, value: float) -> None:
+        proposed = min(max(float(value), -1.0), 1.0)
+        if proposed != self.current_curve:
+            self.commit_requested.emit(self._stage.value, proposed)
+
+    def cancel_interaction(self, emit_revert: bool = True) -> None:
+        was_dragging = self._dragging
+        had_preview = self._drag_had_preview
         self._drag_origin_global_y = None
+        self._drag_origin_global_x = None
         self._drag_origin_curve = None
         self._drag_had_preview = False
+        self._dragging = False
         if was_dragging:
             self.releaseMouse()
+        if emit_revert and had_preview:
+            self.reverted.emit(self._stage.value)
+        self.context_changed.emit(self._stage.value)
 
     def _drag_value(self, pointer_global_y: float) -> float | None:
         if self._drag_origin_global_y is None or self._drag_origin_curve is None:

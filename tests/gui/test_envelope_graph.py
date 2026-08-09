@@ -2,12 +2,14 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
 from PySide6.QtGui import QAccessible, QImage, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
+from harpy.gui.envelope_entry import EnvelopeValueEntry
 from harpy.gui.envelope_graph import CurveStage, EnvelopeGraph, envelope_stage_fractions
+from harpy.gui.envelope_stage_control import EnvelopeStageControl
 from harpy.synth.curves import evaluate_quadratic_segment, sample_envelope_preview
 from harpy.synth.models import EnvelopeConfig, RenderConfig
 
@@ -28,6 +30,14 @@ def accept_graph_proposals(graph: EnvelopeGraph) -> None:
 
     graph.curve_previewed.connect(accept_graph_curve)
     graph.curve_commit_requested.connect(accept_graph_curve)
+
+
+def accept_value_field_proposals(graph: EnvelopeGraph) -> None:
+    def accept(field_name: str, value: float) -> None:
+        graph.set_envelope(replace(graph.envelope, **{field_name: value}))
+
+    graph.field_previewed.connect(accept)
+    graph.field_commit_requested.connect(accept)
 
 
 def send_handle_drag(
@@ -121,6 +131,46 @@ def test_stage_fractions_follow_exact_log_weight_ratio() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("attackValueControl", "A 125 ms"),
+        ("decayValueControl", "D 400 ms"),
+        ("sustainValueControl", "S -9 dB"),
+        ("releaseValueControl", "R 850 ms"),
+    ],
+)
+def test_graph_uses_real_inline_controls_and_actual_sustain(qtbot, name: str, text: str) -> None:
+    # Painted duration labels would leave graph values inaccessible and sustain misleading.
+    graph = make_graph(
+        qtbot,
+        EnvelopeConfig(
+            attack_seconds=0.125,
+            decay_seconds=0.400,
+            sustain_db=-9.0,
+            release_seconds=0.850,
+        ),
+    )
+
+    control = graph.findChild(EnvelopeStageControl, name)
+
+    assert control is not None
+    assert control.display_text == text
+    assert "hold" not in control.display_text.lower()
+    assert control.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert control.cursor().shape() == Qt.CursorShape.SizeVerCursor
+    assert control.toolTip()
+    geometry = graph.display_geometry()
+    rect = dict(geometry.stage_control_rects)[name.removesuffix("ValueControl")]
+    assert control.geometry().height() >= 24
+    assert rect.contains(QRectF(control.geometry()))
+    assert graph.findChildren(EnvelopeValueEntry) == []
+    readout = graph.findChild(QLabel, "curveValueReadout")
+    assert readout is not None
+    assert readout.isHidden()
+    assert readout.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
 def test_vertical_drag_previews_each_move_and_commits_once_on_release(qtbot) -> None:
     # Mutating graph state directly or committing each move would bypass editor ownership.
     graph = make_graph(qtbot)
@@ -153,7 +203,7 @@ def test_owner_loopback_relayout_keeps_release_at_last_global_pointer_position(q
     send_handle_drag(handle, y_offsets=[-6, -12, -18])
 
     assert commits == [previews[-1]]
-    assert len(previews) == 3
+    assert len(previews) == 2
 
 
 def test_horizontal_motion_cannot_change_drag_curvature(qtbot) -> None:
@@ -181,20 +231,156 @@ def test_horizontal_motion_cannot_change_drag_curvature(qtbot) -> None:
     assert commits == first_commit
 
 
-def test_tab_focus_visits_all_three_curve_handles_in_stage_order(qtbot) -> None:
-    # Omitting StrongFocus from a child would make its curve unreachable by Tab.
+def test_tab_focus_visits_value_controls_and_curve_handles_in_stage_order(qtbot) -> None:
+    # Missing an adjacent order pair would skip an editable graph-native control.
     graph = make_graph(qtbot)
-    handles = [graph.findChild(QWidget, f"{stage.value}CurveHandle") for stage in CurveStage]
-    assert all(handle is not None for handle in handles)
-    attack, decay, release = handles
+    names = (
+        "attackValueControl",
+        "attackCurveHandle",
+        "decayValueControl",
+        "decayCurveHandle",
+        "sustainValueControl",
+        "releaseValueControl",
+        "releaseCurveHandle",
+    )
+    controls = [graph.findChild(QWidget, name) for name in names]
+    assert all(control is not None for control in controls)
+    attack, *expected = controls
     attack.setFocus(Qt.FocusReason.TabFocusReason)
     QApplication.processEvents()
     assert attack.hasFocus()
 
-    QTest.keyClick(attack, Qt.Key.Key_Tab)
-    assert decay.hasFocus()
-    QTest.keyClick(decay, Qt.Key.Key_Tab)
-    assert release.hasFocus()
+    for control in expected:
+        QTest.keyClick(QApplication.focusWidget(), Qt.Key.Key_Tab)
+        assert control.hasFocus()
+
+
+def test_value_controls_propose_model_field_intents_without_replacing_curve_stage_intents(
+    qtbot,
+) -> None:
+    # Routing a direct value through the curve channel would make its field ambiguous to the owner.
+    graph = make_graph(qtbot)
+    accept_graph_proposals(graph)
+    accept_value_field_proposals(graph)
+    curve_commits: list[tuple[str, float]] = []
+    field_commits: list[tuple[str, float]] = []
+    graph.curve_commit_requested.connect(lambda stage, value: curve_commits.append((stage, value)))
+    graph.field_commit_requested.connect(lambda field, value: field_commits.append((field, value)))
+    attack_curve = graph.findChild(QWidget, "attackCurveHandle")
+    sustain = graph.findChild(EnvelopeStageControl, "sustainValueControl")
+    release = graph.findChild(EnvelopeStageControl, "releaseValueControl")
+    assert attack_curve is not None
+    assert sustain is not None
+    assert release is not None
+
+    qtbot.keyPress(attack_curve, Qt.Key.Key_Right)
+    qtbot.keyPress(sustain, Qt.Key.Key_Right)
+    qtbot.keyPress(release, Qt.Key.Key_Right)
+
+    assert curve_commits == [("attack", 0.01)]
+    assert field_commits[0] == ("sustain_db", -5.9)
+    assert field_commits[1] == ("release_seconds", pytest.approx(0.606))
+
+
+def test_ownerless_value_proposal_preserves_graph_and_accessibility_truth(qtbot) -> None:
+    # Caching a direct-stage proposal would create a second value truth without owner acceptance.
+    envelope = EnvelopeConfig(sustain_db=-9.0)
+    graph = make_graph(qtbot, envelope)
+    control = graph.findChild(EnvelopeStageControl, "sustainValueControl")
+    assert control is not None
+    commits: list[tuple[str, float]] = []
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
+
+    qtbot.keyPress(control, Qt.Key.Key_Right)
+
+    assert commits == [("sustain_db", -8.9)]
+    assert graph.envelope is envelope
+    interface = QAccessible.queryAccessibleInterface(control)
+    assert interface is not None
+    assert interface.valueInterface().currentValue() == -9.0
+
+
+def test_curve_subthreshold_pointer_motion_is_a_noop(qtbot) -> None:
+    # Treating an armed click as a drag would commit a curve while selecting it.
+    graph = make_graph(qtbot)
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    assert handle is not None
+    previews: list[tuple[str, float]] = []
+    commits: list[tuple[str, float]] = []
+    reverts: list[str] = []
+    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
+    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.curve_reverted.connect(reverts.append)
+    threshold = QApplication.startDragDistance()
+
+    send_handle_drag(handle, y_offsets=[-max(1, threshold - 1)])
+
+    assert previews == []
+    assert commits == []
+    assert reverts == []
+
+
+def test_curve_readout_uses_full_model_precision_only_while_handle_is_contextual(qtbot) -> None:
+    # Reusing rounded entry text would hide the curve value the handle actually owns.
+    graph = make_graph(qtbot, EnvelopeConfig(attack_curve=0.1234567))
+    handle = graph.findChild(QWidget, "attackCurveHandle")
+    readout = graph.findChild(QLabel, "curveValueReadout")
+    assert handle is not None
+    assert readout is not None
+
+    handle.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+
+    assert readout.isVisible()
+    assert readout.text() == "Curve 0.123457"
+    graph.setFocus(Qt.FocusReason.OtherFocusReason)
+    QApplication.processEvents()
+    assert readout.isHidden()
+
+
+def test_graph_forwards_exact_value_editor_lifecycle_and_owner_responses(qtbot) -> None:
+    # Closing before owner acceptance would discard a rejected exact draft and its focus.
+    graph = make_graph(qtbot)
+    attack = graph.findChild(EnvelopeStageControl, "attackValueControl")
+    decay = graph.findChild(EnvelopeStageControl, "decayValueControl")
+    assert attack is not None
+    assert decay is not None
+    editing: list[tuple[str, bool]] = []
+    reverts: list[str] = []
+    commits: list[tuple[str, float]] = []
+    graph.field_editing_changed.connect(lambda field, active: editing.append((field, active)))
+    graph.field_reverted.connect(reverts.append)
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
+
+    attack.open_exact_editor()
+    first = graph.findChild(EnvelopeValueEntry, "envelopeInlineEditor")
+    assert first is not None
+    first.setText("125 ms")
+    QTest.keyClick(first, Qt.Key.Key_Return)
+    assert commits == [("attack_seconds", 0.125)]
+    assert first.isVisible()
+
+    graph.reject_exact_edit("attack_seconds", "too long")
+    assert first.isVisible()
+    assert first.hasFocus()
+    graph.set_envelope(replace(graph.envelope, attack_seconds=0.125))
+    graph.accept_exact_edit("attack_seconds", 0.125)
+    assert graph.findChild(EnvelopeValueEntry, "envelopeInlineEditor") is None
+    assert attack.hasFocus()
+
+    decay.open_exact_editor()
+    second = graph.findChild(EnvelopeValueEntry, "envelopeInlineEditor")
+    assert second is not None
+    second.setFocus()
+    graph.setFocus(Qt.FocusReason.OtherFocusReason)
+    QApplication.processEvents()
+    assert editing == [
+        ("attack_seconds", True),
+        ("attack_seconds", False),
+        ("decay_seconds", True),
+        ("decay_seconds", False),
+    ]
+    assert reverts == ["decay_seconds"]
 
 
 @pytest.mark.parametrize("stage", list(CurveStage))
@@ -281,8 +467,9 @@ def test_keyboard_arrows_shift_home_and_autorepeat_obey_patch_steps(
         (stage.value, 0.0),
         (stage.value, 0.001),
         (stage.value, 0.0),
+        (stage.value, 0.01),
     ]
-    assert len(commits) == commit_count
+    assert len(commits) == commit_count + 1
 
 
 def test_keyboard_sequence_uses_synchronously_replaced_envelope_truth(qtbot) -> None:
@@ -328,11 +515,11 @@ def test_escape_reverts_without_commit_and_double_click_commits_only_stage_zero(
     handle.setFocus()
 
     qtbot.keyPress(handle, Qt.Key.Key_Escape)
-    assert reverts == [stage.value]
+    assert reverts == []
     assert commits == []
 
     QTest.mouseDClick(handle, Qt.MouseButton.LeftButton, pos=handle.rect().center())
-    assert reverts == [stage.value]
+    assert reverts == []
     assert commits == [(stage.value, 0.0)]
 
 
@@ -462,7 +649,7 @@ def test_preview_levels_match_synth_curve_equations_and_are_owned_read_only(qtbo
             levels[0] = 99.0
 
 
-@pytest.mark.parametrize("width", [288, 360, 512])
+@pytest.mark.parametrize("width", [240, 288, 360, 512])
 def test_display_geometry_stays_inside_owned_contents_at_supported_widths(
     qtbot, width: int
 ) -> None:
@@ -484,7 +671,7 @@ def test_display_geometry_stays_inside_owned_contents_at_supported_widths(
         geometry.contents.width(), rel=0.0, abs=1e-12
     )
     assert all(geometry.contents.contains(rect) for _, rect in geometry.stage_rects)
-    assert all(geometry.contents.contains(rect) for rect in geometry.label_rects)
+    assert all(geometry.contents.contains(rect) for _, rect in geometry.stage_control_rects)
     assert all(geometry.contents.contains(center) for _, center in geometry.handle_centers)
 
     geometry.contents.setLeft(99.0)
