@@ -388,7 +388,7 @@ class EnvelopeStageControl(QWidget):
         value = self.current_value
         fine = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
         if self._stage is EnvelopeValueStage.SUSTAIN:
-            step = 0.1 if fine else 1.0
+            step = 0.01 if fine else 0.1
             proposed = min(value + (step if increase else -step), 0.0)
         else:
             factor = 1.001 if fine else 1.01
@@ -472,7 +472,7 @@ class _EnvelopeStageControlAccessible(QAccessibleWidget, QAccessibleValueInterfa
         if control is None:
             return 0.0
         if control._stage is EnvelopeValueStage.SUSTAIN:
-            return 0.1
+            return 0.01
         return control.current_value * 0.001
 
     def actionNames(self) -> list[str]:

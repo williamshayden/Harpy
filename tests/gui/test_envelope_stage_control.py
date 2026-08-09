@@ -217,8 +217,10 @@ def test_duration_scrub_never_emits_nonfinite_value(qtbot) -> None:
     [
         (EnvelopeValueStage.ATTACK, 0.6, Qt.Key.Key_Up, Qt.NoModifier, 0.606),
         (EnvelopeValueStage.ATTACK, 0.6, Qt.Key.Key_Down, Qt.ShiftModifier, 0.6 / 1.001),
-        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Right, Qt.NoModifier, -5.0),
-        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Left, Qt.ShiftModifier, -6.1),
+        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Right, Qt.NoModifier, -5.9),
+        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Left, Qt.NoModifier, -6.1),
+        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Right, Qt.ShiftModifier, -5.99),
+        (EnvelopeValueStage.SUSTAIN, -6.0, Qt.Key.Key_Left, Qt.ShiftModifier, -6.01),
     ],
 )
 def test_arrow_keys_commit_normal_and_fine_stage_steps(
@@ -228,6 +230,27 @@ def test_arrow_keys_commit_normal_and_fine_stage_steps(
     control, owner = make_control(qtbot, stage, value)
     QTest.keyClick(control, key, modifier)
     assert owner[stage.field_name] == pytest.approx(expected, rel=0, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("key", "modifier", "expected"),
+    [
+        (Qt.Key.Key_Up, Qt.NoModifier, -5.9),
+        (Qt.Key.Key_Down, Qt.NoModifier, -6.1),
+        (Qt.Key.Key_Up, Qt.ShiftModifier, -5.99),
+        (Qt.Key.Key_Down, Qt.ShiftModifier, -6.01),
+    ],
+)
+def test_sustain_auto_repeat_commits_the_declared_normal_or_fine_step(
+    qtbot, key, modifier, expected
+) -> None:
+    # Ignoring accepted auto-repeat would make held keys diverge from ordinary arrow edits.
+    control, owner = make_control(qtbot, EnvelopeValueStage.SUSTAIN, -6.0)
+    QApplication.sendEvent(
+        control,
+        QKeyEvent(QEvent.Type.KeyPress, key, modifier, "", True, 2),
+    )
+    assert owner[EnvelopeValueStage.SUSTAIN.field_name] == pytest.approx(expected, rel=0, abs=1e-12)
 
 
 def make_hosted_control(qtbot, stage=EnvelopeValueStage.ATTACK, value=0.001):
