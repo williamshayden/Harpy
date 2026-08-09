@@ -42,6 +42,27 @@ transient-entry behavior, focus/Space routing, accessibility contracts, native l
 constraints, and frequency-dial interactions. They are not presented as direct native
 or human observations.
 
+### Final documentation verification
+
+The final verification below ran after the documentation edit and immediately before
+the original documentation commit `5dd3fb9`.
+
+| Command/check | Exit | Exact observed result |
+| --- | ---: | --- |
+| `uv run pytest` | 0 | `11054 passed in 21.74s` |
+| `uv run ruff check .` | 0 | `All checks passed!` |
+| `uv run ruff format --check .` | 0 | `64 files already formatted` |
+| `git diff --check` | 0 | Zero output. |
+| `git status --short` before staging | 0 | Exactly ` M README.md`, ` M docs/project-notebook.md`, and `?? docs/verification/2026-08-08-milestone-b-acceptance.md`. |
+| `git diff --cached --check` | 0 | Zero output. |
+| `git diff --cached --name-only` | 0 | Exactly `README.md`, `docs/project-notebook.md`, and `docs/verification/2026-08-08-milestone-b-acceptance.md`. |
+| `git status --short` after `5dd3fb9` | 0 | Zero output; the worktree was clean. |
+| `git diff --check origin/main...HEAD` after `5dd3fb9` | 0 | Zero output. |
+
+The follow-up commit containing this subsection adds only the previously missing
+durable final-verification record. It does not change any native, manual, screenshot,
+scaling, audibility, or device-loss status below.
+
 ## Structural evidence
 
 Each required structural contract returned exit 0 with zero output:
