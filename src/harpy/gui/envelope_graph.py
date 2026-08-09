@@ -11,6 +11,7 @@ import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QAccessible,
+    QAccessibleAnnouncementEvent,
     QAccessibleValueChangeEvent,
     QAccessibleValueInterface,
     QColor,
@@ -77,10 +78,6 @@ def envelope_stage_fractions(
 class EnvelopeGraph(QWidget):
     """Readable ADSR display whose curve proposals remain owner-controlled."""
 
-    curve_previewed = Signal(str, float)
-    curve_commit_requested = Signal(str, float)
-    curve_reverted = Signal(str)
-    stage_selected = Signal(str)
     field_previewed = Signal(str, float)
     field_commit_requested = Signal(str, float)
     field_reverted = Signal(str)
@@ -120,9 +117,19 @@ class EnvelopeGraph(QWidget):
             self._stage_controls[stage] = control
         for stage in CurveStage:
             handle = _CurveHandle(stage, lambda stage=stage: self._curve_value(stage), self)
-            handle.previewed.connect(self.curve_previewed)
-            handle.commit_requested.connect(self.curve_commit_requested)
-            handle.reverted.connect(self.curve_reverted)
+            handle.previewed.connect(
+                lambda stage_name, value: self.field_previewed.emit(
+                    self._curve_field(stage_name), value
+                )
+            )
+            handle.commit_requested.connect(
+                lambda stage_name, value: self.field_commit_requested.emit(
+                    self._curve_field(stage_name), value
+                )
+            )
+            handle.reverted.connect(
+                lambda stage_name: self.field_reverted.emit(self._curve_field(stage_name))
+            )
             handle.selected.connect(self._handle_selected)
             handle.context_changed.connect(self._update_curve_readout)
             self._handles[stage] = handle
@@ -307,7 +314,6 @@ class EnvelopeGraph(QWidget):
     def _handle_selected(self, stage_name: str) -> None:
         stage = CurveStage(stage_name)
         self.select_stage(stage)
-        self.stage_selected.emit(stage.value)
 
     def _update_curve_readout(self, _stage_name: str) -> None:
         stage = next(
@@ -340,23 +346,32 @@ class EnvelopeGraph(QWidget):
             return
         control.reject_exact_value(message)
 
+    def is_exact_editing(self, field_name: str) -> bool:
+        """Return whether *field_name* owns the currently open exact editor."""
+
+        control = self._value_control(field_name)
+        return control is not None and control is self._editing_control
+
     def mark_field_error(self, field_name: str, message: str) -> None:
         control = self._value_control(field_name)
-        if control is not None:
-            control.mark_error(message)
+        widget = control if control is not None else self._curve_handle(field_name)
+        if widget is None:
             return
-        handle = self._curve_handle(field_name)
-        if handle is not None:
-            handle.mark_error(message)
+        widget.setProperty("validationState", "error")
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
+        QAccessible.updateAccessibility(QAccessibleAnnouncementEvent(widget, message))
 
     def clear_field_error(self, field_name: str) -> None:
         control = self._value_control(field_name)
-        if control is not None:
-            control.clear_error()
+        widget = control if control is not None else self._curve_handle(field_name)
+        if widget is None:
             return
-        handle = self._curve_handle(field_name)
-        if handle is not None:
-            handle.clear_error()
+        widget.setProperty("validationState", None)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
 
     def cancel_interactions(self, emit_revert: bool = True) -> None:
         if self._editing_control is not None:
@@ -381,6 +396,9 @@ class EnvelopeGraph(QWidget):
             if field_name == f"{stage.value}_curve":
                 return handle
         return None
+
+    def _curve_field(self, stage_name: str) -> str:
+        return f"{CurveStage(stage_name).value}_curve"
 
     def _stage_editing_changed(self, field_name: str, is_editing: bool) -> None:
         control = self._value_control(field_name)

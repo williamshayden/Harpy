@@ -13,7 +13,6 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 _PLAIN_DECIMAL = r"[+-]?(?:\d+(?:\.\d{0,9})?|\.\d{1,9})"
 _DURATION = re.compile(rf"(?P<number>{_PLAIN_DECIMAL})(?:\s*(?P<unit>ms|s))?\Z")
 _DECIBELS = re.compile(rf"(?P<number>{_PLAIN_DECIMAL})(?:\s*dB)?\Z")
-_CURVATURE = re.compile(rf"(?P<number>{_PLAIN_DECIMAL})\Z")
 
 
 class EnvelopeFieldKind(StrEnum):
@@ -21,7 +20,6 @@ class EnvelopeFieldKind(StrEnum):
 
     DURATION = "duration"
     DECIBELS = "decibels"
-    CURVATURE = "curvature"
 
 
 def _plain_decimal(value: float) -> str:
@@ -153,10 +151,7 @@ class EnvelopeValueEntry(QLineEdit):
             if match is None:
                 raise self._invalid("enter a plain decimal with optional dB")
             return float(match.group("number"))
-        match = _CURVATURE.fullmatch(stripped)
-        if match is None:
-            raise self._invalid("enter a plain decimal from -1 to 1")
-        return float(match.group("number"))
+        raise RuntimeError("unsupported envelope field kind")
 
     def _validated_value(self, value: float) -> float:
         if isinstance(value, bool):
@@ -171,8 +166,6 @@ class EnvelopeValueEntry(QLineEdit):
             raise self._invalid("enter a duration greater than zero")
         if self._kind is EnvelopeFieldKind.DECIBELS and numeric > 0.0:
             raise self._invalid("enter a decibel value at or below 0 dB")
-        if self._kind is EnvelopeFieldKind.CURVATURE and not -1.0 <= numeric <= 1.0:
-            raise self._invalid("enter a curvature from -1 to 1")
         return numeric
 
     def _remember_and_render(self, value: float) -> None:
@@ -186,9 +179,7 @@ class EnvelopeValueEntry(QLineEdit):
     def _render(self, value: float) -> str:
         if self._kind is EnvelopeFieldKind.DURATION:
             return format_envelope_duration(value)
-        if self._kind is EnvelopeFieldKind.DECIBELS:
-            return format_envelope_decibels(value)
-        return format_envelope_curvature(value)
+        return format_envelope_decibels(value)
 
     def _invalid(self, instruction: str) -> ValueError:
         return ValueError(f"{self._field_name}: {instruction}.")

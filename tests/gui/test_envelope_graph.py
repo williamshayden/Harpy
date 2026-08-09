@@ -25,11 +25,11 @@ def make_graph(qtbot, envelope: EnvelopeConfig | None = None) -> EnvelopeGraph:
 
 
 def accept_graph_proposals(graph: EnvelopeGraph) -> None:
-    def accept_graph_curve(stage: str, value: float) -> None:
-        graph.set_envelope(replace(graph.envelope, **{f"{stage}_curve": value}))
+    def accept_graph_field(field_name: str, value: float) -> None:
+        graph.set_envelope(replace(graph.envelope, **{field_name: value}))
 
-    graph.curve_previewed.connect(accept_graph_curve)
-    graph.curve_commit_requested.connect(accept_graph_curve)
+    graph.field_previewed.connect(accept_graph_field)
+    graph.field_commit_requested.connect(accept_graph_field)
 
 
 def accept_value_field_proposals(graph: EnvelopeGraph) -> None:
@@ -177,15 +177,15 @@ def test_vertical_drag_previews_each_move_and_commits_once_on_release(qtbot) -> 
     accept_graph_proposals(graph)
     previews: list[tuple[str, float]] = []
     commits: list[tuple[str, float]] = []
-    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_previewed.connect(lambda field, value: previews.append((field, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
     handle = graph.findChild(QWidget, "attackCurveHandle")
     assert handle is not None
 
     send_handle_drag(handle, y_offsets=[-6, -12, -18], x_offsets=[-14, 0, 19])
 
     assert len(previews) == 3
-    assert all(stage == "attack" and -1.0 <= value <= 1.0 for stage, value in previews)
+    assert all(field == "attack_curve" and -1.0 <= value <= 1.0 for field, value in previews)
     assert commits == [previews[-1]]
 
 
@@ -197,8 +197,8 @@ def test_owner_loopback_relayout_keeps_release_at_last_global_pointer_position(q
     assert handle is not None
     previews: list[tuple[str, float]] = []
     commits: list[tuple[str, float]] = []
-    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_previewed.connect(lambda field, value: previews.append((field, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
 
     send_handle_drag(handle, y_offsets=[-6, -12, -18])
 
@@ -215,8 +215,8 @@ def test_horizontal_motion_cannot_change_drag_curvature(qtbot) -> None:
     assert handle is not None
     previews: list[tuple[str, float]] = []
     commits: list[tuple[str, float]] = []
-    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_previewed.connect(lambda field, value: previews.append((field, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
 
     send_handle_drag(handle, y_offsets=[-4, -9, -15], x_offsets=[-120, 0, 160])
     first_previews = list(previews)
@@ -255,16 +255,14 @@ def test_tab_focus_visits_value_controls_and_curve_handles_in_stage_order(qtbot)
         assert control.hasFocus()
 
 
-def test_value_controls_propose_model_field_intents_without_replacing_curve_stage_intents(
+def test_value_controls_and_curve_handles_share_named_field_intents(
     qtbot,
 ) -> None:
-    # Routing a direct value through the curve channel would make its field ambiguous to the owner.
+    # Any stage-only curve channel would split owner handling across incompatible APIs.
     graph = make_graph(qtbot)
     accept_graph_proposals(graph)
     accept_value_field_proposals(graph)
-    curve_commits: list[tuple[str, float]] = []
     field_commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda stage, value: curve_commits.append((stage, value)))
     graph.field_commit_requested.connect(lambda field, value: field_commits.append((field, value)))
     attack_curve = graph.findChild(QWidget, "attackCurveHandle")
     sustain = graph.findChild(EnvelopeStageControl, "sustainValueControl")
@@ -277,9 +275,18 @@ def test_value_controls_propose_model_field_intents_without_replacing_curve_stag
     qtbot.keyPress(sustain, Qt.Key.Key_Right)
     qtbot.keyPress(release, Qt.Key.Key_Right)
 
-    assert curve_commits == [("attack", 0.01)]
-    assert field_commits[0] == ("sustain_db", -5.9)
-    assert field_commits[1] == ("release_seconds", pytest.approx(0.606))
+    assert field_commits == [
+        ("attack_curve", 0.01),
+        ("sustain_db", -5.9),
+        ("release_seconds", pytest.approx(0.606)),
+    ]
+    for removed in (
+        "curve" + "_previewed",
+        "curve" + "_commit_requested",
+        "curve" + "_reverted",
+        "stage" + "_selected",
+    ):
+        assert not hasattr(graph, removed)
 
 
 def test_ownerless_value_proposal_preserves_graph_and_accessibility_truth(qtbot) -> None:
@@ -308,9 +315,9 @@ def test_curve_subthreshold_pointer_motion_is_a_noop(qtbot) -> None:
     previews: list[tuple[str, float]] = []
     commits: list[tuple[str, float]] = []
     reverts: list[str] = []
-    graph.curve_previewed.connect(lambda stage, value: previews.append((stage, value)))
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
-    graph.curve_reverted.connect(reverts.append)
+    graph.field_previewed.connect(lambda field, value: previews.append((field, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
+    graph.field_reverted.connect(reverts.append)
     threshold = QApplication.startDragDistance()
 
     send_handle_drag(handle, y_offsets=[-max(1, threshold - 1)])
@@ -431,8 +438,8 @@ def test_curve_release_after_out_of_bounds_drag_commits_once_without_later_rever
     assert handle is not None
     commits: list[tuple[str, float]] = []
     reverts: list[str] = []
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
-    graph.curve_reverted.connect(reverts.append)
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
+    graph.field_reverted.connect(reverts.append)
 
     send_handle_drag(handle, y_offsets=[-20, -10_000])
     QApplication.sendEvent(handle, QEvent(QEvent.Type.UngrabMouse))
@@ -450,9 +457,9 @@ def test_curve_ungrab_and_graph_cancel_revert_each_preview_once_without_commit(q
         assert handle is not None
         reverts: list[str] = []
         commits: list[tuple[str, float]] = []
-        graph.curve_reverted.connect(reverts.append)
-        graph.curve_commit_requested.connect(
-            lambda stage, value, commits=commits: commits.append((stage, value))
+        graph.field_reverted.connect(reverts.append)
+        graph.field_commit_requested.connect(
+            lambda field, value, commits=commits: commits.append((field, value))
         )
         origin = handle.rect().center()
         press_global = handle.mapToGlobal(origin)
@@ -475,7 +482,7 @@ def test_curve_ungrab_and_graph_cancel_revert_each_preview_once_without_commit(q
         else:
             graph.cancel_interactions()
 
-        assert reverts == ["attack"], cancellation
+        assert reverts == ["attack_curve"], cancellation
         assert commits == [], cancellation
 
 
@@ -576,7 +583,7 @@ def test_handle_accessibility_reports_owner_value_and_adjusts_by_patch_request(
     handle = graph.findChild(QWidget, f"{stage.value}CurveHandle")
     assert handle is not None
     commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda name, value: commits.append((name, value)))
+    graph.field_commit_requested.connect(lambda name, value: commits.append((name, value)))
 
     interface = QAccessible.queryAccessibleInterface(handle)
     assert interface is not None
@@ -596,9 +603,9 @@ def test_handle_accessibility_reports_owner_value_and_adjusts_by_patch_request(
     value_interface.setCurrentValue(0.375)
 
     assert commits == [
-        (stage.value, pytest.approx(curves[stage.value] + 0.01)),
-        (stage.value, pytest.approx(curves[stage.value])),
-        (stage.value, 0.375),
+        (f"{stage.value}_curve", pytest.approx(curves[stage.value] + 0.01)),
+        (f"{stage.value}_curve", pytest.approx(curves[stage.value])),
+        (f"{stage.value}_curve", 0.375),
     ]
     assert getattr(graph.envelope, f"{stage.value}_curve") == 0.375
 
@@ -613,7 +620,7 @@ def test_keyboard_arrows_shift_home_and_autorepeat_obey_patch_steps(
     handle = graph.findChild(QWidget, f"{stage.value}CurveHandle")
     assert handle is not None
     commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda name, value: commits.append((name, value)))
+    graph.field_commit_requested.connect(lambda name, value: commits.append((name, value)))
     handle.setFocus()
 
     qtbot.keyPress(handle, Qt.Key.Key_Right)
@@ -640,13 +647,13 @@ def test_keyboard_arrows_shift_home_and_autorepeat_obey_patch_steps(
     )
 
     assert commits == [
-        (stage.value, 0.01),
-        (stage.value, 0.02),
-        (stage.value, 0.01),
-        (stage.value, 0.0),
-        (stage.value, 0.001),
-        (stage.value, 0.0),
-        (stage.value, 0.01),
+        (f"{stage.value}_curve", 0.01),
+        (f"{stage.value}_curve", 0.02),
+        (f"{stage.value}_curve", 0.01),
+        (f"{stage.value}_curve", 0.0),
+        (f"{stage.value}_curve", 0.001),
+        (f"{stage.value}_curve", 0.0),
+        (f"{stage.value}_curve", 0.01),
     ]
     assert len(commits) == commit_count + 1
 
@@ -658,7 +665,7 @@ def test_keyboard_sequence_uses_synchronously_replaced_envelope_truth(qtbot) -> 
     handle = graph.findChild(QWidget, "attackCurveHandle")
     assert handle is not None
     commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
 
     handle.setFocus()
     qtbot.keyPress(handle, Qt.Key.Key_Right)
@@ -670,9 +677,9 @@ def test_keyboard_sequence_uses_synchronously_replaced_envelope_truth(qtbot) -> 
     qtbot.keyPress(handle, Qt.Key.Key_Home)
 
     assert commits[-3:] == [
-        ("attack", 0.01),
-        ("attack", 0.011),
-        ("attack", 0.0),
+        ("attack_curve", 0.01),
+        ("attack_curve", 0.011),
+        ("attack_curve", 0.0),
     ]
 
 
@@ -689,8 +696,8 @@ def test_escape_reverts_without_commit_and_double_click_commits_only_stage_zero(
     assert handle is not None
     reverts: list[str] = []
     commits: list[tuple[str, float]] = []
-    graph.curve_reverted.connect(reverts.append)
-    graph.curve_commit_requested.connect(lambda name, value: commits.append((name, value)))
+    graph.field_reverted.connect(reverts.append)
+    graph.field_commit_requested.connect(lambda name, value: commits.append((name, value)))
     handle.setFocus()
 
     qtbot.keyPress(handle, Qt.Key.Key_Escape)
@@ -699,7 +706,7 @@ def test_escape_reverts_without_commit_and_double_click_commits_only_stage_zero(
 
     QTest.mouseDClick(handle, Qt.MouseButton.LeftButton, pos=handle.rect().center())
     assert reverts == []
-    assert commits == [(stage.value, 0.0)]
+    assert commits == [(f"{stage.value}_curve", 0.0)]
 
 
 def test_native_double_click_sequence_emits_only_one_zero_reset_commit(qtbot) -> None:
@@ -709,17 +716,17 @@ def test_native_double_click_sequence_emits_only_one_zero_reset_commit(qtbot) ->
     handle = graph.findChild(QWidget, "attackCurveHandle")
     assert handle is not None
     commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
 
     send_native_double_click_sequence(handle)
 
-    assert commits == [("attack", 0.0)]
+    assert commits == [("attack_curve", 0.0)]
     assert graph.envelope.attack_curve == 0.0
 
 
 @pytest.mark.parametrize("stage", list(CurveStage))
-def test_focus_and_mouse_press_select_the_owned_stage(qtbot, stage: CurveStage) -> None:
-    # Failing to identify the active stage would desynchronize graph and editor selection.
+def test_focus_and_mouse_press_select_only_graph_internal_stage(qtbot, stage: CurveStage) -> None:
+    # Focus context may style the graph, but no removed selection signal may escape it.
     graph = make_graph(qtbot)
     handle = graph.findChild(QWidget, f"{stage.value}CurveHandle")
     assert handle is not None
@@ -728,16 +735,14 @@ def test_focus_and_mouse_press_select_the_owned_stage(qtbot, stage: CurveStage) 
     assert other_handle is not None
     other_handle.setFocus(Qt.FocusReason.TabFocusReason)
     QApplication.processEvents()
-    selected: list[str] = []
-    graph.stage_selected.connect(selected.append)
+    assert not hasattr(graph, "stage" + "_selected")
 
     handle.setFocus(Qt.FocusReason.TabFocusReason)
     QApplication.processEvents()
-    assert selected[-1] == stage.value
+    assert graph.selected_stage is stage
 
-    selected.clear()
     QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=handle.rect().center())
-    assert selected[-1] == stage.value
+    assert graph.selected_stage is stage
     QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=handle.rect().center())
 
 
@@ -770,8 +775,8 @@ def test_zero_span_handles_are_stable_mouse_inert_and_nonmouse_adjustable(
     assert dict(graph.display_geometry().handle_centers)[stage] == center
     previews: list[tuple[str, float]] = []
     commits: list[tuple[str, float]] = []
-    graph.curve_previewed.connect(lambda name, value: previews.append((name, value)))
-    graph.curve_commit_requested.connect(lambda name, value: commits.append((name, value)))
+    graph.field_previewed.connect(lambda name, value: previews.append((name, value)))
+    graph.field_commit_requested.connect(lambda name, value: commits.append((name, value)))
     send_handle_drag(handle, y_offsets=[-8, -16, 12])
     assert previews == []
     assert commits == []
@@ -782,7 +787,10 @@ def test_zero_span_handles_are_stable_mouse_inert_and_nonmouse_adjustable(
     actions = interface.actionInterface()
     assert actions is not None
     actions.doAction(actions.increaseAction())
-    assert commits == [(stage.value, -0.89), (stage.value, -0.88)]
+    assert commits == [
+        (f"{stage.value}_curve", -0.89),
+        (f"{stage.value}_curve", -0.88),
+    ]
 
 
 def test_preview_levels_match_synth_curve_equations_and_are_owned_read_only(qtbot) -> None:
@@ -907,11 +915,11 @@ def test_ownerless_proposals_never_create_a_second_curve_truth(qtbot) -> None:
     handle = graph.findChild(QWidget, "attackCurveHandle")
     assert handle is not None
     commits: list[tuple[str, float]] = []
-    graph.curve_commit_requested.connect(lambda stage, value: commits.append((stage, value)))
+    graph.field_commit_requested.connect(lambda field, value: commits.append((field, value)))
 
     qtbot.keyPress(handle, Qt.Key.Key_Right)
 
-    assert commits == [("attack", 0.26)]
+    assert commits == [("attack_curve", 0.26)]
     assert graph.envelope is envelope
     interface = QAccessible.queryAccessibleInterface(handle)
     assert interface is not None

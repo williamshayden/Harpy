@@ -153,18 +153,18 @@ class HarpyWindow(QMainWindow):
         self.envelope_editor = EnvelopeEditor(render, controller.state.patch)
         self.envelope_editor.setObjectName("envelopeEditor")
         self.envelope_editor.setFixedWidth(288)
-        self._reset_curves_button = self.envelope_editor.findChild(
+        self._reset_envelope_button = self.envelope_editor.findChild(
             QPushButton,
-            "resetCurvesButton",
+            "resetEnvelopeButton",
         )
-        if self._reset_curves_button is None:
-            raise RuntimeError("EnvelopeEditor is missing resetCurvesButton")
-        self._reset_curves_button.setToolTip("Reset curves to linear (Ctrl+R)")
-        self._reset_curves_action = QAction(self)
-        self._reset_curves_action.setObjectName("resetCurvesAction")
-        self._reset_curves_action.setShortcut(QKeySequence("Ctrl+R"))
-        self._reset_curves_action.triggered.connect(self._reset_curves_button.click)
-        self.addAction(self._reset_curves_action)
+        if self._reset_envelope_button is None:
+            raise RuntimeError("EnvelopeEditor is missing resetEnvelopeButton")
+        self._reset_envelope_button.setToolTip("Reset envelope to defaults (Ctrl+R)")
+        self._reset_envelope_action = QAction(self)
+        self._reset_envelope_action.setObjectName("resetEnvelopeAction")
+        self._reset_envelope_action.setShortcut(QKeySequence("Ctrl+R"))
+        self._reset_envelope_action.triggered.connect(self._reset_envelope_button.click)
+        self.addAction(self._reset_envelope_action)
         main_row = QHBoxLayout()
         main_row.setContentsMargins(0, 0, 0, 0)
         main_row.setSpacing(12)

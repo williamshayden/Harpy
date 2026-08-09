@@ -44,9 +44,17 @@ def test_decibel_formatter_is_canonical(value: float, expected: str) -> None:
 
 
 def test_curvature_formatter_preserves_six_decimal_precision() -> None:
-    # Losing the display formatter would degrade the still-live legacy curve entry.
+    # Curve handles and their contextual readout still share this canonical formatter.
     assert format_envelope_curvature(0.123456789) == "0.123457"
     assert format_envelope_curvature(-0.0) == "0"
+
+
+def test_field_kinds_are_exactly_the_two_transient_text_modes() -> None:
+    # Retaining curvature would keep the removed permanent curve-entry grammar alive.
+    assert set(EnvelopeFieldKind) == {
+        EnvelopeFieldKind.DURATION,
+        EnvelopeFieldKind.DECIBELS,
+    }
 
 
 def test_parser_rejection_announces_and_restores_clean_accessibility(qtbot, monkeypatch) -> None:
@@ -77,7 +85,6 @@ def assert_invalid_commit(qtbot, entry: EnvelopeValueEntry, text: str, field: st
     initial = {
         EnvelopeFieldKind.DURATION: 0.6,
         EnvelopeFieldKind.DECIBELS: -6.0,
-        EnvelopeFieldKind.CURVATURE: 0.5,
     }[entry.kind]
     qtbot.addWidget(entry)
     entry.set_exact_value(initial)
@@ -238,35 +245,6 @@ def test_decibel_entry_accepts_signed_plain_decimals(
 
 
 @pytest.mark.parametrize(
-    ("text", "expected_curvature"),
-    [
-        ("-1", -1.0),
-        ("+1.0", 1.0),
-        ("0", 0.0),
-        ("-.125", -0.125),
-        (".75", 0.75),
-    ],
-)
-def test_curvature_entry_accepts_signed_plain_decimals_in_closed_range(
-    qtbot,
-    text: str,
-    expected_curvature: float,
-) -> None:
-    # Using open bounds or requiring leading digits would reject valid curve values.
-    entry = EnvelopeValueEntry("attack_curve", EnvelopeFieldKind.CURVATURE)
-    qtbot.addWidget(entry)
-    committed: list[float] = []
-    entry.value_commit_requested.connect(committed.append)
-    entry.set_exact_value(0.0)
-
-    entry.selectAll()
-    qtbot.keyClicks(entry, text)
-    qtbot.keyPress(entry, Qt.Key.Key_Return)
-
-    assert committed == [expected_curvature]
-
-
-@pytest.mark.parametrize(
     "text",
     ["0", "-1 ms", "NaN", "Infinity", "1e-3 s", "1,5 s", "1 MS", ".1234567890 s"],
 )
@@ -291,12 +269,6 @@ def test_decibel_entry_rejects_invalid_values(qtbot, text: str) -> None:
     assert_invalid_commit(qtbot, entry, text, "sustain_db")
 
 
-@pytest.mark.parametrize("text", ["-1.001", "1.001", "NaN", "0.5 dB", "1e-3"])
-def test_curvature_entry_rejects_invalid_values(qtbot, text: str) -> None:
-    entry = EnvelopeValueEntry("attack_curve", EnvelopeFieldKind.CURVATURE)
-    assert_invalid_commit(qtbot, entry, text, "attack_curve")
-
-
 @pytest.mark.parametrize(
     ("kind", "value", "expected_text"),
     [
@@ -304,7 +276,6 @@ def test_curvature_entry_rejects_invalid_values(qtbot, text: str) -> None:
         (EnvelopeFieldKind.DURATION, 0.999999999, "999.999999 ms"),
         (EnvelopeFieldKind.DURATION, 1.0, "1 s"),
         (EnvelopeFieldKind.DECIBELS, -6.125, "-6.125 dB"),
-        (EnvelopeFieldKind.CURVATURE, 0.123456789, "0.123457"),
     ],
 )
 def test_programmatic_set_renders_six_places_without_emitting(
@@ -330,7 +301,6 @@ def test_programmatic_set_renders_six_places_without_emitting(
     [
         (EnvelopeFieldKind.DURATION, 0.600000000123),
         (EnvelopeFieldKind.DECIBELS, -6.123456789),
-        (EnvelopeFieldKind.CURVATURE, 0.123456789),
     ],
 )
 def test_unchanged_return_emits_exact_cached_float(
@@ -352,7 +322,7 @@ def test_unchanged_return_emits_exact_cached_float(
 
 def test_accepted_manual_proposal_refreshes_exact_cache(qtbot) -> None:
     # Caching rendered text instead of the accepted proposal would lose its ninth-place precision.
-    entry = EnvelopeValueEntry("attack_curve", EnvelopeFieldKind.CURVATURE)
+    entry = EnvelopeValueEntry("sustain_db", EnvelopeFieldKind.DECIBELS)
     qtbot.addWidget(entry)
     committed: list[float] = []
 
@@ -361,15 +331,15 @@ def test_accepted_manual_proposal_refreshes_exact_cache(qtbot) -> None:
         entry.accept_proposed_value(value)
 
     entry.value_commit_requested.connect(accept)
-    entry.set_exact_value(0.0)
+    entry.set_exact_value(-6.0)
     entry.selectAll()
-    qtbot.keyClicks(entry, "0.123456789")
+    qtbot.keyClicks(entry, "-0.123456789")
     qtbot.keyPress(entry, Qt.Key.Key_Return)
-    assert entry.text() == "0.123457"
+    assert entry.text() == "-0.123457 dB"
 
     qtbot.keyPress(entry, Qt.Key.Key_Return)
 
-    assert committed == [0.123456789, 0.123456789]
+    assert committed == [-0.123456789, -0.123456789]
 
 
 def test_rejected_manual_proposal_preserves_draft_and_prior_exact_cache(qtbot) -> None:
@@ -407,23 +377,23 @@ def test_rejected_manual_proposal_preserves_draft_and_prior_exact_cache(qtbot) -
 
 def test_escape_restores_cached_value_and_clears_only_validation_state(qtbot) -> None:
     # Escape must recover authored state without proposing a value or erasing unrelated properties.
-    entry = EnvelopeValueEntry("attack_curve", EnvelopeFieldKind.CURVATURE)
+    entry = EnvelopeValueEntry("sustain_db", EnvelopeFieldKind.DECIBELS)
     qtbot.addWidget(entry)
     committed: list[float] = []
     reverted: list[None] = []
     entry.value_commit_requested.connect(committed.append)
     entry.draft_reverted.connect(lambda: reverted.append(None))
     entry.setProperty("editorState", "connected")
-    entry.set_exact_value(0.5)
+    entry.set_exact_value(-6.0)
     entry.selectAll()
-    qtbot.keyClicks(entry, "not a curve")
+    qtbot.keyClicks(entry, "not a level")
     qtbot.keyPress(entry, Qt.Key.Key_Return)
     assert entry.property("validationState") == "error"
     committed.clear()
 
     qtbot.keyPress(entry, Qt.Key.Key_Escape)
 
-    assert entry.text() == "0.5"
+    assert entry.text() == "-6 dB"
     assert entry.property("validationState") is None
     assert entry.property("editorState") == "connected"
     assert reverted == [None]
@@ -439,9 +409,6 @@ def test_escape_restores_cached_value_and_clears_only_validation_state(qtbot) ->
         (EnvelopeFieldKind.DECIBELS, 0.1),
         (EnvelopeFieldKind.DECIBELS, float("inf")),
         (EnvelopeFieldKind.DECIBELS, True),
-        (EnvelopeFieldKind.CURVATURE, -1.001),
-        (EnvelopeFieldKind.CURVATURE, 1.001),
-        (EnvelopeFieldKind.CURVATURE, float("-inf")),
     ],
 )
 def test_programmatic_values_are_validated_before_caching(
@@ -455,7 +422,6 @@ def test_programmatic_values_are_validated_before_caching(
     valid = {
         EnvelopeFieldKind.DURATION: 0.6,
         EnvelopeFieldKind.DECIBELS: -6.0,
-        EnvelopeFieldKind.CURVATURE: 0.5,
     }[kind]
     entry.set_exact_value(valid)
     expected_text = entry.text()
@@ -475,7 +441,7 @@ def test_kind_property_is_read_only(qtbot) -> None:
     qtbot.addWidget(entry)
     assert entry.kind is EnvelopeFieldKind.DURATION
     with pytest.raises(AttributeError):
-        entry.kind = EnvelopeFieldKind.CURVATURE  # type: ignore[misc]
+        entry.kind = EnvelopeFieldKind.DECIBELS  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(

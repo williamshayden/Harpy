@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,6 +24,7 @@ from harpy.capture import CaptureCoordinator, CaptureState, SampleHistory
 from harpy.gui.envelope_editor import EnvelopeEditor
 from harpy.gui.envelope_entry import EnvelopeValueEntry
 from harpy.gui.envelope_graph import EnvelopeGraph
+from harpy.gui.envelope_stage_control import EnvelopeStageControl
 from harpy.gui.frequency_entry import FrequencyEntry
 from harpy.gui.frequency_knob import FrequencyKnob
 from harpy.gui.signal_views import SpectrumView, WaveformView
@@ -127,18 +128,38 @@ def replace_entry_text(qtbot, entry: QLineEdit, text: str) -> None:
     qtbot.keyClicks(entry, text)
 
 
-def commit_entry(qtbot, window: HarpyWindow, name: str, text: str) -> None:
-    entry = editor_child(window, EnvelopeValueEntry, name)
+def open_exact_stage_editor(
+    qtbot,
+    window: HarpyWindow,
+    control_name: str,
+) -> EnvelopeValueEntry:
+    window.show()
+    QApplication.processEvents()
+    control = editor_child(window, EnvelopeStageControl, control_name)
+    control.setFocus(Qt.FocusReason.OtherFocusReason)
+    qtbot.keyPress(control, Qt.Key.Key_F2)
+    entry = window.findChild(EnvelopeValueEntry, "envelopeInlineEditor")
+    assert entry is not None and entry.isVisible() and entry.hasFocus()
+    return entry
+
+
+def commit_exact_stage(
+    qtbot,
+    window: HarpyWindow,
+    control_name: str,
+    text: str,
+) -> None:
+    entry = open_exact_stage_editor(qtbot, window, control_name)
     replace_entry_text(qtbot, entry, text)
     qtbot.keyClick(entry, Qt.Key.Key_Return)
 
 
 def make_invalid_editor_draft(qtbot, window: HarpyWindow):
-    attack = editor_child(window, EnvelopeValueEntry, "attackEntry")
+    attack = open_exact_stage_editor(qtbot, window, "attackValueControl")
     replace_entry_text(qtbot, attack, "invalid")
     qtbot.keyClick(attack, Qt.Key.Key_Return)
     graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
-    graph.curve_previewed.emit("release", -0.75)
+    graph.field_previewed.emit("release_curve", -0.75)
     return attack, graph
 
 
@@ -158,13 +179,16 @@ def test_final_widget_contract_and_copy_contains_no_legacy_or_device_status(qtbo
         "spectrumPlot": SpectrumView,
         "envelopeEditor": EnvelopeEditor,
         "envelopeGraph": EnvelopeGraph,
-        "attackEntry": QLineEdit,
-        "decayEntry": QLineEdit,
-        "sustainEntry": QLineEdit,
-        "releaseEntry": QLineEdit,
-        "curveEntry": QLineEdit,
+        "attackValueControl": EnvelopeStageControl,
+        "decayValueControl": EnvelopeStageControl,
+        "sustainValueControl": EnvelopeStageControl,
+        "releaseValueControl": EnvelopeStageControl,
+        "attackCurveHandle": QWidget,
+        "decayCurveHandle": QWidget,
+        "releaseCurveHandle": QWidget,
+        "curveValueReadout": QLabel,
         "patchStatusLabel": QLabel,
-        "resetCurvesButton": QPushButton,
+        "resetEnvelopeButton": QPushButton,
         "oscillatorFact": QLabel,
         "outputFact": QLabel,
         "loadPatchButton": QPushButton,
@@ -174,6 +198,10 @@ def test_final_widget_contract_and_copy_contains_no_legacy_or_device_status(qtbo
     for object_name, widget_type in expected.items():
         widget = window.findChild(widget_type, object_name)
         assert widget is not None, object_name
+    reset_action = window.findChild(QAction, "resetEnvelopeAction")
+    assert reset_action is not None
+    assert reset_action.shortcut() == QKeySequence("Ctrl+R")
+    assert window.findChild(QAction, "reset" + "CurvesAction") is None
     assert window.findChild(QWidget, "patchFacts") is None
     assert window.findChildren(QLabel, "factName") == []
     assert window.findChildren(QLabel, "factValue") == []
@@ -297,7 +325,7 @@ def test_valid_entry_commit_clears_prior_validation_error(qtbot) -> None:
         "frequencyKnob",
         "playButton",
         "clearButton",
-        "resetCurvesButton",
+        "resetEnvelopeButton",
         "loadPatchButton",
         "savePatchButton",
     ],
@@ -337,15 +365,15 @@ def test_space_is_owned_by_focused_frequency_editor(qtbot) -> None:
 
 
 @pytest.mark.parametrize(
-    "entry_name",
-    ["attackEntry", "decayEntry", "sustainEntry", "releaseEntry", "curveEntry"],
+    "control_name",
+    ["attackValueControl", "sustainValueControl"],
 )
-def test_space_is_text_input_in_every_envelope_entry(qtbot, entry_name: str) -> None:
+def test_space_is_text_input_in_transient_envelope_entry(qtbot, control_name: str) -> None:
     # Routing an editor Space through transport would both corrupt text entry and sound a note.
     window, _, commands, _, _ = make_window(qtbot)
     window.show()
     qtbot.waitExposed(window)
-    entry = editor_child(window, QLineEdit, entry_name)
+    entry = open_exact_stage_editor(qtbot, window, control_name)
     entry.setText("1")
     entry.setCursorPosition(1)
     entry.setFocus()
@@ -572,7 +600,7 @@ def test_idle_attack_commit_applies_once_clears_capture_and_preserves_frequency(
     assert window.waveform_view.curve.xData is not None
     commands.clear()
 
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
 
     assert controller.state.patch.envelope.attack_seconds == 0.025
     assert controller.state.patch_apply_state is PatchApplyState.APPLIED
@@ -599,7 +627,7 @@ def test_held_patch_commit_releases_then_applies_only_at_matching_idle(qtbot) ->
     window.refresh_capture()
     before_waveform = np.array(window.waveform_view.curve.yData, copy=True)
 
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
 
     authored_patch = controller.state.patch
     assert controller.state.patch_apply_state is PatchApplyState.PENDING
@@ -647,10 +675,10 @@ def test_graph_preview_storm_commits_one_latest_patch_after_release(qtbot) -> No
     window._press_play()
     generation = controller.state.capture.generation
 
-    graph.curve_previewed.emit("attack", 0.10)
-    graph.curve_previewed.emit("attack", 0.20)
-    graph.curve_previewed.emit("attack", 0.30)
-    graph.curve_commit_requested.emit("attack", 0.30)
+    graph.field_previewed.emit("attack_curve", 0.10)
+    graph.field_previewed.emit("attack_curve", 0.20)
+    graph.field_previewed.emit("attack_curve", 0.30)
+    graph.field_commit_requested.emit("attack_curve", 0.30)
 
     assert controller.state.patch.envelope.attack_curve == 0.30
     assert controller.state.patch_apply_state is PatchApplyState.PENDING
@@ -670,7 +698,7 @@ def test_clear_stays_available_pending_and_only_aliased_idle_applies_patch(qtbot
     window, controller, commands, _, _ = make_window(qtbot)
     window._press_play()
     held_generation = controller.state.capture.generation
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
     window._release_play()
     assert window.clear_button.isEnabled()
 
@@ -702,11 +730,11 @@ def test_clear_stays_available_pending_and_only_aliased_idle_applies_patch(qtbot
 def test_capture_refresh_preserves_invalid_editor_text_and_graph_draft(qtbot) -> None:
     # Treating a 34 ms capture refresh as a patch acknowledgment erases in-progress authoring.
     window, controller, commands, _, _ = make_window(qtbot)
-    attack = editor_child(window, EnvelopeValueEntry, "attackEntry")
+    attack = open_exact_stage_editor(qtbot, window, "attackValueControl")
     graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
     replace_entry_text(qtbot, attack, "not complete")
     qtbot.keyClick(attack, Qt.Key.Key_Return)
-    graph.curve_previewed.emit("release", -0.75)
+    graph.field_previewed.emit("release_curve", -0.75)
 
     window.refresh_capture()
 
@@ -720,7 +748,7 @@ def test_capture_refresh_preserves_invalid_editor_text_and_graph_draft(qtbot) ->
 def test_device_error_outranks_editor_error_and_recovery_clears_only_audio(qtbot) -> None:
     # Letting a later editor signal overwrite device failure hides the actionable root cause.
     window, _, _, _, _ = make_window(qtbot)
-    attack = editor_child(window, EnvelopeValueEntry, "attackEntry")
+    attack = open_exact_stage_editor(qtbot, window, "attackValueControl")
     window.handle_audio_failure("device failed")
     replace_entry_text(qtbot, attack, "0.001 ms")
     qtbot.keyClick(attack, Qt.Key.Key_Return)
@@ -747,7 +775,7 @@ def test_error_categories_keep_priority_and_success_clears_only_its_owner(
     file_error = window._error_label.text()
     assert file_error
 
-    attack = editor_child(window, EnvelopeValueEntry, "attackEntry")
+    attack = open_exact_stage_editor(qtbot, window, "attackValueControl")
     replace_entry_text(qtbot, attack, "0.001 ms")
     qtbot.keyClick(attack, Qt.Key.Key_Return)
     editor_error = editor_child(window, QLabel, "envelopeFieldError").text()
@@ -770,7 +798,7 @@ def test_error_categories_keep_priority_and_success_clears_only_its_owner(
     assert window._error_label.text() == editor_error
     assert controller.state.patch == SynthPatch()
     assert commands == []
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    editor_child(window, QPushButton, "resetEnvelopeButton").click()
     assert window._error_label.text() == frequency_error
     window.frequency_entry.setText("330")
     qtbot.keyClick(window.frequency_entry, Qt.Key.Key_Return)
@@ -780,12 +808,12 @@ def test_error_categories_keep_priority_and_success_clears_only_its_owner(
 def test_modal_load_cancel_is_a_true_noop(qtbot) -> None:
     window, controller, commands, _, dialogs = make_window(qtbot)
     window._press_play()
-    commit_entry(qtbot, window, "attackEntry", "25")
-    decay = editor_child(window, EnvelopeValueEntry, "decayEntry")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25")
+    decay = open_exact_stage_editor(qtbot, window, "decayValueControl")
     replace_entry_text(qtbot, decay, "invalid")
     qtbot.keyClick(decay, Qt.Key.Key_Return)
     graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
-    graph.curve_previewed.emit("release", -0.75)
+    graph.field_previewed.emit("release_curve", -0.75)
     before = controller.state
     dialogs.deactivate_during_open = True
 
@@ -802,8 +830,8 @@ def test_modal_save_cancel_preserves_pending_gate_capture_and_editor_draft(qtbot
     # Treating cancellation as success would clear errors or force-stop an active gesture.
     window, controller, commands, _, dialogs = make_window(qtbot)
     window._press_play()
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
-    decay = editor_child(window, EnvelopeValueEntry, "decayEntry")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
+    decay = open_exact_stage_editor(qtbot, window, "decayValueControl")
     replace_entry_text(qtbot, decay, "not complete")
     qtbot.keyClick(decay, Qt.Key.Key_Return)
     before = controller.state
@@ -882,7 +910,9 @@ def test_valid_load_preserves_frequency_force_stops_and_replaces_patch(qtbot, tm
         AudioCommandKind.NOTE_ON,
         AudioCommandKind.REPLACE_PATCH,
     ]
-    assert editor_child(window, EnvelopeValueEntry, "attackEntry").text() == "25 ms"
+    assert (
+        editor_child(window, EnvelopeStageControl, "attackValueControl").display_text == "A 25 ms"
+    )
     assert editor_child(window, QLabel, "outputFact").text() == "-18 dBFS"
     assert editor_child(window, EnvelopeGraph, "envelopeGraph").envelope == replacement.envelope
 
@@ -962,7 +992,7 @@ def test_pending_save_as_writes_latest_authored_patch_as_canonical_v2(qtbot, tmp
     # Saving the applied audio patch would silently lose the user's newest pending authoring.
     window, controller, commands, _, dialogs = make_window(qtbot)
     window._press_play()
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
     assert controller.state.patch_apply_state is PatchApplyState.PENDING
     target = tmp_path / "pending.json"
     dialogs.save_path = target
@@ -995,12 +1025,12 @@ def test_v1_load_force_stops_space_discards_drafts_and_later_saves_v2(
     qtbot.keyClick(window.frequency_entry, Qt.Key.Key_Return)
     source = window.clear_button
     qtbot.keyPress(source, Qt.Key.Key_Space)
-    commit_entry(qtbot, window, "attackEntry", "25")
-    decay = editor_child(window, EnvelopeValueEntry, "decayEntry")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25")
+    decay = open_exact_stage_editor(qtbot, window, "decayValueControl")
     replace_entry_text(qtbot, decay, "invalid")
     qtbot.keyClick(decay, Qt.Key.Key_Return)
     graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
-    graph.curve_previewed.emit("release", -0.75)
+    graph.field_previewed.emit("release_curve", -0.75)
     frequency_errors: list[str] = []
     window.frequency_entry.validation_failed.connect(frequency_errors.append)
     window.frequency_entry.setText("999")
@@ -1050,8 +1080,10 @@ def test_v1_load_force_stops_space_discards_drafts_and_later_saves_v2(
     ]
     assert commands[-1].patch == loaded
     assert commands[-1].generation == controller.state.capture.generation
-    assert decay.text() == "375 ms"
-    assert decay.property("validationState") is None
+    assert window.findChild(EnvelopeValueEntry, "envelopeInlineEditor") is None
+    assert editor_child(window, EnvelopeStageControl, "decayValueControl").display_text == (
+        "D 375 ms"
+    )
     assert graph.envelope == loaded.envelope
     for stage in ("attack", "decay", "release"):
         handle = graph.findChild(QWidget, f"{stage}CurveHandle")
@@ -1074,10 +1106,10 @@ def test_v2_load_synchronizes_all_editor_values_without_feedback(qtbot, tmp_path
     window, controller, commands, _, dialogs = make_window(qtbot)
     editor = window.findChild(EnvelopeEditor, "envelopeEditor")
     graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
-    attack = editor_child(window, EnvelopeValueEntry, "attackEntry")
+    attack = open_exact_stage_editor(qtbot, window, "attackValueControl")
     replace_entry_text(qtbot, attack, "not complete")
     qtbot.keyClick(attack, Qt.Key.Key_Return)
-    graph.curve_previewed.emit("release", -0.75)
+    graph.field_previewed.emit("release_curve", -0.75)
     editor_errors: list[str] = []
     editor_commits: list[SynthPatch] = []
     editor.validation_failed.connect(editor_errors.append)
@@ -1104,10 +1136,18 @@ def test_v2_load_synchronizes_all_editor_values_without_feedback(qtbot, tmp_path
     assert [command.kind for command in commands] == [AudioCommandKind.REPLACE_PATCH]
     assert editor_commits == []
     assert editor_errors == []
-    assert editor_child(window, EnvelopeValueEntry, "attackEntry").text() == "125 ms"
-    assert editor_child(window, EnvelopeValueEntry, "decayEntry").text() == "375 ms"
-    assert editor_child(window, EnvelopeValueEntry, "sustainEntry").text() == "-15 dB"
-    assert editor_child(window, EnvelopeValueEntry, "releaseEntry").text() == "625 ms"
+    assert editor_child(window, EnvelopeStageControl, "attackValueControl").display_text == (
+        "A 125 ms"
+    )
+    assert editor_child(window, EnvelopeStageControl, "decayValueControl").display_text == (
+        "D 375 ms"
+    )
+    assert editor_child(window, EnvelopeStageControl, "sustainValueControl").display_text == (
+        "S -15 dB"
+    )
+    assert editor_child(window, EnvelopeStageControl, "releaseValueControl").display_text == (
+        "R 625 ms"
+    )
     assert graph.envelope == loaded.envelope
     assert graph.findChild(QWidget, "attackCurveHandle").current_curve == 0.20
     assert graph.findChild(QWidget, "decayCurveHandle").current_curve == -0.40
@@ -1165,8 +1205,8 @@ def test_pending_shutdown_applies_once_discards_invalid_draft_and_never_saves(qt
     shutdowns: list[bool] = []
     window.shutdown_requested.connect(lambda: shutdowns.append(True))
     window._press_play()
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
-    decay = editor_child(window, EnvelopeValueEntry, "decayEntry")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
+    decay = open_exact_stage_editor(qtbot, window, "decayValueControl")
     replace_entry_text(qtbot, decay, "not complete")
     qtbot.keyClick(decay, Qt.Key.Key_Return)
     assert controller.state.patch_apply_state is PatchApplyState.PENDING
@@ -1181,19 +1221,25 @@ def test_pending_shutdown_applies_once_discards_invalid_draft_and_never_saves(qt
     ]
     assert commands[-1].patch == controller.state.patch
     assert commands[-1].generation == controller.state.capture.generation
-    assert decay.text() == "600 ms"
-    assert decay.property("validationState") is None
+    assert window.findChild(EnvelopeValueEntry, "envelopeInlineEditor") is None
+    assert editor_child(window, EnvelopeStageControl, "decayValueControl").display_text == (
+        "D 600 ms"
+    )
     assert editor_child(window, QLabel, "envelopeFieldError").text() == ""
     assert dialogs.save_count == 0
     assert shutdowns == [True]
     assert not window._refresh_timer.isActive()
 
 
-def test_reset_curves_has_a_non_space_keyboard_route(qtbot) -> None:
+def test_reset_envelope_has_a_non_space_keyboard_route(qtbot) -> None:
     # If Reset is Space-only, the global transport filter makes the action inaccessible.
     curved = SynthPatch(
         envelope=replace(
             SynthPatch().envelope,
+            attack_seconds=0.025,
+            decay_seconds=0.250,
+            sustain_db=-18.0,
+            release_seconds=1.25,
             attack_curve=0.25,
             decay_curve=-0.50,
             release_curve=0.75,
@@ -1205,15 +1251,28 @@ def test_reset_curves_has_a_non_space_keyboard_route(qtbot) -> None:
     window.activateWindow()
     QApplication.processEvents()
     assert window.isActiveWindow()
-    reset = editor_child(window, QPushButton, "resetCurvesButton")
+    controller.set_frequency(330.0)
+    window._press_play()
+    generation = controller.state.capture.generation
+    reset = editor_child(window, QPushButton, "resetEnvelopeButton")
     reset.setFocus()
 
     qtbot.keyClick(reset, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
 
-    assert controller.state.patch.envelope.attack_curve == 0.0
-    assert controller.state.patch.envelope.decay_curve == 0.0
-    assert controller.state.patch.envelope.release_curve == 0.0
-    assert [command.kind for command in commands] == [AudioCommandKind.REPLACE_PATCH]
+    assert controller.state.patch.envelope == EnvelopeConfig()
+    assert controller.state.selected_frequency_hz == 330.0
+    assert controller.state.patch_apply_state is PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [AudioCommandKind.NOTE_ON]
+
+    window._release_play()
+    window.handle_voice_idle(generation)
+
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+        AudioCommandKind.REPLACE_PATCH,
+    ]
+    assert commands[-1].patch == controller.state.patch
 
 
 @pytest.mark.parametrize("size", [QSize(1_280, 720), QSize(1_024, 640)])
@@ -1274,7 +1333,7 @@ def test_envelope_workbench_layout_contract(qtbot, size: QSize) -> None:
 
     assert_geometry()
     window._press_play()
-    commit_entry(qtbot, window, "attackEntry", "25 ms")
+    commit_exact_stage(qtbot, window, "attackValueControl", "25 ms")
     assert window._controller.state.patch_apply_state is PatchApplyState.PENDING
     assert_geometry()
     window.handle_audio_failure("Audio output failed: OpenError")
