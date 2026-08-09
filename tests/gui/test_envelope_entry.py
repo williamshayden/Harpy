@@ -1,12 +1,75 @@
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLineEdit
+from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+from PySide6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
 
 from harpy.gui.envelope_entry import (
     EnvelopeFieldKind,
     EnvelopeValueEntry,
+    format_envelope_curvature,
+    format_envelope_decibels,
     format_envelope_duration,
 )
+
+
+def test_focus_loss_requests_silent_transient_cancel(qtbot) -> None:
+    # Omitting the signal would leave the transient owner unable to close a lost editor.
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    entry = EnvelopeValueEntry("Attack", EnvelopeFieldKind.DURATION, host)
+    other = QLineEdit(host)
+    layout.addWidget(entry)
+    layout.addWidget(other)
+    qtbot.addWidget(host)
+    cancelled: list[None] = []
+    entry.focus_cancel_requested.connect(lambda: cancelled.append(None))
+    entry.set_exact_value(0.001)
+    host.show()
+    host.activateWindow()
+    entry.setFocus()
+    QApplication.processEvents()
+    other.setFocus()
+    QApplication.processEvents()
+    assert cancelled == [None]
+    assert other.hasFocus()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(-6.0, "-6 dB"), (-0.0, "0 dB"), (-12.3456789, "-12.345679 dB")],
+)
+def test_decibel_formatter_is_canonical(value: float, expected: str) -> None:
+    # A divergent dB formatter would make graph controls disagree with exact entry.
+    assert format_envelope_decibels(value) == expected
+
+
+def test_curvature_formatter_preserves_six_decimal_precision() -> None:
+    # Losing the display formatter would degrade the still-live legacy curve entry.
+    assert format_envelope_curvature(0.123456789) == "0.123457"
+    assert format_envelope_curvature(-0.0) == "0"
+
+
+def test_parser_rejection_announces_and_restores_clean_accessibility(qtbot, monkeypatch) -> None:
+    # Failing to announce a parser error leaves screen-reader users without feedback.
+    entry = EnvelopeValueEntry("Attack", EnvelopeFieldKind.DURATION)
+    qtbot.addWidget(entry)
+    events: list[QAccessibleAnnouncementEvent] = []
+    monkeypatch.setattr(QAccessible, "updateAccessibility", events.append)
+    base_description = "Milliseconds or seconds. Drag vertically; Enter or F2 edits exactly."
+    entry.set_editor_accessibility("Attack duration", base_description)
+    entry.set_exact_value(0.001)
+    entry.selectAll()
+    qtbot.keyClicks(entry, "nope")
+    qtbot.keyPress(entry, Qt.Key.Key_Return)
+
+    assert entry.accessibleDescription() == (
+        f"{base_description} Attack: enter a plain duration with optional ms or s."
+    )
+    assert len(events) == 1
+    assert events[0].object() is entry
+    qtbot.keyPress(entry, Qt.Key.Key_Escape)
+    assert entry.accessibleDescription() == base_description
+    assert len(events) == 1
 
 
 def assert_invalid_commit(qtbot, entry: EnvelopeValueEntry, text: str, field: str) -> None:

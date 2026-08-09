@@ -7,7 +7,7 @@ import re
 from enum import StrEnum
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent, QFocusEvent, QKeyEvent
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 _PLAIN_DECIMAL = r"[+-]?(?:\d+(?:\.\d{0,9})?|\.\d{1,9})"
@@ -37,12 +37,27 @@ def format_envelope_duration(seconds: float) -> str:
     return f"{_plain_decimal(seconds)} s"
 
 
+def format_envelope_decibels(value: float) -> str:
+    """Format a decibel value with canonical signed-zero handling."""
+
+    numeric = 0.0 if value == 0.0 else value
+    return f"{_plain_decimal(numeric)} dB"
+
+
+def format_envelope_curvature(value: float) -> str:
+    """Format a legacy curvature readout without appending a unit."""
+
+    numeric = 0.0 if value == 0.0 else value
+    return _plain_decimal(numeric)
+
+
 class EnvelopeValueEntry(QLineEdit):
     """Propose parsed values while retaining only parent-accepted exact values."""
 
     value_commit_requested = Signal(float)
     validation_failed = Signal(str)
     draft_reverted = Signal()
+    focus_cancel_requested = Signal()
 
     def __init__(
         self,
@@ -58,6 +73,7 @@ class EnvelopeValueEntry(QLineEdit):
         self._last_rendered_text = ""
         self._last_exact_value: float | None = None
         self._last_duration_unit: str | None = None
+        self._base_accessible_description: str | None = None
         self.returnPressed.connect(self._propose_commit)
 
     @property
@@ -83,6 +99,13 @@ class EnvelopeValueEntry(QLineEdit):
 
         self._set_error(message)
 
+    def set_editor_accessibility(self, name: str, description: str) -> None:
+        """Set the stable screen-reader context for this transient editor."""
+
+        self.setAccessibleName(name)
+        self._base_accessible_description = description
+        self.setAccessibleDescription(description)
+
     def restore_last_valid(self) -> None:
         """Restore the last parent-accepted canonical rendering without emitting."""
 
@@ -96,6 +119,10 @@ class EnvelopeValueEntry(QLineEdit):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        super().focusOutEvent(event)
+        self.focus_cancel_requested.emit()
 
     def _propose_commit(self) -> None:
         text = self.text()
@@ -160,8 +187,8 @@ class EnvelopeValueEntry(QLineEdit):
         if self._kind is EnvelopeFieldKind.DURATION:
             return format_envelope_duration(value)
         if self._kind is EnvelopeFieldKind.DECIBELS:
-            return f"{_plain_decimal(value)} dB"
-        return _plain_decimal(value)
+            return format_envelope_decibels(value)
+        return format_envelope_curvature(value)
 
     def _invalid(self, instruction: str) -> ValueError:
         return ValueError(f"{self._field_name}: {instruction}.")
@@ -169,11 +196,16 @@ class EnvelopeValueEntry(QLineEdit):
     def _set_error(self, message: str) -> None:
         self.setProperty("validationState", "error")
         self._repolish()
+        base_description = self._base_accessible_description or self.accessibleDescription()
+        self.setAccessibleDescription(f"{base_description} {message}".strip())
+        QAccessible.updateAccessibility(QAccessibleAnnouncementEvent(self, message))
         self.validation_failed.emit(message)
 
     def _clear_error(self) -> None:
         self.setProperty("validationState", None)
         self._repolish()
+        if self._base_accessible_description is not None:
+            self.setAccessibleDescription(self._base_accessible_description)
 
     def _repolish(self) -> None:
         self.style().unpolish(self)
