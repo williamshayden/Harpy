@@ -108,7 +108,8 @@ class SynthAudioSource(QIODevice):
         self._commands: queue.SimpleQueue[AudioCommand] = queue.SimpleQueue()
         self._staging = bytearray()
         self._io_lock = Lock()
-        self._natural_idle_pending = False
+        self._idle_watermark_bytes: int | None = None
+        self._idle_generation: int | None = None
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def submit(self, command: AudioCommand) -> None:
@@ -125,17 +126,28 @@ class SynthAudioSource(QIODevice):
         with self._io_lock:
             while True:
                 self._drain_commands()
-                if len(self._staging) >= maxlen:
+                if self._idle_watermark_bytes is not None or len(self._staging) >= maxlen:
                     break
                 was_idle = self._engine.is_idle
                 mono = self._engine.render(self._render.block_frames)
                 self._history.append(mono, self._capture_generation)
                 self._staging.extend(encode_mono_samples(mono, self._audio_format))
-                if not was_idle and self._engine.is_idle:
-                    self._natural_idle_pending = True
-                self._emit_natural_idle_if_needed()
-            output = bytes(self._staging[:maxlen])
-            del self._staging[:maxlen]
+                if self._idle_watermark_bytes is None and not was_idle and self._engine.is_idle:
+                    self._idle_watermark_bytes = len(self._staging)
+                    self._idle_generation = self._capture_generation
+            output_bytes = min(maxlen, len(self._staging))
+            if self._idle_watermark_bytes is not None:
+                output_bytes = min(output_bytes, self._idle_watermark_bytes)
+            output = bytes(self._staging[:output_bytes])
+            del self._staging[:output_bytes]
+            if self._idle_watermark_bytes is not None:
+                self._idle_watermark_bytes -= output_bytes
+                if self._idle_watermark_bytes == 0:
+                    generation = self._idle_generation
+                    self._cancel_idle_watermark()
+                    if generation is None:
+                        raise RuntimeError("idle watermark lost its generation")
+                    self.voice_idle.emit(generation)
             return output
 
     def writeData(self, data: bytes) -> int:
@@ -159,17 +171,14 @@ class SynthAudioSource(QIODevice):
                     raise RuntimeError("validated NOTE_ON command lost its payload")
                 self._capture_generation = command.generation
                 self._engine.note_on(command.frequency_hz)
-                self._natural_idle_pending = False
+                self._cancel_idle_watermark()
             elif command.kind is AudioCommandKind.RETUNE:
                 if command.frequency_hz is None:
                     raise RuntimeError("validated RETUNE command lost its frequency")
                 if not self._engine.is_idle:
                     self._engine.retune(command.frequency_hz)
             elif command.kind is AudioCommandKind.NOTE_OFF:
-                was_idle = self._engine.is_idle
                 self._engine.note_off()
-                if not was_idle and self._engine.is_idle:
-                    self._natural_idle_pending = True
             elif command.kind is AudioCommandKind.CLEAR_CAPTURE:
                 if command.generation is None:
                     raise RuntimeError("validated CLEAR_CAPTURE command lost its generation")
@@ -180,20 +189,18 @@ class SynthAudioSource(QIODevice):
                 self._staging.clear()
                 self._engine.replace_patch(command.patch)
                 self._capture_generation = command.generation
-                self._natural_idle_pending = False
+                self._cancel_idle_watermark()
             elif command.kind is AudioCommandKind.RESET:
                 if command.generation is None:
                     raise RuntimeError("validated RESET command lost its generation")
                 self._staging.clear()
                 self._engine.reset()
                 self._capture_generation = command.generation
-                self._natural_idle_pending = False
-        self._emit_natural_idle_if_needed()
+                self._cancel_idle_watermark()
 
-    def _emit_natural_idle_if_needed(self) -> None:
-        if self._natural_idle_pending and self._engine.is_idle:
-            self._natural_idle_pending = False
-            self.voice_idle.emit(self._capture_generation)
+    def _cancel_idle_watermark(self) -> None:
+        self._idle_watermark_bytes = None
+        self._idle_generation = None
 
 
 class QtAudioBackend(QObject):

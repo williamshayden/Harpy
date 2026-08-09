@@ -5,6 +5,7 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 
 from harpy.capture import CaptureCoordinator, CaptureState, CaptureView
 from harpy.gui.workbench_spec import WorkbenchSpec
@@ -17,6 +18,13 @@ from harpy.synth.models import (
 )
 
 
+class PatchApplyState(StrEnum):
+    """Whether the latest authored patch is active at the audio boundary."""
+
+    APPLIED = "applied"
+    PENDING = "pending"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkbenchState:
     """UI-independent workbench state expressed in domain values."""
@@ -25,6 +33,7 @@ class WorkbenchState:
     gate_held: bool
     voice_may_be_active: bool
     patch: SynthPatch
+    patch_apply_state: PatchApplyState
     capture: CaptureView
     audio_available: bool
     audio_error: str | None
@@ -56,7 +65,9 @@ class WorkbenchController:
 
         self._spec = spec
         self._render = render
-        self._patch = patch
+        self._authored_patch = patch
+        self._applied_patch = patch
+        self._patch_apply_state = PatchApplyState.APPLIED
         self._capture = capture
         self._send_command = send_command
         self._selected_frequency_hz = spec.center_frequency_hz
@@ -75,7 +86,8 @@ class WorkbenchController:
             selected_frequency_hz=self._selected_frequency_hz,
             gate_held=self._gate_held,
             voice_may_be_active=self._voice_may_be_active,
-            patch=self._patch,
+            patch=self._authored_patch,
+            patch_apply_state=self._patch_apply_state,
             capture=self._capture_view,
             audio_available=self._audio_available,
             audio_error=self._audio_error,
@@ -93,7 +105,11 @@ class WorkbenchController:
     def press_play(self) -> WorkbenchState:
         """Start or retrigger the selected frequency when audio is available."""
 
-        if self._gate_held or not self._audio_available:
+        if (
+            self._gate_held
+            or not self._audio_available
+            or self._patch_apply_state is PatchApplyState.PENDING
+        ):
             return self.state
 
         generation = self._capture.begin()
@@ -132,22 +148,31 @@ class WorkbenchController:
     def replace_patch(self, patch: SynthPatch) -> WorkbenchState:
         """Validate and atomically replace the complete patch and playback state."""
 
-        if not isinstance(patch, SynthPatch):
-            raise ValueError("patch must be a SynthPatch")
-        validate_renderable_patch(patch, self._render)
+        self._validate_patch(patch)
 
-        generation = self._capture.reset()
-        command = AudioCommand(
-            AudioCommandKind.REPLACE_PATCH,
-            patch=patch,
-            generation=generation,
-        )
-        self._capture_view = self._capture.refresh()
-        self._patch = patch
+        self._authored_patch = patch
         self._gate_held = False
         self._voice_may_be_active = False
         self._voice_generation = None
-        self._send_command(command)
+        self._admit_authored_patch()
+        return self.state
+
+    def commit_authored_patch(self, patch: SynthPatch) -> WorkbenchState:
+        """Store a valid authored patch and defer active-voice replacement."""
+
+        self._validate_patch(patch)
+        if patch == self._authored_patch:
+            return self.state
+
+        self._authored_patch = patch
+        if self._voice_may_be_active:
+            self._patch_apply_state = (
+                PatchApplyState.APPLIED if patch == self._applied_patch else PatchApplyState.PENDING
+            )
+        elif patch != self._applied_patch:
+            self._admit_authored_patch()
+        else:
+            self._patch_apply_state = PatchApplyState.APPLIED
         return self.state
 
     def refresh_capture(self) -> WorkbenchState:
@@ -160,9 +185,13 @@ class WorkbenchController:
         """Accept a natural idle notification only for the current voice token."""
 
         supplied_generation = self._validated_generation(generation)
-        if supplied_generation == self._voice_generation:
-            self._voice_may_be_active = False
-            self._voice_generation = None
+        if supplied_generation != self._voice_generation:
+            return self.state
+
+        self._voice_may_be_active = False
+        self._voice_generation = None
+        if self._patch_apply_state is PatchApplyState.PENDING:
+            self._admit_authored_patch()
         return self.state
 
     def force_stop(self) -> WorkbenchState:
@@ -172,8 +201,16 @@ class WorkbenchController:
             self._gate_held
             or self._voice_may_be_active
             or self._capture_view.state is not CaptureState.EMPTY
+            or self._patch_apply_state is PatchApplyState.PENDING
         )
         if not needs_reset:
+            return self.state
+
+        if self._patch_apply_state is PatchApplyState.PENDING:
+            self._gate_held = False
+            self._voice_may_be_active = False
+            self._voice_generation = None
+            self._admit_authored_patch()
             return self.state
 
         generation = self._capture.reset()
@@ -199,6 +236,24 @@ class WorkbenchController:
         self._audio_available = available
         self._audio_error = None if available else error
         return self.state
+
+    def _admit_authored_patch(self) -> None:
+        generation = self._capture.reset()
+        self._capture_view = self._capture.refresh()
+        self._send_command(
+            AudioCommand(
+                AudioCommandKind.REPLACE_PATCH,
+                patch=self._authored_patch,
+                generation=generation,
+            )
+        )
+        self._applied_patch = self._authored_patch
+        self._patch_apply_state = PatchApplyState.APPLIED
+
+    def _validate_patch(self, patch: SynthPatch) -> None:
+        if not isinstance(patch, SynthPatch):
+            raise ValueError("patch must be a SynthPatch")
+        validate_renderable_patch(patch, self._render)
 
     def _validated_frequency(self, frequency_hz: float) -> float:
         frequency = validate_frequency_hz(frequency_hz, self._render)

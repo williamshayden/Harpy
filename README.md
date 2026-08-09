@@ -1,9 +1,10 @@
 # Harpy
 
 Harpy is currently a native deterministic sine workbench and the foundation for a
-future audio-reinforcement-learning research environment. Milestone A provides one
-monophonic NumPy sine engine, a PySide6/Qt Multimedia desktop workbench, strict patch
-files, and pure waveform/spectrum analysis. It does not yet provide an RL environment.
+future audio-reinforcement-learning research environment. Milestones A and B provide
+one monophonic NumPy sine engine, a PySide6/Qt Multimedia desktop workbench, strict
+versioned patch files, pure waveform/spectrum analysis, and graph-native envelope
+authoring. Harpy does not yet provide an RL environment.
 
 The project notebook records the broader research hypotheses, references, decisions,
 and open questions:
@@ -11,6 +12,9 @@ and open questions:
 - [Project notebook](docs/project-notebook.md)
 - [Milestone A design](docs/superpowers/specs/2026-08-07-harpy-milestone-a-foundation-workbench-design.md)
 - [Milestone A acceptance evidence](docs/verification/2026-08-07-milestone-a-acceptance.md)
+- [Milestone B approved design](docs/superpowers/specs/2026-08-08-harpy-milestone-b-envelope-authoring-design.md)
+- [Milestone B graph-native implementation plan](docs/superpowers/plans/2026-08-08-harpy-milestone-b-graph-native-envelope-controls.md)
+- [Milestone B acceptance evidence](docs/verification/2026-08-08-milestone-b-acceptance.md)
 
 ## Install, run, and verify
 
@@ -48,6 +52,14 @@ sine oscillator with a 1 ms attack, 600 ms decay, -6 dB sustain, 600 ms release,
 The C2–C4 limit belongs only to the GUI. `SynthEngine` accepts every finite positive
 frequency strictly below half the configured sample rate (Nyquist).
 
+Milestone B adds graph-native A/D/S/R vertical scrubbing, transient exact editing,
+constrained Attack/Decay/Release curve handles, and a contextual envelope-only Reset.
+The frequency selector is a continuous logarithmic pro-audio dial with vertical drag,
+dynamic Shift fine mode, wheel and keyboard steps, a C3 reset, landmarks, and native
+accessible Dial semantics. Envelope edits made during a held note or its release are
+deferred and coalesced; the current voice finishes unchanged and the final admitted
+patch is rendered on the next Play.
+
 ## Public non-Qt API
 
 The reusable research surface does not require a Qt application:
@@ -55,8 +67,10 @@ The reusable research surface does not require a Qt application:
 - `harpy.synth.SynthPatch` is an immutable validated sound description; its nested
   oscillator and envelope values live in `harpy.synth.models`.
 - `harpy.synth.patch_json` supplies `dumps_patch`, `loads_patch`, `save_patch`, and
-  `load_patch`. The version-1 codec rejects missing, extra, duplicate, non-finite, and
-  incorrectly typed fields instead of accepting a partial document.
+  `load_patch`. Harpy strictly reads schema-v1 linear patches and schema-v2
+  curve-enabled patches, rejecting missing, extra, duplicate, non-finite, and
+  incorrectly typed fields instead of accepting a partial document. It writes only
+  canonical schema v2.
 - `harpy.synth.SynthEngine` renders deterministic mono `float32` blocks and exposes
   `note_on`, `retune`, `note_off`, `replace_patch`, `render`, and `reset`.
 - `harpy.tuning.Tuning` converts between hertz and MIDI coordinates and derives
@@ -66,19 +80,15 @@ The reusable research surface does not require a Qt application:
   immutable `AudioObservation`, using an optional validated `AnalysisConfig`.
 
 A patch JSON document contains only `schema_version`, oscillator configuration,
-envelope configuration, and `output_gain_dbfs`. It contains no played note, selected
-frequency, render/sample-rate setting, file history, path, identifier, or other
-application-owned storage metadata. A patch describes a sound, not a performance or a
-saved workbench session.
+envelope values and curves, and `output_gain_dbfs`. Selected or played frequency is
+performance state outside patch JSON. The document also contains no render/sample-rate
+setting, file history, path, identifier, or other application-owned storage metadata.
+A patch describes a sound, not a performance or a saved workbench session.
 
 ## Roadmap, not current capability
 
-Milestone B is deferred. It is intended to add editable ADSR values, constrained curve
-parameters, graphical envelope authoring, and an explicitly versioned patch-schema
-extension.
-
-The sine-only Gym proof is also deferred. Constrained pitch actions, targets,
-actor-facing observations, rewards, model/tool adapters, training, and benchmark
-reporting are roadmap items, not implemented claims. Browser UI, MIDI input,
-imported-audio editing, a database, additional oscillators, polyphony, and third-party
-synth engines are likewise outside the current implementation.
+The sine-only Gym proof remains Milestone C roadmap work. Constrained pitch actions,
+targets, actor-facing observations, rewards, model/tool adapters, training, and
+benchmark reporting are roadmap items, not implemented claims. Browser UI, MIDI
+input, imported-audio editing, a database, additional oscillators, polyphony, and
+third-party synth engines are likewise outside the current implementation.

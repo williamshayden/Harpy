@@ -58,6 +58,13 @@ def test_validation_rejects_waveform_frame_counts_outside_fft(duration: float) -
         validate_analysis_config(AnalysisConfig(waveform_window_seconds=duration), 48_000)
 
 
+def test_validation_rejects_waveform_duration_whose_frame_product_overflows() -> None:
+    config = AnalysisConfig(waveform_window_seconds=1e308)
+
+    with pytest.raises(ValueError, match="waveform_window_seconds"):
+        validate_analysis_config(config, 48_000)
+
+
 @pytest.mark.parametrize(
     ("minimum_hz", "maximum_hz"),
     [

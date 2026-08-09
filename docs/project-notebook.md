@@ -1,6 +1,6 @@
 # Harpy project notebook
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 Status: exploratory project-level notes. Milestone specifications and their review status live under `docs/superpowers/specs/`.
 
@@ -223,6 +223,22 @@ The manual lab is not the training system. Its purposes are:
 
 The manual lab is a native local desktop application; a browser or local web server is explicitly out of scope. The implemented Milestone A workbench uses PySide6, Qt Multimedia, pyqtgraph, and WSLg. Its live audio device remains a demonstration adapter around the same deterministic block renderer that future offline generation will use, so device behavior cannot become benchmark truth.
 
+## Milestone B instrument checkpoint
+
+Observed and recorded on 2026-08-08, Milestone B makes the native sine workbench a
+reproducible source authoring tool. A patch now records strict oscillator,
+curve-enabled envelope, and output-gain configuration in canonical schema v2, while
+played frequency remains separate performance state. Graph-native A/D/S/R and curve
+controls therefore let a researcher create deterministic labeled source renders
+without turning the manual lab into the benchmark actor.
+
+This does not change the first retuning track's scientific boundary. The first actor
+still manipulates a rendered immutable audio asset with constrained pitch tools; it
+does not control the synthesizer or infer its patch. Direct synth control remains a
+later inverse-synthesis benchmark family. The sine-only Gym itself remains Milestone C
+and requires a new specification for actions, observations, rewards, leakage controls,
+model adapters, and benchmark protocol before implementation.
+
 ## Experiment record
 
 Every run should produce a portable manifest and summary containing:
@@ -353,6 +369,16 @@ Questions should be resolved one at a time during design:
 11. Should the repository adopt a permissive license, and which one?
 
 ## Decision log
+
+### 2026-08-08
+
+- Completed the graph-native Milestone B implementation for direct A/D/S/R scrubbing,
+  transient exact entry, constrained curve handles, envelope-only Reset, strict
+  v1-read/v2-write patches, deferred patch application, and the refined frequency dial.
+- Kept selected and played frequency outside patch JSON as performance state.
+- Confirmed that Milestone B creates reproducible procedural sources but does not give
+  the first retuning actor synth controls.
+- Kept the sine-only Gym at the Milestone C brainstorming and specification boundary.
 
 ### 2026-08-07
 

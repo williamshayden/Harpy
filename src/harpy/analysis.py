@@ -61,7 +61,10 @@ def _waveform_frames(config: AnalysisConfig, sample_rate_hz: float) -> int:
         raise ValueError("waveform_window_seconds must produce 1..fft_frames") from error
     if not math.isfinite(duration):
         raise ValueError("waveform_window_seconds must produce 1..fft_frames")
-    return math.floor(duration * sample_rate_hz + 0.5)
+    frame_count = duration * sample_rate_hz
+    if not math.isfinite(frame_count):
+        raise ValueError("waveform_window_seconds must produce 1..fft_frames")
+    return math.floor(frame_count + 0.5)
 
 
 def validate_analysis_config(config: AnalysisConfig, sample_rate_hz: int) -> None:

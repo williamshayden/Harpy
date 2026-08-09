@@ -10,12 +10,21 @@ from harpy.synth.models import EnvelopeConfig, OscillatorConfig, OscillatorType,
 
 _ROOT_KEYS = {"schema_version", "oscillator", "envelope", "output_gain_dbfs"}
 _OSCILLATOR_KEYS = {"type"}
-_ENVELOPE_KEYS = {
+_V1_ENVELOPE_KEYS = {
     "attack_seconds",
     "decay_seconds",
     "sustain_db",
     "release_seconds",
     "curve",
+}
+_V2_ENVELOPE_KEYS = {
+    "attack_seconds",
+    "decay_seconds",
+    "sustain_db",
+    "release_seconds",
+    "attack_curve",
+    "decay_curve",
+    "release_curve",
 }
 _JSON_WHITESPACE = " \t\r\n"
 
@@ -48,7 +57,7 @@ def loads_patch(text: str) -> SynthPatch:
 
     root = _object(value, "patch")
     _validate_keys(root, _ROOT_KEYS, "patch")
-    _require_schema_version(root["schema_version"])
+    schema_version = _require_schema_version(root["schema_version"])
 
     oscillator_data = _object(root["oscillator"], "oscillator")
     _validate_keys(oscillator_data, _OSCILLATOR_KEYS, "oscillator")
@@ -61,13 +70,30 @@ def loads_patch(text: str) -> SynthPatch:
         raise ValueError("oscillator.type is unsupported") from error
 
     envelope_data = _object(root["envelope"], "envelope")
-    _validate_keys(envelope_data, _ENVELOPE_KEYS, "envelope")
-    for field_name in ("attack_seconds", "decay_seconds", "sustain_db", "release_seconds"):
+    envelope_keys = _V1_ENVELOPE_KEYS if schema_version == 1 else _V2_ENVELOPE_KEYS
+    _validate_keys(envelope_data, envelope_keys, "envelope")
+    numeric_fields = ["attack_seconds", "decay_seconds", "sustain_db", "release_seconds"]
+    if schema_version == 2:
+        numeric_fields.extend(["attack_curve", "decay_curve", "release_curve"])
+    for field_name in numeric_fields:
         _number(envelope_data[field_name], f"envelope.{field_name}")
-    if not isinstance(envelope_data["curve"], str):
-        raise ValueError("envelope.curve must be a string")
+    if schema_version == 1:
+        if not isinstance(envelope_data["curve"], str):
+            raise ValueError("envelope.curve must be a string")
+        if envelope_data["curve"] != "linear_amplitude":
+            raise ValueError("envelope.curve is unsupported")
+        envelope_arguments = {
+            field_name: envelope_data[field_name] for field_name in numeric_fields
+        }
+        envelope_arguments.update(
+            attack_curve=0.0,
+            decay_curve=0.0,
+            release_curve=0.0,
+        )
+    else:
+        envelope_arguments = envelope_data
     try:
-        envelope = EnvelopeConfig(**envelope_data)
+        envelope = EnvelopeConfig(**envelope_arguments)
     except ValueError as error:
         raise ValueError(f"envelope is invalid: {error}") from error
 
@@ -86,14 +112,16 @@ def dumps_patch(patch: SynthPatch) -> str:
     if not isinstance(patch, SynthPatch):
         raise ValueError("patch must be a SynthPatch")
     document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "oscillator": {"type": patch.oscillator.type.value},
         "envelope": {
             "attack_seconds": patch.envelope.attack_seconds,
             "decay_seconds": patch.envelope.decay_seconds,
             "sustain_db": patch.envelope.sustain_db,
             "release_seconds": patch.envelope.release_seconds,
-            "curve": patch.envelope.curve,
+            "attack_curve": patch.envelope.attack_curve,
+            "decay_curve": patch.envelope.decay_curve,
+            "release_curve": patch.envelope.release_curve,
         },
         "output_gain_dbfs": patch.output_gain_dbfs,
     }
@@ -162,7 +190,15 @@ def _diagnose_non_finite_field(text: str, start: int) -> str | None:
     envelope = document.get("envelope")
     if not isinstance(envelope, dict):
         return None
-    for field_name in ("attack_seconds", "decay_seconds", "sustain_db", "release_seconds"):
+    for field_name in (
+        "attack_seconds",
+        "decay_seconds",
+        "sustain_db",
+        "release_seconds",
+        "attack_curve",
+        "decay_curve",
+        "release_curve",
+    ):
         if isinstance(envelope.get(field_name), _NonFiniteConstant):
             return f"envelope.{field_name}"
     return None
@@ -190,9 +226,12 @@ def _validate_keys(value: dict[str, Any], expected: set[str], field_name: str) -
         raise ValueError(f"{field_name}.{sorted(unexpected)[0]} is not supported")
 
 
-def _require_schema_version(value: Any) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value != 1:
-        raise ValueError("schema_version must be the integer 1")
+def _require_schema_version(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("schema_version must be an integer")
+    if value not in (1, 2):
+        raise ValueError(f"schema_version {value} is unsupported")
+    return value
 
 
 def _number(value: Any, field_name: str) -> None:

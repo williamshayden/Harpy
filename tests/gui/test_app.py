@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from dataclasses import replace
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtTest import QTest
 
 from harpy.capture import SampleHistory
 from harpy.config import DEFAULT_CONFIG
 from harpy.gui.app import build_runtime
+from harpy.gui.envelope_entry import EnvelopeValueEntry
+from harpy.gui.envelope_stage_control import EnvelopeStageControl
 from harpy.gui.qt_audio import QtAudioBackend
 from harpy.playback import AudioCommand, AudioCommandKind
 from harpy.synth.models import RenderConfig, SynthPatch
@@ -36,6 +42,18 @@ class ComposedBackend(QObject):
         self.events.append("shutdown")
 
 
+class CountingDialogs:
+    def __init__(self) -> None:
+        self.save_count = 0
+
+    def choose_open_path(self, _parent) -> Path | None:
+        return None
+
+    def choose_save_path(self, _parent) -> Path | None:
+        self.save_count += 1
+        return None
+
+
 def test_build_runtime_composes_final_graph_with_fft_capacity(qapp) -> None:
     created: list[ComposedBackend] = []
 
@@ -51,6 +69,7 @@ def test_build_runtime_composes_final_graph_with_fft_capacity(qapp) -> None:
     assert runtime.history is runtime.audio.history
     assert runtime.history.snapshot_recent(DEFAULT_CONFIG.analysis.fft_frames).samples.size == 0
     assert runtime.window._refresh_timer.interval() >= 34
+    assert runtime.window.envelope_editor._render is DEFAULT_CONFIG.render
     assert isinstance(runtime.audio, ComposedBackend)
 
 
@@ -76,14 +95,53 @@ def test_backend_signals_are_connected_to_single_window_paths_before_start(qapp)
     assert not runtime.window.play_button.isEnabled()
 
 
-def test_about_to_quit_uses_reset_shutdown_teardown_order(qapp) -> None:
-    runtime = build_runtime(qapp, DEFAULT_CONFIG, audio_factory=ComposedBackend)
+def test_about_to_quit_applies_pending_patch_once_before_backend_shutdown(qapp, qtbot) -> None:
+    dialogs = CountingDialogs()
+    runtime = build_runtime(
+        qapp,
+        DEFAULT_CONFIG,
+        audio_factory=ComposedBackend,
+        patch_dialogs=dialogs,
+    )
+    qtbot.addWidget(runtime.window)
     runtime.window.play_button.pressed.emit()
+    candidate = replace(
+        DEFAULT_CONFIG.patch,
+        envelope=replace(DEFAULT_CONFIG.patch.envelope, attack_seconds=0.025),
+    )
+    runtime.window.envelope_editor.patch_commit_requested.emit(candidate)
+    attack_control = runtime.window.envelope_editor.findChild(
+        EnvelopeStageControl,
+        "attackValueControl",
+    )
+    assert attack_control is not None
+    runtime.window.show()
+    qapp.processEvents()
+    attack_control.setFocus(Qt.FocusReason.OtherFocusReason)
+    QTest.keyClick(attack_control, Qt.Key.Key_F2)
+    attack = runtime.window.envelope_editor.findChild(
+        EnvelopeValueEntry,
+        "envelopeInlineEditor",
+    )
+    assert attack is not None and attack.isVisible() and attack.hasFocus()
+    attack.selectAll()
+    QTest.keyClicks(attack, "not complete")
+    QTest.keyClick(attack, Qt.Key.Key_Return)
 
     qapp.aboutToQuit.emit()
     runtime.window.close()
 
-    assert runtime.audio.events == ["submit:NOTE_ON", "submit:RESET", "shutdown"]
+    assert runtime.audio.events == ["submit:NOTE_ON", "submit:REPLACE_PATCH", "shutdown"]
+    assert runtime.audio.commands[-1].patch == candidate
+    assert attack_control.display_text == "A 25 ms"
+    assert (
+        runtime.window.envelope_editor.findChild(
+            EnvelopeValueEntry,
+            "envelopeInlineEditor",
+        )
+        is None
+    )
+    assert dialogs.save_count == 0
     assert not runtime.window._refresh_timer.isActive()
 
 

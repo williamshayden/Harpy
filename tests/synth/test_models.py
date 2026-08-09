@@ -1,3 +1,4 @@
+import math
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
@@ -13,7 +14,7 @@ from harpy.synth.models import (
 )
 
 
-def test_default_patch_is_the_approved_linear_sine_patch() -> None:
+def test_default_patch_is_the_approved_curve_enabled_sine_patch() -> None:
     patch = SynthPatch()
 
     assert patch.oscillator == OscillatorConfig(type=OscillatorType.SINE)
@@ -22,8 +23,11 @@ def test_default_patch_is_the_approved_linear_sine_patch() -> None:
         decay_seconds=0.600,
         sustain_db=-6.0,
         release_seconds=0.600,
-        curve="linear_amplitude",
+        attack_curve=0.0,
+        decay_curve=0.0,
+        release_curve=0.0,
     )
+    assert not hasattr(patch.envelope, "curve")
     assert patch.output_gain_dbfs == -12.0
 
 
@@ -36,8 +40,8 @@ def test_default_render_config_is_authoritative_mono_float32() -> None:
     )
 
 
-@pytest.mark.parametrize("value", [0.0, -0.1, float("nan"), float("inf")])
-def test_envelope_durations_must_be_positive_and_finite(value: float) -> None:
+@pytest.mark.parametrize("value", [0.0, -0.1, True, False, float("nan"), float("inf")])
+def test_envelope_durations_must_be_positive_finite_numbers(value: object) -> None:
     with pytest.raises(ValueError):
         EnvelopeConfig(attack_seconds=value)
 
@@ -73,15 +77,42 @@ def test_oscillator_type_rejects_values_outside_the_closed_enum(value: object) -
         OscillatorConfig(type=value)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0.1])
-def test_sustain_db_must_be_finite_and_no_greater_than_zero(value: float) -> None:
+@pytest.mark.parametrize("value", [True, False, float("nan"), float("inf"), 0.1])
+def test_sustain_db_must_be_finite_and_no_greater_than_zero(value: object) -> None:
     with pytest.raises(ValueError, match="sustain_db"):
         EnvelopeConfig(sustain_db=value)
 
 
-def test_envelope_requires_the_supported_curve() -> None:
-    with pytest.raises(ValueError, match="curve"):
-        EnvelopeConfig(curve="exponential")
+@pytest.mark.parametrize("field", ["attack_curve", "decay_curve", "release_curve"])
+@pytest.mark.parametrize(
+    "value",
+    [-1.001, 1.001, True, False, math.nan, math.inf, -math.inf, "0"],
+)
+def test_envelope_curves_must_be_finite_numbers_in_closed_range(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        EnvelopeConfig(**{field: value})  # type: ignore[arg-type]
+
+
+def test_negative_zero_patch_numbers_are_stored_as_positive_zero() -> None:
+    envelope = EnvelopeConfig(
+        sustain_db=-0.0,
+        attack_curve=-0.0,
+        decay_curve=-0.0,
+        release_curve=-0.0,
+    )
+    patch = SynthPatch(envelope=envelope, output_gain_dbfs=-0.0)
+
+    for value in (
+        envelope.sustain_db,
+        envelope.attack_curve,
+        envelope.decay_curve,
+        envelope.release_curve,
+        patch.output_gain_dbfs,
+    ):
+        assert math.copysign(1.0, value) == 1.0
 
 
 def test_amplitude_properties_convert_decibels_to_linear_amplitude() -> None:
@@ -89,8 +120,8 @@ def test_amplitude_properties_convert_decibels_to_linear_amplitude() -> None:
     assert SynthPatch(output_gain_dbfs=-12.0).output_gain == pytest.approx(0.2511886432)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0.1])
-def test_output_gain_dbfs_must_be_finite_and_no_greater_than_zero(value: float) -> None:
+@pytest.mark.parametrize("value", [True, False, float("nan"), float("inf"), 0.1])
+def test_output_gain_dbfs_must_be_finite_and_no_greater_than_zero(value: object) -> None:
     with pytest.raises(ValueError, match="output_gain_dbfs"):
         SynthPatch(output_gain_dbfs=value)
 
