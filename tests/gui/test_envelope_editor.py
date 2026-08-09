@@ -342,6 +342,49 @@ def test_invalid_selected_curve_text_stays_local_until_escape_restores_authored_
     assert emitted == []
 
 
+def test_real_handle_selection_clears_prior_curve_text_error_and_tracks_new_stage(
+    qtbot,
+    editor: EnvelopeEditor,
+    starting_patch: SynthPatch,
+) -> None:
+    # Reading selection from the graph after its event mutates it loses the prior field owner.
+    emitted: list[SynthPatch] = []
+    cleared: list[None] = []
+    editor.patch_commit_requested.connect(emitted.append)
+    editor.validation_cleared.connect(lambda: cleared.append(None))
+    graph = child(editor, EnvelopeGraph, "envelopeGraph")
+    curve_entry = child(editor, EnvelopeValueEntry, "curveEntry")
+    error_label = child(editor, QLabel, "envelopeFieldError")
+    status = child(editor, QLabel, "patchStatusLabel")
+    decay_handle = child(graph, QWidget, "decayCurveHandle")
+
+    replace_entry_text(qtbot, curve_entry, "not a curve")
+    qtbot.keyPress(curve_entry, Qt.Key.Key_Return)
+    assert error_label.text()
+    assert status.text() == "Editing"
+
+    decay_handle.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+
+    assert decay_handle.hasFocus()
+    assert graph.selected_stage is CurveStage.DECAY
+    assert curve_entry.text() == "-0.3"
+    assert curve_entry.property("validationState") is None
+    assert error_label.text() == ""
+    assert status.text() == "Active"
+    assert cleared == [None]
+
+    curve_entry.setFocus(Qt.FocusReason.TabFocusReason)
+    qtbot.keyPress(curve_entry, Qt.Key.Key_Escape)
+
+    assert graph.selected_stage is CurveStage.DECAY
+    assert graph.envelope == starting_patch.envelope
+    assert curve_entry.text() == "-0.3"
+    assert error_label.text() == ""
+    assert status.text() == "Active"
+    assert emitted == []
+
+
 def test_same_patch_refresh_preserves_uncommitted_and_invalid_field_text(
     qtbot,
     editor: EnvelopeEditor,
@@ -416,6 +459,69 @@ def test_same_value_synchronous_acknowledgment_is_not_mistaken_for_timer_refresh
 
     assert emitted == [starting_patch]
     assert attack.text() == "125 ms"
+    assert child(editor, QLabel, "patchStatusLabel").text() == "Active"
+
+
+def test_unacknowledged_same_value_commit_cannot_consume_a_later_routine_refresh(
+    qtbot,
+    editor: EnvelopeEditor,
+    starting_patch: SynthPatch,
+) -> None:
+    # Keeping an unconsumed marker after signal dispatch erases newer text and graph drafts.
+    emitted: list[SynthPatch] = []
+    editor.patch_commit_requested.connect(emitted.append)
+    attack = child(editor, EnvelopeValueEntry, "attackEntry")
+    graph = child(editor, EnvelopeGraph, "envelopeGraph")
+    error_label = child(editor, QLabel, "envelopeFieldError")
+    status = child(editor, QLabel, "patchStatusLabel")
+
+    replace_entry_text(qtbot, attack, "125.0 ms")
+    qtbot.keyPress(attack, Qt.Key.Key_Return)
+    assert emitted == [starting_patch]
+
+    replace_entry_text(qtbot, attack, "not complete")
+    qtbot.keyPress(attack, Qt.Key.Key_Return)
+    graph.curve_previewed.emit("release", -0.8)
+    editor.set_patch_state(starting_patch, PatchApplyState.APPLIED)
+
+    assert attack.text() == "not complete"
+    assert attack.property("validationState") == "error"
+    assert "Attack" in error_label.text()
+    assert graph.envelope.release_curve == -0.8
+    assert status.text() == "Editing"
+    assert emitted == [starting_patch]
+
+
+def test_nested_unacknowledged_commit_restores_outer_synchronous_ack_scope(
+    qtbot,
+    editor: EnvelopeEditor,
+    starting_patch: SynthPatch,
+) -> None:
+    # Clearing a nested marker instead of restoring its parent loses the outer acknowledgment.
+    emitted: list[SynthPatch] = []
+    attack = child(editor, EnvelopeValueEntry, "attackEntry")
+    decay = child(editor, EnvelopeValueEntry, "decayEntry")
+
+    def reenter_once(candidate: SynthPatch) -> None:
+        emitted.append(candidate)
+        if len(emitted) != 1:
+            return
+        replace_entry_text(qtbot, decay, "750 ms")
+        qtbot.keyPress(decay, Qt.Key.Key_Return)
+        editor.set_patch_state(candidate, PatchApplyState.APPLIED)
+
+    editor.patch_commit_requested.connect(reenter_once)
+    replace_entry_text(qtbot, attack, "125.0 ms")
+    qtbot.keyPress(attack, Qt.Key.Key_Return)
+
+    nested = replace(
+        starting_patch,
+        envelope=replace(starting_patch.envelope, decay_seconds=0.750),
+    )
+    assert emitted == [starting_patch, nested]
+    assert child(editor, EnvelopeGraph, "envelopeGraph").envelope == starting_patch.envelope
+    assert attack.text() == "125 ms"
+    assert decay.text() == "400 ms"
     assert child(editor, QLabel, "patchStatusLabel").text() == "Active"
 
 

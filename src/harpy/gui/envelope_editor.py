@@ -63,6 +63,7 @@ class EnvelopeEditor(QFrame):
         self._awaiting_ack_patch: SynthPatch | None = None
         self._error_field: str | None = None
         self._error_widget: QWidget | None = None
+        self._selected_curve_stage = CurveStage.ATTACK
 
         self.setObjectName("envelopeEditor")
         self.setFixedWidth(320)
@@ -248,6 +249,7 @@ class EnvelopeEditor(QFrame):
         self._clear_all_error_state()
         for field_name, entry in self._entries.items():
             entry.set_exact_value(getattr(patch.envelope, field_name))
+        self._graph.select_stage(self._selected_curve_stage)
         self._graph.set_envelope(patch.envelope)
         self._render_selected_curve(canonical=True)
         self._oscillator_fact.setText(patch.oscillator.type.value.title())
@@ -304,7 +306,7 @@ class EnvelopeEditor(QFrame):
             {"attack_curve": 0.0, "decay_curve": 0.0, "release_curve": 0.0},
             self._selected_curve_field(),
             None,
-            error_widget=self._curve_handle(self._graph.selected_stage.value),
+            error_widget=self._curve_handle(self._selected_curve_stage.value),
         )
 
     def _commit_candidate(
@@ -336,9 +338,15 @@ class EnvelopeEditor(QFrame):
         self._text_dirty_fields.difference_update(changes)
         self._clear_field_error(field_name)
         self.validation_cleared.emit()
+        previous_ack_patch = self._awaiting_ack_patch
         self._awaiting_ack_patch = candidate_patch
         self._update_status()
-        self.patch_commit_requested.emit(candidate_patch)
+        try:
+            self.patch_commit_requested.emit(candidate_patch)
+        finally:
+            if self._awaiting_ack_patch is candidate_patch:
+                self._awaiting_ack_patch = previous_ack_patch
+                self._update_status()
 
     def _entry_failed(
         self,
@@ -408,7 +416,7 @@ class EnvelopeEditor(QFrame):
             self.validation_cleared.emit()
 
     def _revert_selected_curve(self) -> None:
-        self._revert_curve(self._graph.selected_stage.value)
+        self._revert_curve(self._selected_curve_stage.value)
 
     def _revert_curve(self, stage_name: str) -> None:
         field_name = self._curve_field(stage_name)
@@ -429,13 +437,17 @@ class EnvelopeEditor(QFrame):
     def _select_curve_stage(self, stage_name: str) -> None:
         previous_field = self._selected_curve_field()
         stage = CurveStage(stage_name)
+        self._selected_curve_stage = stage
         self._graph.select_stage(stage)
         selected_field = self._selected_curve_field()
+        cleared = False
         if selected_field != previous_field:
             self._text_dirty_fields.discard(previous_field)
-            self._clear_field_error(previous_field)
+            cleared = self._clear_field_error(previous_field)
         self._render_selected_curve()
         self._update_status()
+        if cleared:
+            self.validation_cleared.emit()
 
     def _render_selected_curve(self, *, canonical: bool = False) -> None:
         field_name = self._selected_curve_field()
@@ -446,7 +458,7 @@ class EnvelopeEditor(QFrame):
             self._curve_entry.setText(_format_curvature(draft_value))
 
     def _selected_curve_field(self) -> str:
-        return f"{self._graph.selected_stage.value}_curve"
+        return f"{self._selected_curve_stage.value}_curve"
 
     def _curve_field(self, stage_name: str) -> str:
         return f"{CurveStage(stage_name).value}_curve"
