@@ -1,11 +1,12 @@
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleAnnouncementEvent,
     QAccessibleStateChangeEvent,
+    QMouseEvent,
     QShortcut,
 )
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
@@ -81,6 +82,27 @@ def commit_exact(
     qtbot.keyClicks(entry, text)
     qtbot.keyPress(entry, Qt.Key.Key_Return)
     return entry
+
+
+def send_stage_mouse(
+    control: EnvelopeStageControl,
+    event_type: QEvent.Type,
+    global_y: float,
+    button: Qt.MouseButton,
+    buttons: Qt.MouseButton,
+) -> None:
+    QApplication.sendEvent(
+        control,
+        QMouseEvent(
+            event_type,
+            QPointF(control.rect().center()),
+            QPointF(control.rect().center()),
+            QPointF(100.0, global_y),
+            button,
+            buttons,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
 
 
 def test_construction_exposes_only_the_graph_native_editor_surface(
@@ -186,6 +208,63 @@ def test_duration_exact_commit_and_pointer_commit_produce_equal_immutable_patche
     assert pointer == [expected]
     assert pointer[0] == exact[0]
     assert pointer[0] is not exact[0]
+
+
+def test_rejected_overflow_scrub_release_is_not_recast_as_authored_commit(
+    qtbot,
+    monkeypatch,
+    editor: EnvelopeEditor,
+    starting_patch: SynthPatch,
+) -> None:
+    # Losing the owner's preview rejection would turn release into an authored-value no-op commit.
+    emitted: list[SynthPatch] = []
+    errors: list[str] = []
+    cleared: list[None] = []
+    editor.patch_commit_requested.connect(emitted.append)
+    editor.validation_failed.connect(errors.append)
+    editor.validation_cleared.connect(lambda: cleared.append(None))
+    control = child(editor, EnvelopeStageControl, "attackValueControl")
+    error_label = child(editor, QLabel, "envelopeFieldError")
+    monkeypatch.setattr(control, "grabMouse", lambda: None)
+    monkeypatch.setattr(control, "releaseMouse", lambda: None)
+
+    send_stage_mouse(
+        control,
+        QEvent.Type.MouseButtonPress,
+        1e308,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+    )
+    send_stage_mouse(
+        control,
+        QEvent.Type.MouseMove,
+        -1e308,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+    )
+    send_stage_mouse(
+        control,
+        QEvent.Type.MouseButtonRelease,
+        -1e308,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+    )
+
+    assert len(errors) == 1
+    assert "finite frame count" in errors[0]
+    assert emitted == []
+    assert cleared == []
+    assert error_label.text() == errors[0]
+    assert control.property("validationState") == "error"
+    assert child(editor, EnvelopeGraph, "envelopeGraph").envelope == starting_patch.envelope
+
+    qtbot.keyPress(control, Qt.Key.Key_Up)
+
+    assert len(emitted) == 1
+    assert emitted[0].envelope.attack_seconds == pytest.approx(0.12625)
+    assert cleared == [None]
+    assert error_label.text() == ""
+    assert control.property("validationState") is None
 
 
 def test_sustain_exact_commit_uses_the_real_transient_editor(

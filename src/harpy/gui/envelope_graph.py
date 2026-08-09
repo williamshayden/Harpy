@@ -352,6 +352,16 @@ class EnvelopeGraph(QWidget):
         control = self._value_control(field_name)
         return control is not None and control is self._editing_control
 
+    def accept_field_preview(self, field_name: str) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            control.owner_preview_accepted()
+
+    def reject_field_preview(self, field_name: str) -> None:
+        control = self._value_control(field_name)
+        if control is not None:
+            control.owner_preview_rejected()
+
     def mark_field_error(self, field_name: str, message: str) -> None:
         control = self._value_control(field_name)
         widget = control if control is not None else self._curve_handle(field_name)

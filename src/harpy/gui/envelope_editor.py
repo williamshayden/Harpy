@@ -211,6 +211,7 @@ class EnvelopeEditor(QFrame):
 
         self._draft_envelope = candidate_envelope
         self._graph.set_envelope(candidate_envelope)
+        self._graph.accept_field_preview(field_name)
         if self._clear_field_error(field_name):
             self.validation_cleared.emit()
         self._update_status()
@@ -243,6 +244,8 @@ class EnvelopeEditor(QFrame):
         allow_exact: bool,
     ) -> None:
         message = self._field_message(field_name, error)
+        if not allow_exact:
+            self._graph.reject_field_preview(field_name)
         if allow_exact and self._graph.is_exact_editing(field_name):
             self._graph.reject_exact_edit(field_name, message)
             return

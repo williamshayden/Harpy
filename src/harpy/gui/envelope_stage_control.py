@@ -100,6 +100,7 @@ class EnvelopeStageControl(QWidget):
         self._accumulated_units: float | None = None
         self._dragging = False
         self._had_preview = False
+        self._preview_was_rejected = False
         self._exact_entry: EnvelopeValueEntry | None = None
         self._closing_exact_editor = False
         self.setObjectName(f"{stage.value}ValueControl")
@@ -168,6 +169,18 @@ class EnvelopeStageControl(QWidget):
         self.update()
         if previous != current:
             QAccessible.updateAccessibility(QAccessibleValueChangeEvent(self, current))
+
+    def owner_preview_accepted(self) -> None:
+        """Allow the active scrub to commit after synchronous owner validation."""
+
+        if self.is_interacting:
+            self._preview_was_rejected = False
+
+    def owner_preview_rejected(self) -> None:
+        """Suppress release commit after synchronous owner rejection."""
+
+        if self.is_interacting:
+            self._preview_was_rejected = True
 
     def open_exact_editor(self) -> None:
         """Open a temporary exact-value editor over this graph-native control."""
@@ -270,6 +283,7 @@ class EnvelopeStageControl(QWidget):
             self._accumulated_units = 0.0
             self._dragging = False
             self._had_preview = False
+            self._preview_was_rejected = False
             self.update()
             event.accept()
             return
@@ -320,11 +334,12 @@ class EnvelopeStageControl(QWidget):
         if event.button() is Qt.MouseButton.LeftButton and self._press_global is not None:
             dragging = self._dragging
             had_preview = self._had_preview
+            preview_was_rejected = self._preview_was_rejected
             value = self.current_value
             self._clear_interaction()
             if dragging:
                 self.releaseMouse()
-            if had_preview:
+            if had_preview and not preview_was_rejected:
                 self.value_commit_requested.emit(self._stage.field_name, value)
             self.update()
             event.accept()
@@ -383,6 +398,7 @@ class EnvelopeStageControl(QWidget):
         self._accumulated_units = None
         self._dragging = False
         self._had_preview = False
+        self._preview_was_rejected = False
 
     def _request_key_adjustment(self, increase: bool, modifiers: Qt.KeyboardModifiers) -> None:
         value = self.current_value

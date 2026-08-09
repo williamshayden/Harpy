@@ -1275,6 +1275,66 @@ def test_reset_envelope_has_a_non_space_keyboard_route(qtbot) -> None:
     assert commands[-1].patch == controller.state.patch
 
 
+def test_reset_replaces_an_existing_pending_candidate_before_one_idle_apply(qtbot) -> None:
+    # Treating Reset as the first pending edit misses stale-candidate or duplicate audio applies.
+    starting_patch = SynthPatch(
+        envelope=EnvelopeConfig(
+            attack_seconds=0.125,
+            decay_seconds=0.400,
+            sustain_db=-9.0,
+            release_seconds=0.850,
+            attack_curve=0.2,
+            decay_curve=-0.3,
+            release_curve=0.4,
+        ),
+        output_gain_dbfs=-24.0,
+    )
+    window, controller, commands, _, _ = make_window(qtbot, patch=starting_patch)
+    controller.set_frequency(330.0)
+    window._press_play()
+    generation = controller.state.capture.generation
+    window._release_play()
+
+    commit_exact_stage(qtbot, window, "attackValueControl", "250 ms")
+
+    first_pending = replace(
+        starting_patch,
+        envelope=replace(starting_patch.envelope, attack_seconds=0.250),
+    )
+    assert controller.state.patch == first_pending
+    assert controller.state.patch_apply_state is PatchApplyState.PENDING
+
+    editor_child(window, QPushButton, "resetEnvelopeButton").click()
+
+    expected = replace(starting_patch, envelope=EnvelopeConfig())
+    assert controller.state.patch == expected
+    assert controller.state.patch != first_pending
+    assert controller.state.patch.output_gain_dbfs == -24.0
+    assert controller.state.selected_frequency_hz == 330.0
+    assert controller.state.patch_apply_state is PatchApplyState.PENDING
+    assert [command.kind for command in commands] == [
+        AudioCommandKind.NOTE_ON,
+        AudioCommandKind.NOTE_OFF,
+    ]
+
+    window.handle_voice_idle(generation)
+
+    replacements = [
+        command for command in commands if command.kind is AudioCommandKind.REPLACE_PATCH
+    ]
+    assert len(replacements) == 1
+    assert replacements[0].patch == expected
+    assert replacements[0].patch.envelope == EnvelopeConfig()
+    assert controller.state.patch_apply_state is PatchApplyState.APPLIED
+
+    window._press_play()
+
+    assert commands[-2] is replacements[0]
+    assert commands[-1].kind is AudioCommandKind.NOTE_ON
+    assert commands[-1].frequency_hz == 330.0
+    assert controller.state.patch.envelope == EnvelopeConfig()
+
+
 @pytest.mark.parametrize("size", [QSize(1_280, 720), QSize(1_024, 640)])
 def test_envelope_workbench_layout_contract(qtbot, size: QSize) -> None:
     # Allowing the inspector or error banner to squeeze the actual plot canvas breaks analysis.
