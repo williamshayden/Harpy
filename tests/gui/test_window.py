@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QAction, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -1197,6 +1197,47 @@ def test_deactivate_and_shutdown_converge_on_idempotent_force_stop(qtbot) -> Non
     assert not button.isDown()
     assert shutdowns == [True]
     assert not window._refresh_timer.isActive()
+
+
+@pytest.mark.parametrize("interaction", ["value_preview", "invalid_exact_entry"])
+def test_deactivation_cancels_envelope_interaction_before_force_stop(
+    qtbot,
+    interaction: str,
+) -> None:
+    events: list[str] = []
+
+    def record_command(command: AudioCommand) -> None:
+        events.append(f"submit:{command.kind.name}")
+
+    window, controller, _, _, _ = make_window(qtbot, send_command=record_command)
+    graph = editor_child(window, EnvelopeGraph, "envelopeGraph")
+    graph.field_reverted.connect(lambda _field: events.append("field_reverted"))
+    window.show()
+    qtbot.waitExposed(window)
+    window._press_play()
+    events.clear()
+
+    if interaction == "value_preview":
+        attack = editor_child(window, EnvelopeStageControl, "attackValueControl")
+        qtbot.mousePress(attack, Qt.MouseButton.LeftButton, pos=attack.rect().center())
+        qtbot.mouseMove(attack, QPoint(attack.rect().center().x(), 0))
+        assert attack.is_interacting
+    else:
+        entry = open_exact_stage_editor(qtbot, window, "attackValueControl")
+        replace_entry_text(qtbot, entry, "invalid")
+        qtbot.keyClick(entry, Qt.Key.Key_Return)
+        assert entry.isVisible()
+
+    window.event(QEvent(QEvent.Type.WindowDeactivate))
+
+    assert events == ["field_reverted", "submit:RESET"]
+    assert window.findChild(EnvelopeValueEntry, "envelopeInlineEditor") is None
+    assert not controller.state.voice_may_be_active
+    assert not window.play_button.isDown()
+
+    window.event(QEvent(QEvent.Type.WindowDeactivate))
+
+    assert events == ["field_reverted", "submit:RESET"]
 
 
 def test_pending_shutdown_applies_once_discards_invalid_draft_and_never_saves(qtbot) -> None:

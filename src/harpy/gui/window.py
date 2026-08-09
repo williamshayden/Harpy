@@ -258,6 +258,7 @@ class HarpyWindow(QMainWindow):
 
     def event(self, event: QEvent) -> bool:
         if event.type() is QEvent.Type.WindowDeactivate and not self._dialog_chooser_active:
+            self.envelope_editor.cancel_interactions()
             self.handle_force_stop()
         return super().event(event)
 
