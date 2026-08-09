@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: approved foundation; graph-native editor revision awaiting written review
+Status: approved for implementation
 
 Revision: 2026-08-08. The graph-native editor decisions below supersede the original
 persistent ADSR/curvature field grid and curve-only reset. The DSP, patch, deferred-apply,
