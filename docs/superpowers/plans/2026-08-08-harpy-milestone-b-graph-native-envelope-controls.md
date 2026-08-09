@@ -70,6 +70,7 @@
       SUSTAIN = "sustain"
       RELEASE = "release"
 
+
   class EnvelopeStageControl(QWidget):
       value_previewed = Signal(str, float)
       value_commit_requested = Signal(str, float)
@@ -490,9 +491,7 @@
           ("releaseValueControl", "R 850 ms"),
       ],
   )
-  def test_graph_uses_real_inline_controls_and_actual_sustain(
-      qtbot, name: str, text: str
-  ) -> None:
+  def test_graph_uses_real_inline_controls_and_actual_sustain(qtbot, name: str, text: str) -> None:
       graph = make_graph(
           qtbot,
           EnvelopeConfig(
