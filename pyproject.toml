@@ -33,6 +33,9 @@ dev = [
 addopts = "-ra --basetemp=.pytest-tmp --capture=sys"
 testpaths = ["tests"]
 qt_api = "pyside6"
+markers = [
+  "integration: exhaustive contracts that exercise the real renderer",
+]
 
 [tool.ruff]
 target-version = "py312"
