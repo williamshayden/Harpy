@@ -160,8 +160,12 @@ def test_episode_spec_owns_only_exact_reset_truth() -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("target_note_index", True), ("target_note_index", 25),
-     ("source_pitch_cents", False), ("source_pitch_cents", 4_799)],
+    [
+        ("target_note_index", True),
+        ("target_note_index", 25),
+        ("source_pitch_cents", False),
+        ("source_pitch_cents", 4_799),
+    ],
 )
 def test_episode_spec_rejects_invalid_integer_truth(field: str, value: object) -> None:
     values = {"target_note_index": 0, "source_pitch_cents": 4_800, field: value}
@@ -174,9 +178,7 @@ def test_profiles_pin_rollout_aligned_values() -> None:
     checkpoint = PROFILE_CONFIGS[ProfileName.CHECKPOINT]
     assert (smoke.bc.train_episodes, smoke.bc.validation_episodes) == (128, 64)
     assert (checkpoint.bc.train_episodes, checkpoint.bc.validation_episodes) == (4_096, 512)
-    assert (smoke.ppo.total_timesteps, smoke.ppo.n_steps, smoke.ppo.batch_size) == (
-        2_048, 256, 64
-    )
+    assert (smoke.ppo.total_timesteps, smoke.ppo.n_steps, smoke.ppo.batch_size) == (2_048, 256, 64)
     assert (
         checkpoint.ppo.total_timesteps,
         checkpoint.ppo.n_steps,
@@ -310,24 +312,37 @@ Pin the exact fixed digests and representative membership:
 @pytest.mark.parametrize(
     ("suite_id", "count", "seed", "digest"),
     [
-        (EvaluationSuiteId.SMOKE, 32, 202_608_100,
-         "de8033b443976623b67077e84205795a02278bc53ada3611f0fed628139e75b2"),
-        (EvaluationSuiteId.IID, 256, 202_608_101,
-         "302be5ee0eb1556391d60646ef98aa8e7b24e104b4f54e3bf08181d1ccbdcc12"),
-        (EvaluationSuiteId.REGISTER_OOD, 256, 202_608_102,
-         "97358f16696601c26fd7721b10810d858bf545c6ca4bb3f82ded2e599b619710"),
+        (
+            EvaluationSuiteId.SMOKE,
+            32,
+            202_608_100,
+            "de8033b443976623b67077e84205795a02278bc53ada3611f0fed628139e75b2",
+        ),
+        (
+            EvaluationSuiteId.IID,
+            256,
+            202_608_101,
+            "302be5ee0eb1556391d60646ef98aa8e7b24e104b4f54e3bf08181d1ccbdcc12",
+        ),
+        (
+            EvaluationSuiteId.REGISTER_OOD,
+            256,
+            202_608_102,
+            "97358f16696601c26fd7721b10810d858bf545c6ca4bb3f82ded2e599b619710",
+        ),
     ],
 )
 def test_fixed_suite_identity(suite_id, count, seed, digest) -> None:
     suite = fixed_evaluation_suite(suite_id)
-    assert (len(suite.episodes), suite.suite_seed, suite.digest_sha256) == (
-        count, seed, digest
+    assert (len(suite.episodes), suite.suite_seed, suite.digest_sha256) == (count, seed, digest)
+    assert (
+        suite_digest(
+            suite_id=suite.suite_id,
+            suite_seed=suite.suite_seed,
+            episodes=suite.episodes,
+        )
+        == digest
     )
-    assert suite_digest(
-        suite_id=suite.suite_id,
-        suite_seed=suite.suite_seed,
-        episodes=suite.episodes,
-    ) == digest
 ```
 
 Assert smoke target counts are 1/2; IID and OOD target counts are 10/11; OOD has
@@ -406,8 +421,11 @@ target IDs start lower and the last three start upper, producing exactly 128/128
     "suite_id": suite_id.value,
     "suite_seed": suite_seed,
     "episodes": [
-        {"episode_index": i, "target_note_index": e.target_note_index,
-         "source_pitch_cents": e.source_pitch_cents}
+        {
+            "episode_index": i,
+            "target_note_index": e.target_note_index,
+            "source_pitch_cents": e.source_pitch_cents,
+        }
         for i, e in enumerate(episodes)
     ],
 }
@@ -424,8 +442,11 @@ digests use this exact payload, also followed by one newline:
     "profile": profile.value,
     "run_seed": run_seed,
     "episodes": [
-        {"episode_index": i, "target_note_index": e.target_note_index,
-         "source_pitch_cents": e.source_pitch_cents}
+        {
+            "episode_index": i,
+            "target_note_index": e.target_note_index,
+            "source_pitch_cents": e.source_pitch_cents,
+        }
         for i, e in enumerate(episodes)
     ],
 }
@@ -465,9 +486,7 @@ Add tests before changing production:
 ```python
 def test_registered_base_candidate_evidence_retains_owned_audio() -> None:
     env = SinePitchEnv()
-    observation, _ = env.reset(
-        options={"target_note_index": 12, "source_pitch_cents": 6_000}
-    )
+    observation, _ = env.reset(options={"target_note_index": 12, "source_pitch_cents": 6_000})
     audio = env._candidate_audio
     spectrum = env._spectrum
     assert audio is not None and spectrum is not None
@@ -687,8 +706,9 @@ class ScheduledEpisodeEnv(gymnasium.Wrapper):
     def __init__(self, env: gymnasium.Env, episode_at: Callable[[int], EpisodeSpec]) -> None: ...
     @property
     def next_episode_index(self) -> int: ...
-    def reset(self, *, seed: int | None = None,
-              options: dict[str, object] | None = None) -> tuple[Observation, dict[str, object]]: ...
+    def reset(
+        self, *, seed: int | None = None, options: dict[str, object] | None = None
+    ) -> tuple[Observation, dict[str, object]]: ...
 
 
 def make_cached_sine_pitch_env(
@@ -781,13 +801,17 @@ Pin the exact contract:
 ```python
 def test_learning_import_loads_no_training_or_qt_modules() -> None:
     result = subprocess.run(
-        [sys.executable, "-c", (
-            "import sys, harpy.learning; "
-            "assert 'torch' not in sys.modules; "
-            "assert 'stable_baselines3' not in sys.modules; "
-            "assert not any(n == 'PySide6' or n.startswith('PySide6.') "
-            "for n in sys.modules)"
-        )],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, harpy.learning; "
+                "assert 'torch' not in sys.modules; "
+                "assert 'stable_baselines3' not in sys.modules; "
+                "assert not any(n == 'PySide6' or n.startswith('PySide6.') "
+                "for n in sys.modules)"
+            ),
+        ],
         capture_output=True,
         check=False,
         timeout=10,
@@ -822,10 +846,18 @@ Do not use SB3's `[extra]` bundle. `pyproject.toml` must contain only those two 
 ```python
 TRAIN_INSTALL_INSTRUCTION = "uv sync --group train"
 
+
 class LearningContractError(ValueError): ...
+
+
 class DependencyUnavailableError(RuntimeError): ...
+
+
 class ArtifactError(RuntimeError): ...
+
+
 class LearningExecutionError(RuntimeError): ...
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingStack:
@@ -833,6 +865,7 @@ class TrainingStack:
     stable_baselines3: ModuleType
     torch_version: str
     stable_baselines3_version: str
+
 
 def require_training_dependencies(
     import_module: Callable[[str], ModuleType] = importlib.import_module,
@@ -884,19 +917,24 @@ Expected RED: `harpy.learning.observations` missing. Implement:
 ```python
 type PolicyObservation = dict[str, np.ndarray]
 
-POLICY_OBSERVATION_SPACE = gymnasium.spaces.Dict({
-    "spectrum": gymnasium.spaces.Box(0.0, 1.0, (1_961,), np.float32),
-    "state": gymnasium.spaces.Box(
-        low=np.array([-1, -1, -1, -1, 0], dtype=np.float32),
-        high=np.ones(5, dtype=np.float32),
-        dtype=np.float32,
-    ),
-})
+POLICY_OBSERVATION_SPACE = gymnasium.spaces.Dict(
+    {
+        "spectrum": gymnasium.spaces.Box(0.0, 1.0, (1_961,), np.float32),
+        "state": gymnasium.spaces.Box(
+            low=np.array([-1, -1, -1, -1, 0], dtype=np.float32),
+            high=np.ones(5, dtype=np.float32),
+            dtype=np.float32,
+        ),
+    }
+)
+
 
 def preprocess_observation(observation: Mapping[str, object]) -> PolicyObservation: ...
 
+
 class PolicyObservationWrapper(gymnasium.ObservationWrapper):
     observation_space = POLICY_OBSERVATION_SPACE
+
     def observation(self, observation: Mapping[str, object]) -> PolicyObservation: ...
 ```
 
@@ -938,14 +976,18 @@ Use:
 ```python
 class SineFeatureEncoder(torch.nn.Module):
     output_dim: ClassVar[int] = 128
+
     def forward(self, observations: Mapping[str, torch.Tensor]) -> torch.Tensor: ...
+
 
 class BCPolicyNetwork(torch.nn.Module):
     def forward(self, observations: Mapping[str, torch.Tensor]) -> torch.Tensor: ...
 
+
 class HarpySineFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space: gymnasium.spaces.Dict) -> None: ...
     def forward(self, observations: Mapping[str, torch.Tensor]) -> torch.Tensor: ...
+
 
 @runtime_checkable
 class Actor(Protocol):
@@ -1002,6 +1044,7 @@ Use a spy actor and a one/two-episode suite:
 class ObservationOnlySpy:
     def __init__(self) -> None:
         self.keys: list[tuple[str, ...]] = []
+
     def act(self, observation: Mapping[str, object]) -> PitchAction:
         self.keys.append(tuple(sorted(observation)))
         return PitchAction.SUBMIT
@@ -1061,6 +1104,7 @@ class TerminalEpisodeRecord:
     total_return: float
     terminal_reason: TerminalReason
 
+
 @dataclass(frozen=True, slots=True)
 class AggregateMetrics:
     episodes: int
@@ -1076,12 +1120,14 @@ class AggregateMetrics:
     truncation_rate: float
     invalid_action_rate: float
 
+
 def evaluate_learned_actor(
     actor: Actor,
     suite: EpisodeSuite,
     *,
     environment_factory: Callable[[], gymnasium.Env],
 ) -> tuple[TerminalEpisodeRecord, ...]: ...
+
 
 def evaluate_baseline_suite(
     kind: BaselineKind,
@@ -1102,26 +1148,32 @@ Pin all denominators, median, `None`, and finite values. Then test:
 
 ```python
 def test_bc_gate_requires_both_declared_thresholds() -> None:
-    assert evaluate_bc_criterion(
-        heldout_next_action_accuracy=.90,
-        iid_row=row(submitted_success_rate=.75),
-        eligible=True,
-    ).criterion_met is True
-    assert evaluate_bc_criterion(
-        heldout_next_action_accuracy=.8999,
-        iid_row=row(submitted_success_rate=.75),
-        eligible=True,
-    ).criterion_met is False
+    assert (
+        evaluate_bc_criterion(
+            heldout_next_action_accuracy=0.90,
+            iid_row=row(submitted_success_rate=0.75),
+            eligible=True,
+        ).criterion_met
+        is True
+    )
+    assert (
+        evaluate_bc_criterion(
+            heldout_next_action_accuracy=0.8999,
+            iid_row=row(submitted_success_rate=0.75),
+            eligible=True,
+        ).criterion_met
+        is False
+    )
 
 
 def test_ppo_gate_uses_exact_five_seed_median_and_strict_random_beats() -> None:
-    rates = [.51, .52, .53, .54, .55]
+    rates = [0.51, 0.52, 0.53, 0.54, 0.55]
     result = evaluate_ppo_criterion(
         iid_rows=tuple(ppo_row(seed=i, rate=rate) for i, rate in enumerate(rates)),
-        random_iid_row=row(submitted_success_rate=.50),
+        random_iid_row=row(submitted_success_rate=0.50),
         eligible=True,
     )
-    assert result.median_iid_submitted_success_rate == .53
+    assert result.median_iid_submitted_success_rate == 0.53
     assert result.seeds_strictly_beating_random == 5
     assert result.criterion_met is True
 ```
@@ -1260,18 +1312,30 @@ Required closed inventories are:
 ```python
 EXPECTED_INVENTORY = {
     (TrainerKind.BC, ProfileName.SMOKE): (
-        "training-config.json", "training-summary.json", "model.pt", "evaluation-smoke.json"
+        "training-config.json",
+        "training-summary.json",
+        "model.pt",
+        "evaluation-smoke.json",
     ),
     (TrainerKind.PPO, ProfileName.SMOKE): (
-        "training-config.json", "training-summary.json", "model.zip", "evaluation-smoke.json"
+        "training-config.json",
+        "training-summary.json",
+        "model.zip",
+        "evaluation-smoke.json",
     ),
     (TrainerKind.BC, ProfileName.CHECKPOINT): (
-        "training-config.json", "training-summary.json", "model.pt",
-        "evaluation-iid.json", "evaluation-ood.json"
+        "training-config.json",
+        "training-summary.json",
+        "model.pt",
+        "evaluation-iid.json",
+        "evaluation-ood.json",
     ),
     (TrainerKind.PPO, ProfileName.CHECKPOINT): (
-        "training-config.json", "training-summary.json", "model.zip",
-        "evaluation-iid.json", "evaluation-ood.json"
+        "training-config.json",
+        "training-summary.json",
+        "model.zip",
+        "evaluation-iid.json",
+        "evaluation-ood.json",
     ),
 }
 ```
@@ -1293,9 +1357,11 @@ Define:
 ```python
 ARTIFACT_SCHEMA_VERSION = 1
 
+
 class ArtifactStatus(StrEnum):
     INCOMPLETE = "incomplete"
     COMPLETE = "complete"
+
 
 class CriterionStatus(StrEnum):
     INELIGIBLE = "ineligible"
@@ -1303,11 +1369,13 @@ class CriterionStatus(StrEnum):
     CRITERION_MET = "criterion_met"
     CRITERION_NOT_MET = "criterion_not_met"
 
+
 @dataclass(frozen=True, slots=True)
 class FileRecord:
     relative_path: str
     size_bytes: int
     sha256: str
+
 
 @dataclass(frozen=True, slots=True)
 class SourceStatus:
@@ -1316,6 +1384,7 @@ class SourceStatus:
     tracked_diff_sha256: str
     dependency_lock_sha256: str
     required_inputs_committed: bool
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeStatus:
@@ -1331,6 +1400,7 @@ class RuntimeStatus:
     cuda_runtime_version: str | None
     cuda_driver_version: str | None
 
+
 @dataclass(frozen=True, slots=True)
 class BCTrainingCounts:
     configured_training_episodes: int
@@ -1338,12 +1408,15 @@ class BCTrainingCounts:
     training_examples: int | None
     validation_examples: int | None
 
+
 @dataclass(frozen=True, slots=True)
 class PPOTrainingCounts:
     requested_environment_steps: int
     completed_environment_steps: int | None
 
+
 type TrainingCounts = BCTrainingCounts | PPOTrainingCounts
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfigDocument:
@@ -1362,9 +1435,11 @@ class TrainingConfigDocument:
     profile_config: BCProfile | PPOProfile
     bc_training_digest_sha256: str | None
     bc_validation_digest_sha256: str | None
+
     def to_document(self) -> dict[str, JSONValue]: ...
     @classmethod
     def from_document(cls, document: Mapping[str, JSONValue]) -> TrainingConfigDocument: ...
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingSummaryDocument:
@@ -1373,9 +1448,11 @@ class TrainingSummaryDocument:
     profile: ProfileName
     seed: int
     summary: BCTrainingSummary | PPOTrainingSummary
+
     def to_document(self) -> dict[str, JSONValue]: ...
     @classmethod
     def from_document(cls, document: Mapping[str, JSONValue]) -> TrainingSummaryDocument: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ArtifactCompletion:
@@ -1383,6 +1460,7 @@ class ArtifactCompletion:
     training_counts: TrainingCounts
     evaluation_device: DeviceName
     bc_criterion_met: bool | None
+
 
 @dataclass(frozen=True, slots=True)
 class ArtifactManifest:
@@ -1462,16 +1540,20 @@ Use:
 class LoadedArtifact:
     root: Path
     manifest: ArtifactManifest
+
     def file(self, relative_path: str) -> Path: ...
     def document(self, relative_path: str) -> dict[str, JSONValue]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class PendingArtifactView:
     root: Path
     manifest: ArtifactManifest
     files: tuple[FileRecord, ...]
+
     def file(self, relative_path: str) -> Path: ...
     def document(self, relative_path: str) -> dict[str, JSONValue]: ...
+
 
 @dataclass(slots=True)
 class ArtifactWriter:
@@ -1483,6 +1565,7 @@ class ArtifactWriter:
     def publish_model(self, filename: str, save: Callable[[Path], None]) -> FileRecord: ...
     def pending_view(self, required_names: Sequence[str]) -> PendingArtifactView: ...
     def complete(self, completion: ArtifactCompletion) -> LoadedArtifact: ...
+
 
 def canonical_json_bytes(document: Mapping[str, JSONValue]) -> bytes: ...
 def decode_json_bytes(content: bytes) -> dict[str, JSONValue]: ...
