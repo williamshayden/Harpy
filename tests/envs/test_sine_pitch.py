@@ -7,7 +7,7 @@ import pytest
 
 import harpy.envs.sine_pitch as sine_pitch_module
 from harpy.envs.models import ControlState, ObservationMode, PitchAction, TerminalReason
-from harpy.envs.sine_pitch import SinePitchEnv
+from harpy.envs.sine_pitch import SinePitchEnv, _CandidateEvidence
 from harpy.tuning import Tuning
 
 
@@ -263,6 +263,54 @@ def test_repeated_injected_reset_owns_read_only_reproducible_evidence() -> None:
     assert second["spectrum"].flags.owndata
     assert not np.shares_memory(first["spectrum"], env._spectrum)
     assert not np.shares_memory(second["spectrum"], env._spectrum)
+
+
+def test_registered_base_candidate_evidence_retains_owned_audio() -> None:
+    env = SinePitchEnv()
+
+    observation, _ = env.reset(options={"target_note_index": 12, "source_pitch_cents": 6_000})
+
+    audio = env._candidate_audio
+    spectrum = env._spectrum
+    assert audio is not None and spectrum is not None
+    assert audio.dtype == spectrum.dtype == np.float32
+    assert audio.flags.owndata and not audio.flags.writeable
+    assert spectrum.flags.owndata and not spectrum.flags.writeable
+    assert not np.shares_memory(audio, observation["spectrum"])
+    assert not np.shares_memory(spectrum, observation["spectrum"])
+
+
+def test_candidate_evidence_hook_can_omit_private_audio_without_changing_observation() -> None:
+    class SpectrumOnlyEnv(SinePitchEnv):
+        def _candidate_evidence(self, candidate_cents: int) -> _CandidateEvidence:
+            evidence = super()._candidate_evidence(candidate_cents)
+            return _CandidateEvidence(None, evidence.spectrum)
+
+    env = SpectrumOnlyEnv()
+    observation, _ = env.reset(options={"target_note_index": 12, "source_pitch_cents": 6_000})
+
+    assert env._candidate_audio is None
+    assert observation["spectrum"].shape == (1_961,)
+
+
+def test_candidate_evidence_hook_runs_only_for_reset_and_applied_actions() -> None:
+    class RecordingEvidenceEnv(SinePitchEnv):
+        def __init__(self) -> None:
+            super().__init__()
+            self.evidence_candidates: list[int] = []
+
+        def _candidate_evidence(self, candidate_cents: int) -> _CandidateEvidence:
+            self.evidence_candidates.append(candidate_cents)
+            return super()._candidate_evidence(candidate_cents)
+
+    env = RecordingEvidenceEnv()
+    env.reset(options={"target_note_index": 12, "source_pitch_cents": 6_000})
+    env.step(PitchAction.OCTAVE_UP)
+    env.step(PitchAction.OCTAVE_UP)
+    env.step(PitchAction.OCTAVE_UP)
+    env.step(PitchAction.SUBMIT)
+
+    assert env.evidence_candidates == [6_000, 7_200, 8_400]
 
 
 def test_sampled_reset_render_failure_restores_progressed_episode_and_rng(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import operator
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import gymnasium
@@ -36,6 +37,12 @@ from harpy.synth.models import seconds_to_frames
 from harpy.tuning import Tuning
 
 Observation = dict[str, np.ndarray[Any, Any] | np.int64]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _CandidateEvidence:
+    candidate_audio: np.ndarray[Any, np.dtype[np.float32]] | None
+    spectrum: np.ndarray[Any, np.dtype[np.float32]]
 
 
 class SinePitchEnv(gymnasium.Env[Observation, int]):
@@ -96,7 +103,7 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
                 target_note_index, source_pitch_cents = self._sample_episode()
             else:
                 target_note_index, source_pitch_cents = injected
-            candidate_audio, spectrum = self._render_candidate(source_pitch_cents)
+            evidence = self._candidate_evidence(source_pitch_cents)
         except Exception:
             if previous_rng is not None and previous_rng_state is not None:
                 previous_rng.bit_generator.state = previous_rng_state
@@ -112,8 +119,8 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
         self._invalid_action_count = 0
         self._total_return = 0.0
         self._episode_result = None
-        self._candidate_audio = candidate_audio
-        self._spectrum = spectrum
+        self._candidate_audio = evidence.candidate_audio
+        self._spectrum = evidence.spectrum
 
         return self._observation(), {"step_count": 0, "steps_remaining": MAX_STEPS}
 
@@ -148,7 +155,9 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
                 reward = (
                     before_absolute_error - after_absolute_error
                 ) / MAX_ABSOLUTE_ERROR_CENTS - 0.00001
-                candidate_audio, spectrum = self._render_candidate(after_pitch_cents)
+                evidence = self._candidate_evidence(after_pitch_cents)
+                candidate_audio = evidence.candidate_audio
+                spectrum = evidence.spectrum
             else:
                 reward = -0.01
                 invalid_action_count += 1
@@ -247,11 +256,14 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
         spectrum.setflags(write=False)
         return candidate_audio, spectrum
 
+    def _candidate_evidence(self, candidate_cents: int) -> _CandidateEvidence:
+        candidate_audio, spectrum = self._render_candidate(candidate_cents)
+        return _CandidateEvidence(candidate_audio, spectrum)
+
     def _observation(self) -> Observation:
         if (
             self._source_pitch_cents is None
             or self._target_note_index is None
-            or self._candidate_audio is None
             or self._spectrum is None
         ):
             raise RuntimeError("reset must be called before requesting an observation")
