@@ -679,8 +679,10 @@ def _validate_ppo_model(
     expected_parameter_count: int,
     expected_device: str | None = None,
 ) -> None:
-    if not isinstance(model, PPO):
-        raise ValueError("model.zip must contain a Stable-Baselines3 PPO model")
+    if type(model) is not PPO:
+        raise ValueError("model.zip must contain the exact Stable-Baselines3 PPO algorithm")
+    if "predict" in vars(model):
+        raise ValueError("PPO inference must use the normal class-defined predict method")
     if model.observation_space != POLICY_OBSERVATION_SPACE:
         raise ValueError("PPO observation space must match the Harpy policy contract")
     if not isinstance(model.action_space, gymnasium.spaces.Discrete) or model.action_space.n != 7:

@@ -126,6 +126,32 @@ class _ConstantFeaturesExtractor(HarpySineFeaturesExtractor):
         return state.new_zeros((state.shape[0], self.features_dim))
 
 
+class _ConstantActionPPO(PPO):
+    """Algorithm subclass fixture overriding the actor-invoked inference path."""
+
+    def predict(
+        self,
+        observation,
+        state=None,
+        episode_start=None,
+        deterministic=False,
+    ):
+        del observation, episode_start, deterministic
+        return np.asarray(int(PitchAction.SUBMIT), dtype=np.int64), state
+
+
+def _constant_submit_predict(
+    observation,
+    state=None,
+    episode_start=None,
+    deterministic=False,
+):
+    """Picklable instance-level PPO predict override for a real archive fixture."""
+
+    del observation, episode_start, deterministic
+    return np.asarray(int(PitchAction.SUBMIT), dtype=np.int64), state
+
+
 def _suite_records(profile: ProfileName) -> tuple[tuple[EvaluationSuiteId, str], ...]:
     return tuple(
         (suite_id, fixed_evaluation_suite(suite_id).digest_sha256)
@@ -1235,6 +1261,72 @@ def test_validate_ppo_artifact_rejects_feature_extractor_subclass_that_overrides
         validate_ppo_artifact(pending)
     with pytest.raises(ValueError, match="exact Harpy sine feature extractor"):
         load_ppo_actor(pending)
+
+
+@pytest.mark.parametrize("entrypoint", ("validate", "load-actor"))
+@pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
+def test_ppo_artifact_rejects_persisted_instance_predict_override_before_actor_exposure(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    """Catch SB3 restoring an instance-owned predict callable that bypasses the exact policy."""
+
+    vec_env = make_ppo_vec_env(SinePitchEnv)
+    try:
+        model = make_ppo_model(
+            vec_env,
+            config=PROFILE_CONFIGS[ProfileName.SMOKE].ppo,
+            seed=0,
+            device="cpu",
+        )
+        model.num_timesteps = PROFILE_CONFIGS[ProfileName.SMOKE].ppo.total_timesteps
+        model.predict = _constant_submit_predict  # type: ignore[method-assign]
+        writer, pending = _writer_with_ppo_core(
+            tmp_path / entrypoint,
+            model_saver=lambda path: model.save(path),
+        )
+    finally:
+        vec_env.close()
+
+    raw_model = PPO.load(pending.file("model.zip"), device="cpu")
+    raw_env = SinePitchEnv()
+    try:
+        observation, _ = raw_env.reset(
+            options={"target_note_index": 12, "source_pitch_cents": 6_137}
+        )
+    finally:
+        raw_env.close()
+    assert writer.root == pending.root
+    assert type(raw_model) is PPO
+    assert type(raw_model.policy) is MultiInputActorCriticPolicy
+    assert type(raw_model.policy.features_extractor) is HarpySineFeaturesExtractor
+    assert "predict" in vars(raw_model)
+    assert PPOActor(raw_model).act(observation) is PitchAction.SUBMIT
+
+    with pytest.raises(ValueError, match="class-defined predict"):
+        if entrypoint == "validate":
+            validate_ppo_artifact(pending)
+        else:
+            load_ppo_actor(pending)
+
+
+@pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
+def test_save_ppo_model_rejects_an_algorithm_subclass(tmp_path: Path) -> None:
+    """Catch an algorithm subclass overriding the actor-invoked inference path."""
+
+    vec_env = make_ppo_vec_env(SinePitchEnv)
+    try:
+        model = make_ppo_model(
+            vec_env,
+            config=PROFILE_CONFIGS[ProfileName.SMOKE].ppo,
+            seed=0,
+            device="cpu",
+        )
+        model.__class__ = _ConstantActionPPO
+        with pytest.raises(ValueError, match="exact Stable-Baselines3 PPO"):
+            save_ppo_model(tmp_path / "model.zip", model)
+    finally:
+        vec_env.close()
 
 
 @pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
