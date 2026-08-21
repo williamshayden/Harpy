@@ -630,9 +630,18 @@ def train_bc_artifact(
     actor = load_bc_actor(core_view, device=DeviceName.CPU)
     heldout_accuracy = None
     if profile is ProfileName.CHECKPOINT:
+        iid_suite = next(suite for suite in suites if suite.suite_id is EvaluationSuiteId.IID)
+        heldout_iid_examples = build_oracle_examples(
+            iid_suite.episodes,
+            env_factory=environment_factory,
+        )
+        heldout_iid_dataset = OracleTrajectoryDataset(
+            heldout_iid_examples,
+            evidence_provider,
+        )
         heldout_accuracy = next_action_accuracy(
             model,
-            validation_dataset,
+            heldout_iid_dataset,
             batch_size=profile_config.bc.batch_size,
             device=torch.device("cpu"),
         )

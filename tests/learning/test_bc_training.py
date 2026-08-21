@@ -948,6 +948,7 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
     assert artifact.manifest.evaluation_device is DeviceName.CPU
     assert artifact is not completed_views[0]
     assert events.count("accuracy:cpu") == accuracy_calls
+    assert events.count("examples:256") == accuracy_calls
     assert sum(event.startswith("evaluate:") for event in events) == expected_rollouts
     example_event = "examples:128" if profile is ProfileName.SMOKE else "examples:4096"
     assert events.index("source") < events.index(example_event)
@@ -982,6 +983,137 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
                 SHUFFLED_SPECTRUM_PROBE,
             )
     assert artifact.manifest.criterion_eligible is (profile is ProfileName.CHECKPOINT)
+
+
+def test_checkpoint_accuracy_uses_fixed_iid_oracle_data_after_persisted_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    real_build_examples = bc.build_oracle_examples
+    real_save = bc.save_bc_model
+    real_load_actor = bc.load_bc_actor
+    _install_fast_workflow_fakes(monkeypatch, events)
+    fake_build_examples = bc.build_oracle_examples
+    fake_train = bc.train_behavior_cloning
+    fake_evaluate = bc.evaluate_learned_actor
+
+    splits = build_bc_episode_splits(profile=ProfileName.CHECKPOINT, run_seed=0)
+    iid_suite = fixed_evaluation_suite(EvaluationSuiteId.IID)
+    build_inputs: list[tuple[EpisodeSpec, ...]] = []
+    selection_datasets: list[tuple[OracleTrajectoryDataset, OracleTrajectoryDataset]] = []
+    accuracy_datasets: list[OracleTrajectoryDataset] = []
+    evaluated_suites: list[object] = []
+
+    def build_examples(
+        episodes: Sequence[EpisodeSpec],
+        *,
+        env_factory: object,
+    ) -> tuple[BCExample, ...]:
+        normalized = tuple(episodes)
+        build_inputs.append(normalized)
+        if normalized == iid_suite.episodes:
+            events.append("build-fixed-iid")
+            return real_build_examples(
+                normalized,
+                env_factory=env_factory,  # type: ignore[arg-type]
+            )
+        return fake_build_examples(
+            normalized,
+            env_factory=env_factory,  # type: ignore[arg-type]
+        )
+
+    def train(
+        training_dataset: OracleTrajectoryDataset,
+        validation_dataset: OracleTrajectoryDataset,
+        *,
+        config: BCProfile,
+        seed: int,
+        device: torch.device,
+    ) -> tuple[BCPolicyNetwork, BCTrainingSummary]:
+        selection_datasets.append((training_dataset, validation_dataset))
+        return fake_train(
+            training_dataset,
+            validation_dataset,
+            config=config,
+            seed=seed,
+            device=device,
+        )
+
+    def save(path: Path, model: BCPolicyNetwork) -> None:
+        events.append("save-selected")
+        real_save(path, model)
+
+    def load_actor(
+        artifact: LoadedArtifact | PendingArtifactView,
+        *,
+        device: DeviceName = DeviceName.CPU,
+    ) -> BCActor:
+        events.append(f"reload-selected:{device.value}")
+        return real_load_actor(artifact, device=device)
+
+    def accuracy(
+        model: BCPolicyNetwork,
+        dataset: OracleTrajectoryDataset,
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> float:
+        del model, batch_size
+        events.append(f"accuracy:{device.type}")
+        accuracy_datasets.append(dataset)
+        assert dataset is not selection_datasets[0][1]
+        observation, label = dataset[0]
+        assert observation["spectrum"].shape == (LOG_SPECTRUM_SIZE,)
+        assert observation["spectrum"].dtype == np.dtype(np.float32)
+        assert observation["state"].shape == (5,)
+        assert observation["state"].dtype == np.dtype(np.float32)
+        assert type(label) is np.int64
+        return 0.95
+
+    def evaluate(
+        actor: object,
+        suite: object,
+        *,
+        environment_factory: object,
+    ) -> tuple[TerminalEpisodeRecord, ...]:
+        evaluated_suites.append(suite)
+        return fake_evaluate(
+            actor,
+            suite,
+            environment_factory=environment_factory,
+        )
+
+    monkeypatch.setattr(bc, "build_oracle_examples", build_examples)
+    monkeypatch.setattr(bc, "train_behavior_cloning", train)
+    monkeypatch.setattr(bc, "save_bc_model", save)
+    monkeypatch.setattr(bc, "load_bc_actor", load_actor)
+    monkeypatch.setattr(bc, "next_action_accuracy", accuracy)
+    monkeypatch.setattr(bc, "evaluate_learned_actor", evaluate)
+
+    artifact = train_bc_artifact(
+        profile=ProfileName.CHECKPOINT,
+        seed=0,
+        device=DeviceName.CPU,
+        output=tmp_path / "heldout-iid",
+    )
+
+    assert artifact.manifest.status is ArtifactStatus.COMPLETE
+    assert build_inputs == [splits.training, splits.validation, iid_suite.episodes]
+    assert len(iid_suite.episodes) == 256
+    assert set(iid_suite.episodes).isdisjoint(splits.validation)
+    assert len(selection_datasets) == 1
+    assert len(accuracy_datasets) == 1
+    assert accuracy_datasets[0] not in selection_datasets[0]
+    assert events.index("train:cpu") < events.index("save-selected")
+    assert events.index("save-selected") < events.index("reload-selected:cpu")
+    assert events.index("reload-selected:cpu") < events.index("build-fixed-iid")
+    assert events.index("build-fixed-iid") < events.index("accuracy:cpu")
+    assert tuple(suite for suite in evaluated_suites if suite is iid_suite) == (
+        iid_suite,
+        iid_suite,
+        iid_suite,
+    )
 
 
 def test_exploratory_cuda_training_reloads_and_evaluates_the_persisted_actor_on_cpu(
