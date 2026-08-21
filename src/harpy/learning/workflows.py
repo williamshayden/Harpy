@@ -193,6 +193,7 @@ class EvaluationReport:
         if len(set(row_identities)) != len(row_identities):
             raise ValueError("rows must not contain duplicate identities")
         _validate_canonical_actor_order(rows)
+        _validate_complete_row_matrix(rows, profile=self.profile)
         has_bc = any(row.trainer is TrainerKind.BC for row in rows)
         has_ppo = any(row.trainer is TrainerKind.PPO for row in rows)
         if has_bc != (self.bc_criterion is not None):
@@ -207,6 +208,13 @@ class EvaluationReport:
             self.ppo_criterion, PPOScientificCriterion
         ):
             raise ValueError("ppo_criterion must be a PPOScientificCriterion or None")
+        _validate_visible_criteria(
+            profile=self.profile,
+            device=self.evaluation_device,
+            rows=rows,
+            bc_criterion=self.bc_criterion,
+            ppo_criterion=self.ppo_criterion,
+        )
         object.__setattr__(self, "schema_version", version)
         object.__setattr__(self, "rows", rows)
 
@@ -739,6 +747,142 @@ def _validate_canonical_actor_order(rows: Sequence[EvaluationRow]) -> None:
     keys = tuple(key(identity) for identity in group_identities)
     if keys != tuple(sorted(keys)):
         raise ValueError("rows must be ordered BC seeds, PPO seeds, then canonical baselines")
+
+
+def _actor_row_blocks(
+    rows: Sequence[EvaluationRow],
+) -> tuple[tuple[tuple[str, TrainerKind | None, int | None], tuple[EvaluationRow, ...]], ...]:
+    blocks: list[tuple[tuple[str, TrainerKind | None, int | None], tuple[EvaluationRow, ...]]] = []
+    start = 0
+    while start < len(rows):
+        identity = rows[start].actor_id, rows[start].trainer, rows[start].seed
+        end = start + 1
+        while end < len(rows):
+            candidate = rows[end].actor_id, rows[end].trainer, rows[end].seed
+            if candidate != identity:
+                break
+            end += 1
+        blocks.append((identity, tuple(rows[start:end])))
+        start = end
+    return tuple(blocks)
+
+
+def _expected_row_lanes(
+    profile: ProfileName,
+    *,
+    learned: bool,
+) -> tuple[tuple[EvaluationSuiteId, str, str | None], ...]:
+    lanes: list[tuple[EvaluationSuiteId, str, str | None]] = []
+    for suite_id in PROFILE_CONFIGS[profile].evaluation_suites:
+        if suite_id is EvaluationSuiteId.REGISTER_OOD:
+            lanes.extend((suite_id, subset, None) for subset in ("lower", "upper", "combined"))
+            continue
+        lanes.append((suite_id, "combined", None))
+        if learned:
+            lanes.extend(
+                (suite_id, "combined", probe)
+                for probe in (ZERO_SPECTRUM_PROBE, SHUFFLED_SPECTRUM_PROBE)
+            )
+    return tuple(lanes)
+
+
+def _validate_complete_row_matrix(
+    rows: Sequence[EvaluationRow],
+    *,
+    profile: ProfileName,
+) -> None:
+    blocks = _actor_row_blocks(rows)
+    learned_blocks = tuple(block for block in blocks if block[0][1] is not None)
+    if not learned_blocks:
+        raise ValueError("rows must contain at least one learned actor")
+    baseline_blocks = tuple(block for block in blocks if block[0][1] is None)
+    baseline_actor_ids = tuple(identity[0] for identity, _ in baseline_blocks)
+    expected_baselines = tuple(kind.value for kind in _BASELINE_ORDER)
+    if baseline_actor_ids != expected_baselines:
+        raise ValueError("rows must contain each canonical baseline exactly once")
+
+    learned_lanes = _expected_row_lanes(profile, learned=True)
+    baseline_lanes = _expected_row_lanes(profile, learned=False)
+    for (actor_id, trainer, seed), actor_rows in blocks:
+        if trainer is not None and actor_id != f"{trainer.value}-{seed}":
+            raise ValueError("learned actor_id must match its trainer and seed")
+        actual_lanes = tuple((row.suite_id, row.subset, row.probe) for row in actor_rows)
+        expected_lanes = learned_lanes if trainer is not None else baseline_lanes
+        if actual_lanes != expected_lanes:
+            raise ValueError(f"actor {actor_id!r} must contain its exact profile row matrix")
+
+
+def _visible_actor_seeds(
+    rows: Sequence[EvaluationRow],
+    trainer: TrainerKind,
+) -> tuple[int, ...]:
+    return tuple(
+        seed
+        for (_, candidate, seed), _ in _actor_row_blocks(rows)
+        if candidate is trainer and seed is not None
+    )
+
+
+def _validate_visible_criteria(
+    *,
+    profile: ProfileName,
+    device: DeviceName,
+    rows: Sequence[EvaluationRow],
+    bc_criterion: BCScientificCriterion | None,
+    ppo_criterion: PPOScientificCriterion | None,
+) -> None:
+    if bc_criterion is not None and bc_criterion.eligible:
+        if profile is not ProfileName.CHECKPOINT or device is not DeviceName.CPU:
+            raise ValueError("eligible BC criteria require checkpoint CPU evaluation")
+        if _visible_actor_seeds(rows, TrainerKind.BC) != (0,):
+            raise ValueError("eligible BC criteria require exactly BC seed 0")
+        heldout_accuracy = bc_criterion.heldout_next_action_accuracy
+        if heldout_accuracy is None:
+            raise ValueError("eligible BC criteria require held-out accuracy")
+        expected_bc = evaluate_bc_criterion(
+            heldout_next_action_accuracy=heldout_accuracy,
+            iid_row=_base_iid_row(
+                rows,
+                trainer=TrainerKind.BC,
+                seed=0,
+                actor_id="bc-0",
+            ),
+            eligible=True,
+        )
+        if bc_criterion != expected_bc:
+            raise ValueError("bc_criterion must match the retained IID evaluation row")
+
+    if ppo_criterion is not None and ppo_criterion.eligible:
+        if profile is not ProfileName.CHECKPOINT or device is not DeviceName.CPU:
+            raise ValueError("eligible PPO criteria require checkpoint CPU evaluation")
+        ppo_seeds = _visible_actor_seeds(rows, TrainerKind.PPO)
+        if ppo_seeds != tuple(range(5)):
+            raise ValueError("eligible PPO criteria require exactly PPO seeds 0..4")
+        bc_seeds = _visible_actor_seeds(rows, TrainerKind.BC)
+        if bc_seeds not in ((), (0,)) or (
+            bc_seeds == (0,) and (bc_criterion is None or not bc_criterion.eligible)
+        ):
+            raise ValueError("eligible PPO criteria allow only an eligible BC seed 0")
+        expected_ppo = evaluate_ppo_criterion(
+            iid_rows=tuple(
+                _base_iid_row(
+                    rows,
+                    trainer=TrainerKind.PPO,
+                    seed=seed,
+                    actor_id=f"ppo-{seed}",
+                )
+                for seed in range(5)
+            ),
+            random_iid_row=_base_iid_row(
+                rows,
+                trainer=None,
+                seed=None,
+                actor_id=BaselineKind.RANDOM.value,
+            ),
+            eligible=True,
+        )
+        if ppo_criterion != expected_ppo:
+            raise ValueError("ppo_criterion must match the retained paired IID rows")
 
 
 def _row_documents(rows: Sequence[EvaluationRow]) -> list[JSONValue]:
