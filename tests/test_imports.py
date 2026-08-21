@@ -23,6 +23,29 @@ def test_public_import_smoke_is_silent() -> None:
     assert result.stderr == b""
 
 
+def test_ordinary_public_imports_do_not_load_training_stack() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import harpy, harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
+                "import harpy.envs, harpy.envs.sine_pitch; "
+                "import harpy.synth, harpy.synth.engine, harpy.synth.models; "
+                "import harpy.gui.app; "
+                "assert 'torch' not in sys.modules; "
+                "assert 'stable_baselines3' not in sys.modules"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode()
+
+
 def test_top_level_package_import_does_not_load_gymnasium() -> None:
     result = subprocess.run(
         [
