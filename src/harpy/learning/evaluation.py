@@ -255,6 +255,11 @@ class EvaluationRow:
                 raise ValueError("row must retain its declared baseline capability lane")
             if self.seed is not None:
                 raise ValueError("baseline rows must not set a trainer seed")
+        elif (
+            self.environment_id != ENVIRONMENT_ID
+            or self.observation_mode is not ObservationMode.SPECTRUM
+        ):
+            raise ValueError("learned rows must use the declared spectrum environment lane")
         if not isinstance(self.suite_id, EvaluationSuiteId):
             raise ValueError("suite_id must be an EvaluationSuiteId")
         if (
@@ -871,6 +876,16 @@ def _validate_iid_row(
         raise ValueError("scientific criteria require spectrum IID rows")
     if row.environment_id != ENVIRONMENT_ID:
         raise ValueError("scientific criteria require the declared spectrum environment")
+    from harpy.learning.suites import fixed_evaluation_suite
+
+    canonical_suite = fixed_evaluation_suite(EvaluationSuiteId.IID)
+    canonical_membership = tuple(enumerate(canonical_suite.episodes))
+    row_membership = tuple((record.episode_index, record.episode) for record in row.episodes)
+    if (
+        row.suite_digest_sha256 != canonical_suite.digest_sha256
+        or row_membership != canonical_membership
+    ):
+        raise ValueError("scientific criteria require canonical IID digest and membership")
     return row
 
 

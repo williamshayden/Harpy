@@ -462,13 +462,47 @@ def test_spectrum_probes_copy_only_spectrum_and_shuffle_is_globally_repeatable()
     np.testing.assert_array_equal(np.sort(shuffled_spectrum), np.sort(plain_spectrum))
     assert not np.array_equal(shuffled_spectrum, plain_spectrum)
 
-    repeat_actor = ObservationOnlySpy()
-    first = make_spectrum_probe_factory(lambda: FastSinePitchEnv(), SHUFFLED_SPECTRUM_PROBE)
-    second = make_spectrum_probe_factory(lambda: FastSinePitchEnv(), SHUFFLED_SPECTRUM_PROBE)
     assert evaluation.SPECTRUM_SHUFFLE_ID == "harpy-sine-spectrum-shuffle-v1"
     assert evaluation.SPECTRUM_SHUFFLE_PERMUTATION.flags.writeable is False
-    assert np.array_equal(
-        evaluation.SPECTRUM_SHUFFLE_PERMUTATION, evaluation.SPECTRUM_SHUFFLE_PERMUTATION.copy()
+
+
+def test_shuffled_spectrum_uses_pinned_permutation_across_actor_evaluation_orders() -> None:
+    class SpectrumCaptureActor:
+        def __init__(self) -> None:
+            self.spectra: list[np.ndarray] = []
+
+        def act(self, observation: Mapping[str, object]) -> PitchAction:
+            self.spectra.append(np.array(observation["spectrum"], copy=True))
+            return PitchAction.SUBMIT
+
+    suite = _two_episode_suite()
+    expected_permutation = np.random.default_rng(
+        np.random.SeedSequence([202_608_103, 1])
+    ).permutation(1_961)
+
+    def capture(*, shuffled: bool) -> tuple[np.ndarray, ...]:
+        actor = SpectrumCaptureActor()
+
+        def base_factory() -> gymnasium.Env:
+            return FastSinePitchEnv()
+
+        factory: Callable[[], gymnasium.Env] = base_factory
+        if shuffled:
+            factory = make_spectrum_probe_factory(factory, SHUFFLED_SPECTRUM_PROBE)
+        evaluate_learned_actor(actor, suite, environment_factory=factory)
+        return tuple(actor.spectra)
+
+    plain = capture(shuffled=False)
+    expected = tuple(spectrum[expected_permutation] for spectrum in plain)
+    actor_a_then_b = (capture(shuffled=True), capture(shuffled=True))
+    actor_b_then_a = (capture(shuffled=True), capture(shuffled=True))
+
+    np.testing.assert_array_equal(
+        evaluation.SPECTRUM_SHUFFLE_PERMUTATION,
+        expected_permutation,
     )
-    evaluate_learned_actor(repeat_actor, _two_episode_suite(), environment_factory=first)
-    evaluate_learned_actor(ObservationOnlySpy(), _two_episode_suite(), environment_factory=second)
+    for evaluation_order in (actor_a_then_b, actor_b_then_a):
+        for actor_spectra in evaluation_order:
+            assert len(actor_spectra) == len(suite.episodes)
+            for observed, pinned in zip(actor_spectra, expected, strict=True):
+                np.testing.assert_array_equal(observed, pinned)

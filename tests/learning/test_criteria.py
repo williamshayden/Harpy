@@ -24,6 +24,10 @@ from harpy.learning.suites import fixed_evaluation_suite, suite_digest
 
 
 def _criterion_suite() -> EpisodeSuite:
+    return fixed_evaluation_suite(EvaluationSuiteId.IID)
+
+
+def _noncanonical_iid_suite() -> EpisodeSuite:
     episodes = (
         EpisodeSpec(target_note_index=12, source_pitch_cents=6_100),
         EpisodeSpec(target_note_index=12, source_pitch_cents=5_900),
@@ -94,24 +98,42 @@ def _ppo_row(seed: int, rate: float) -> EvaluationRow:
     return _row(rate=rate, trainer=TrainerKind.PPO, seed=seed, actor_id=f"ppo-{seed}")
 
 
+def test_bc_gate_rejects_noncanonical_iid_membership() -> None:
+    with pytest.raises(ValueError, match="canonical IID"):
+        evaluate_bc_criterion(
+            heldout_next_action_accuracy=0.90,
+            iid_row=_row(rate=0.5, suite=_noncanonical_iid_suite()),
+            eligible=True,
+        )
+
+
+def test_ppo_gate_rejects_matching_noncanonical_iid_rows() -> None:
+    suite = _noncanonical_iid_suite()
+    with pytest.raises(ValueError, match="canonical IID"):
+        evaluate_ppo_criterion(
+            iid_rows=tuple(
+                _row(
+                    rate=0.5,
+                    trainer=TrainerKind.PPO,
+                    seed=seed,
+                    actor_id=f"ppo-{seed}",
+                    suite=suite,
+                )
+                for seed in range(5)
+            ),
+            random_iid_row=_row(
+                rate=0.0,
+                trainer=None,
+                seed=None,
+                actor_id=BaselineKind.RANDOM.value,
+                suite=suite,
+            ),
+            eligible=True,
+        )
+
+
 def test_bc_gate_requires_both_declared_thresholds() -> None:
-    suite = _criterion_suite()
-    expanded_episodes = tuple(
-        EpisodeSpec(target_note_index=index, source_pitch_cents=6_000 + index * 10)
-        for index in range(4)
-    )
-    expanded = EpisodeSuite(
-        schema_version=1,
-        suite_id=suite.suite_id,
-        suite_seed=suite.suite_seed,
-        episodes=expanded_episodes,
-        digest_sha256=suite_digest(
-            suite_id=suite.suite_id,
-            suite_seed=suite.suite_seed,
-            episodes=expanded_episodes,
-        ),
-    )
-    passing = _row(rate=0.75, suite=expanded)
+    passing = _row(rate=0.75)
 
     assert (
         evaluate_bc_criterion(
@@ -199,7 +221,7 @@ def test_gates_reject_mismatched_suite_digest_and_diagnostic_rows() -> None:
     mismatched = replace(ppo_rows[-1], suite_digest_sha256="f" * 64)
     random_row = _row(rate=0.0, trainer=None, seed=None, actor_id=BaselineKind.RANDOM.value)
 
-    with pytest.raises(ValueError, match="suite"):
+    with pytest.raises(ValueError, match="digest"):
         evaluate_ppo_criterion(
             iid_rows=(*ppo_rows[:-1], mismatched),
             random_iid_row=random_row,
@@ -406,6 +428,29 @@ def test_evaluation_row_rejects_mislabeled_declared_baseline_lane() -> None:
 
     with pytest.raises(ValueError, match="declared baseline"):
         replace(random_row, environment_id="unregistered-env")
+
+
+@pytest.mark.parametrize("trainer", [TrainerKind.BC, TrainerKind.PPO])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"environment_id": "unregistered-env"},
+        {"observation_mode": ObservationMode.ORACLE},
+    ],
+)
+def test_evaluation_row_rejects_mislabeled_learned_lane(
+    trainer: TrainerKind,
+    changes: dict[str, object],
+) -> None:
+    learned_row = _row(
+        rate=0.0,
+        trainer=trainer,
+        seed=0,
+        actor_id=f"{trainer.value}-0",
+    )
+
+    with pytest.raises(ValueError, match="learned rows"):
+        replace(learned_row, **changes)
 
 
 def test_evaluation_file_codec_rejects_numeric_strings() -> None:
