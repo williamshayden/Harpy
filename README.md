@@ -3,9 +3,10 @@
 Harpy is a deterministic audio-control research workbench. Milestones A and B provide
 one monophonic NumPy sine engine, a PySide6/Qt Multimedia desktop workbench, strict
 versioned patch files, pure waveform/spectrum analysis, and graph-native envelope
-authoring. Milestone C adds Harpy's first headless Gymnasium checkpoint: a frozen,
-sine-only pitch-control environment and deterministic evaluation matrix. It proves the
-environment and evaluation contract; it does not provide or claim a trained RL policy.
+authoring. Milestone C adds a frozen, sine-only Gymnasium pitch-control environment and
+deterministic evaluation matrix. Milestone D adds Harpy's first learned policies on
+that unchanged environment: a behavior-cloning diagnostic followed by freshly
+initialized PPO.
 
 The project notebook records the broader research hypotheses, references, decisions,
 and open questions:
@@ -19,6 +20,9 @@ and open questions:
 - [Milestone C approved design](docs/superpowers/specs/2026-08-09-harpy-milestone-c-sine-pitch-gym-design.md)
 - [Milestone C implementation plan](docs/superpowers/plans/2026-08-09-harpy-milestone-c-sine-pitch-gym.md)
 - [Milestone C acceptance evidence](docs/verification/2026-08-09-milestone-c-sine-pitch-gym-acceptance.md)
+- [Milestone D approved design](docs/superpowers/specs/2026-08-10-harpy-milestone-d-learned-sine-policy-design.md)
+- [Milestone D implementation plan](docs/superpowers/plans/2026-08-10-harpy-milestone-d-learned-sine-policy.md)
+- [Milestone D acceptance evidence](docs/verification/2026-08-10-milestone-d-learned-sine-policy-acceptance.md)
 
 ## Install, run, and verify
 
@@ -49,6 +53,50 @@ uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+## Learned sine-policy workflow
+
+Install the optional learned-policy stack with this single step:
+
+```bash
+uv sync --group train
+```
+
+Then run the bounded smoke workflow. Every artifact and report output is create-only,
+so each output path must be new:
+
+```bash
+uv run harpy-sine-learn train-bc \
+  --profile smoke --seed 0 --output runs/bc-smoke
+
+uv run harpy-sine-learn train-ppo \
+  --profile smoke --seed 0 --output runs/ppo-smoke
+
+uv run harpy-sine-learn evaluate runs/ppo-smoke
+
+uv run harpy-sine-learn run runs/ppo-smoke --seed 123
+```
+
+CPU is the default and the authoritative checkpoint device. Adding `--device cuda`
+is an explicit exploratory choice: it fails if CUDA is unavailable, records CUDA
+provenance, and produces criterion-ineligible artifacts. Evaluation and hands-on runs
+also default to CPU.
+
+Behavior cloning is a supervised representation-and-control diagnostic trained from
+oracle action labels. PPO starts from a fresh random initialization and never reuses
+BC weights. Spectrum Peak is a separately labeled classical control for the clean
+procedural sine, not a learned-policy result. The candidate spectrum is already
+continuously visible in `Harpy/SinePitch-v0`; Milestone D does not add analysis tools
+or model-selected tool calls.
+
+The smoke profile establishes an engineering result: real training, persistence,
+reload, evaluation, and trace paths execute on the optional stack. It is deliberately
+ineligible for scientific criteria. Scientific outcomes come only from the declared
+clean CPU checkpoint runs and are reported honestly as `criterion_met` or
+`criterion_not_met`; PPO is not required to beat Spectrum Peak.
+
+BC `.pt` files and PPO `.zip` files are trusted-local model artifacts. Do not load
+them from untrusted sources.
 
 ## Sine-pitch Gymnasium checkpoint
 
@@ -162,9 +210,11 @@ A patch describes a sound, not a performance or a saved workbench session.
 
 ## Roadmap, not current capability
 
-Model training and adapters, train/test splits and held-out generalization, recorded
-assets and real audio pitch shifting, raw-waveform observations, additional oscillators,
-chords and polyphony, hosted actors, telemetry, durable experiment storage, and Gym
-episode replay in the GUI remain later work. Browser UI, MIDI input, imported-audio
-editing, a database, and third-party synth engines are likewise outside the current
-implementation.
+Explicit analysis tools, recorded assets and real audio pitch shifting, raw-waveform
+observations and waveform generalization, additional oscillators, chords and
+polyphony, hosted actors, telemetry, durable experiment storage, and Gym episode replay
+in the GUI remain later work. Browser UI, MIDI input, imported-audio editing, a
+database, and third-party synth engines are likewise outside the current
+implementation. Milestone D's learned result applies only to the current clean,
+procedural single-sine spectrum task; it is not evidence for recorded audio, chords,
+or other waveforms.
