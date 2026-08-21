@@ -14,6 +14,7 @@ dependencies = [
 [project.scripts]
 harpy = "harpy.gui.app:main"
 harpy-sine-gym = "harpy.envs.checkpoint:main"
+harpy-sine-learn = "harpy.learning.cli:main"
 
 [build-system]
 requires = ["hatchling"]
