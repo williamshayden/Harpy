@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import torch
 from stable_baselines3 import PPO
+from stable_baselines3.common.policies import MultiInputActorCriticPolicy
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize
 
 import harpy.learning.ppo as ppo_module
@@ -96,6 +97,33 @@ class _FixedEpisodeSinePitchEnv(SinePitchEnv):
             seed=seed,
             options={"target_note_index": 0, "source_pitch_cents": 7_000},
         )
+
+
+class _ConstantActionMultiInputPolicy(MultiInputActorCriticPolicy):
+    """Malicious archive fixture retaining the declared parameter schema."""
+
+    def predict(
+        self,
+        observation,
+        state=None,
+        episode_start=None,
+        deterministic=False,
+    ):
+        actions, next_state = super().predict(
+            observation,
+            state=state,
+            episode_start=episode_start,
+            deterministic=deterministic,
+        )
+        return np.full_like(actions, int(PitchAction.SUBMIT)), next_state
+
+
+class _ConstantFeaturesExtractor(HarpySineFeaturesExtractor):
+    """Malicious extractor fixture retaining every declared tensor name and shape."""
+
+    def forward(self, observations):
+        state = observations["state"]
+        return state.new_zeros((state.shape[0], self.features_dim))
 
 
 def _suite_records(profile: ProfileName) -> tuple[tuple[EvaluationSuiteId, str], ...]:
@@ -1136,6 +1164,80 @@ def test_validate_ppo_artifact_rejects_invalid_or_inexact_trusted_local_archives
 
 
 @pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
+def test_validate_ppo_artifact_rejects_policy_subclass_that_overrides_inference(
+    tmp_path: Path,
+) -> None:
+    """Catch a serialized policy subclass overriding predict behind an exact state schema."""
+
+    vec_env = make_ppo_vec_env(SinePitchEnv)
+    try:
+        model = make_ppo_model(
+            vec_env,
+            config=PROFILE_CONFIGS[ProfileName.SMOKE].ppo,
+            seed=0,
+            device="cpu",
+        )
+        model.num_timesteps = PROFILE_CONFIGS[ProfileName.SMOKE].ppo.total_timesteps
+        model.policy.__class__ = _ConstantActionMultiInputPolicy
+        model.policy_class = _ConstantActionMultiInputPolicy
+        writer, pending = _writer_with_ppo_core(
+            tmp_path / "policy-subclass",
+            model_saver=lambda path: model.save(path),
+        )
+    finally:
+        vec_env.close()
+
+    raw_model = PPO.load(pending.file("model.zip"), device="cpu")
+    raw_env = SinePitchEnv()
+    try:
+        observation, _ = raw_env.reset(
+            options={"target_note_index": 12, "source_pitch_cents": 6_137}
+        )
+    finally:
+        raw_env.close()
+    assert writer.root == pending.root
+    assert type(raw_model.policy) is _ConstantActionMultiInputPolicy
+    assert PPOActor(raw_model).act(observation) is PitchAction.SUBMIT
+    with pytest.raises(ValueError, match="exact SB3 MultiInputPolicy"):
+        validate_ppo_artifact(pending)
+    with pytest.raises(ValueError, match="exact SB3 MultiInputPolicy"):
+        load_ppo_actor(pending)
+
+
+@pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
+def test_validate_ppo_artifact_rejects_feature_extractor_subclass_that_overrides_inference(
+    tmp_path: Path,
+) -> None:
+    """Catch an extractor subclass overriding forward behind an exact state schema."""
+
+    vec_env = make_ppo_vec_env(SinePitchEnv)
+    try:
+        model = make_ppo_model(
+            vec_env,
+            config=PROFILE_CONFIGS[ProfileName.SMOKE].ppo,
+            seed=0,
+            device="cpu",
+        )
+        model.num_timesteps = PROFILE_CONFIGS[ProfileName.SMOKE].ppo.total_timesteps
+        model.policy.features_extractor.__class__ = _ConstantFeaturesExtractor
+        model.policy_kwargs["features_extractor_class"] = _ConstantFeaturesExtractor
+        _, pending = _writer_with_ppo_core(
+            tmp_path / "extractor-subclass",
+            model_saver=lambda path: model.save(path),
+        )
+    finally:
+        vec_env.close()
+
+    raw_model = PPO.load(pending.file("model.zip"), device="cpu")
+    assert type(raw_model.policy) is MultiInputActorCriticPolicy
+    assert type(raw_model.policy.features_extractor) is _ConstantFeaturesExtractor
+    with pytest.raises(ValueError, match="exact Harpy sine feature extractor"):
+        validate_ppo_artifact(pending)
+    with pytest.raises(ValueError, match="exact Harpy sine feature extractor"):
+        load_ppo_actor(pending)
+
+
+@pytest.mark.filterwarnings("ignore:CUDA initialization:UserWarning")
 def test_validate_ppo_artifact_cross_checks_saved_sb3_training_contract(
     tmp_path: Path,
 ) -> None:
@@ -1175,9 +1277,11 @@ def test_full_pending_and_complete_ppo_artifacts_validate_exact_evaluation_inven
     full_pending = writer.pending_view(full_names)
 
     validate_ppo_artifact(full_pending)
-    loaded = writer.complete(_ppo_completion(profile))
+    completed = writer.complete(_ppo_completion(profile))
+    loaded = load_artifact(completed.root)
     validate_ppo_artifact(loaded)
 
+    assert loaded is not completed
     assert tuple(record.relative_path for record in loaded.manifest.files) == full_names
     assert loaded.manifest.criterion_met is None
     assert loaded.manifest.criterion_status is CriterionStatus.INELIGIBLE
@@ -1249,7 +1353,6 @@ def test_train_ppo_artifact_uses_exact_atomic_order_and_complete_last(
     real_save = ppo_module.save_ppo_model
     real_load_actor = ppo_module.load_ppo_actor
     real_validate = ppo_module.validate_ppo_artifact
-    real_load_artifact = ppo_module.load_artifact
 
     def begin(cls, output: Path, manifest: ArtifactManifest) -> ArtifactWriter:
         events.append("begin")
@@ -1281,14 +1384,15 @@ def test_train_ppo_artifact_uses_exact_atomic_order_and_complete_last(
         return actor
 
     def complete(writer: ArtifactWriter, completion: ArtifactCompletion) -> LoadedArtifact:
-        events.append("complete")
         loaded = real_complete(writer, completion)
         completed_views.append(loaded)
+        events.append("complete")
         return loaded
 
-    def fresh_load(path: Path) -> LoadedArtifact:
-        events.append("fresh-load")
-        return real_load_artifact(path)
+    def forbidden_post_completion_load(path: Path) -> LoadedArtifact:
+        del path
+        events.append("post-completion-load")
+        raise AssertionError("no fallible workflow operation may run after completion")
 
     monkeypatch.setattr(ArtifactWriter, "begin", classmethod(begin))
     monkeypatch.setattr(ArtifactWriter, "publish_json", publish_json)
@@ -1297,7 +1401,12 @@ def test_train_ppo_artifact_uses_exact_atomic_order_and_complete_last(
     monkeypatch.setattr(ppo_module, "save_ppo_model", save)
     monkeypatch.setattr(ppo_module, "validate_ppo_artifact", validate)
     monkeypatch.setattr(ppo_module, "load_ppo_actor", load_actor)
-    monkeypatch.setattr(ppo_module, "load_artifact", fresh_load)
+    monkeypatch.setattr(
+        ppo_module,
+        "load_artifact",
+        forbidden_post_completion_load,
+        raising=False,
+    )
 
     artifact = train_ppo_artifact(
         profile=profile,
@@ -1307,7 +1416,7 @@ def test_train_ppo_artifact_uses_exact_atomic_order_and_complete_last(
     )
 
     assert artifact.manifest.status is ArtifactStatus.COMPLETE
-    assert artifact is not completed_views[0]
+    assert artifact is completed_views[0]
     assert events.count("actor-exposed:cpu") == 1
     assert sum(event.startswith("evaluate:") for event in events) == expected_rollouts
     assert events.index("begin") < events.index("train:cpu")
@@ -1331,8 +1440,7 @@ def test_train_ppo_artifact_uses_exact_atomic_order_and_complete_last(
     ) < events.index(f"publish:{expected_evaluations[0]}")
     full_size = len(required_payload_names(TrainerKind.PPO, profile))
     assert events.index(f"validate:{full_size}") < events.index("complete")
-    assert events.index("complete") < events.index("fresh-load")
-    assert events[-1] == "validate:complete"
+    assert events[-1] == "complete"
 
     assert tuple(
         record.relative_path for record in artifact.manifest.files

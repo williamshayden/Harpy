@@ -29,7 +29,6 @@ from harpy.learning.artifacts import (
     TrainingConfigDocument,
     TrainingSummaryDocument,
     capture_source_status,
-    load_artifact,
     read_training_config,
     read_training_summary,
     required_payload_names,
@@ -70,6 +69,13 @@ from harpy.learning.suites import TRAIN_DISTRIBUTION_ID, fixed_evaluation_suite
 _training_stack = require_training_dependencies()
 torch = _training_stack.torch
 PPO = _training_stack.stable_baselines3.PPO
+MultiInputActorCriticPolicy = (
+    _training_stack.stable_baselines3.common.policies.MultiInputActorCriticPolicy
+)
+CategoricalDistribution = (
+    _training_stack.stable_baselines3.common.distributions.CategoricalDistribution
+)
+MlpExtractor = _training_stack.stable_baselines3.common.torch_layers.MlpExtractor
 DummyVecEnv = _training_stack.stable_baselines3.common.vec_env.DummyVecEnv
 VecEnv = _training_stack.stable_baselines3.common.vec_env.VecEnv
 VecNormalize = _training_stack.stable_baselines3.common.vec_env.VecNormalize
@@ -488,7 +494,7 @@ def train_ppo_artifact(
         )
     full_view = writer.pending_view(required_payload_names(TrainerKind.PPO, profile))
     validate_ppo_artifact(full_view)
-    writer.complete(
+    return writer.complete(
         ArtifactCompletion(
             completed_at_utc=_utc_now(),
             training_counts=PPOTrainingCounts(
@@ -499,9 +505,6 @@ def train_ppo_artifact(
             bc_criterion_met=None,
         )
     )
-    loaded = load_artifact(output)
-    validate_ppo_artifact(loaded)
-    return loaded
 
 
 def _evaluate_ppo_suite(
@@ -684,21 +687,29 @@ def _validate_ppo_model(
         raise ValueError("PPO action space must contain exactly seven discrete actions")
     policy = model.policy
     if (
-        not isinstance(policy.features_extractor, HarpySineFeaturesExtractor)
-        or policy.features_extractor is not policy.pi_features_extractor
+        model.policy_class is not MultiInputActorCriticPolicy
+        or type(policy) is not MultiInputActorCriticPolicy
+    ):
+        raise ValueError("PPO policy must use the exact SB3 MultiInputPolicy implementation")
+    if type(policy.features_extractor) is not HarpySineFeaturesExtractor:
+        raise ValueError("PPO policy topology must use the exact Harpy sine feature extractor")
+    if (
+        policy.features_extractor is not policy.pi_features_extractor
         or policy.features_extractor is not policy.vf_features_extractor
         or policy.share_features_extractor is not True
         or policy.normalize_images is not False
+        or type(policy.mlp_extractor) is not MlpExtractor
         or len(policy.mlp_extractor.policy_net) != 0
         or len(policy.mlp_extractor.value_net) != 0
+        or type(policy.action_dist) is not CategoricalDistribution
     ):
         raise ValueError("PPO policy topology must use the exact shared Harpy feature extractor")
-    if not isinstance(policy.action_net, torch.nn.Linear) or (
+    if type(policy.action_net) is not torch.nn.Linear or (
         policy.action_net.in_features,
         policy.action_net.out_features,
     ) != (128, 7):
         raise ValueError("PPO policy must use the direct 128-to-7 action head")
-    if not isinstance(policy.value_net, torch.nn.Linear) or (
+    if type(policy.value_net) is not torch.nn.Linear or (
         policy.value_net.in_features,
         policy.value_net.out_features,
     ) != (128, 1):
