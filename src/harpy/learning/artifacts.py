@@ -9,8 +9,10 @@ import operator
 import os
 import re
 import signal
+import stat
 import subprocess
 import uuid
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
@@ -1504,18 +1506,20 @@ class LoadedArtifact:
         return read_json_document(path)
 
 
-_PENDING_OWNER = object()
-
-
 @dataclass(frozen=True, slots=True)
 class PendingArtifactView:
     root: Path
     manifest: ArtifactManifest
     files: tuple[FileRecord, ...]
-    _owner: object = field(default=None, repr=False, compare=False)
+    _owner: weakref.ReferenceType[ArtifactWriter] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
-        if self._owner is not _PENDING_OWNER:
+        owner = None if self._owner is None else self._owner()
+        if owner is None:
             raise ValueError("PendingArtifactView can be created only by its live ArtifactWriter")
         root = self.root.resolve(strict=True)
         if not root.is_dir():
@@ -1524,10 +1528,23 @@ class PendingArtifactView:
             raise ValueError("PendingArtifactView requires an incomplete manifest")
         if not all(isinstance(record, FileRecord) for record in self.files):
             raise ValueError("files must contain FileRecord values")
+        if owner.root != root or owner._bootstrap is not self.manifest or owner._completed:
+            raise ValueError("PendingArtifactView must belong to its live ArtifactWriter")
         object.__setattr__(self, "root", root)
         object.__setattr__(self, "files", tuple(self.files))
 
+    def _ensure_live(self) -> None:
+        owner = None if self._owner is None else self._owner()
+        if (
+            owner is None
+            or owner._completed
+            or owner.root != self.root
+            or owner._bootstrap is not self.manifest
+        ):
+            raise RuntimeError("pending artifact view is no longer live")
+
     def file(self, relative_path: str) -> Path:
+        self._ensure_live()
         return _file_from_records(self.root, self.files, relative_path)
 
     def document(self, relative_path: str) -> dict[str, JSONValue]:
@@ -1542,6 +1559,25 @@ def _temporary_path(final: Path, *, preserve_suffix: bool) -> Path:
     if preserve_suffix:
         return final.with_name(f".{final.stem}.{token}.tmp{final.suffix}")
     return final.with_name(f".{final.name}.{token}.tmp")
+
+
+_TEMPORARY_TOKEN = r"[0-9a-f]{32}"
+_ARTIFACT_TEMPORARY_PATTERN = re.compile(
+    rf"(?:"
+    rf"\.manifest\.json\.{_TEMPORARY_TOKEN}\.tmp"
+    rf"|\.(?:training-config|training-summary|evaluation-smoke|evaluation-iid|evaluation-ood)"
+    rf"\.{_TEMPORARY_TOKEN}\.tmp\.json"
+    rf"|\.model\.{_TEMPORARY_TOKEN}\.tmp\.(?:pt|zip)"
+    rf")"
+)
+
+
+def _is_artifact_temporary(path: Path) -> bool:
+    return (
+        not path.is_symlink()
+        and path.is_file()
+        and _ARTIFACT_TEMPORARY_PATTERN.fullmatch(path.name) is not None
+    )
 
 
 def _write_fsynced_file(path: Path, content: bytes) -> None:
@@ -1572,12 +1608,11 @@ def _atomic_replace_bytes(path: Path, content: bytes) -> None:
 
 
 def _atomic_publish_bytes(path: Path, content: bytes) -> None:
-    if path.exists() or path.is_symlink():
-        raise FileExistsError(path)
     temporary = _temporary_path(path, preserve_suffix=True)
     try:
         _write_fsynced_file(temporary, content)
-        os.replace(temporary, path)
+        os.link(temporary, path)
+        temporary.unlink()
         _fsync_directory(path.parent)
     finally:
         with suppress(FileNotFoundError):
@@ -1601,7 +1636,7 @@ def _remove_pre_manifest_residue(root: Path) -> None:
     if not root.is_dir():
         return
     entries = tuple(root.iterdir())
-    if any(entry.is_dir() or not entry.name.startswith(".manifest.json.") for entry in entries):
+    if any(not _is_artifact_temporary(entry) for entry in entries):
         return
     for entry in entries:
         entry.unlink(missing_ok=True)
@@ -1694,6 +1729,24 @@ def _decode_all_json_payloads(
     }
 
 
+def _read_regular_file_bytes(path: Path, field: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"{field} is missing or unsafe") from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{field} is missing or unsafe")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            return stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def load_artifact(root: Path) -> LoadedArtifact:
     """Load a complete closed-inventory artifact after hashes and JSON validate."""
 
@@ -1704,16 +1757,19 @@ def load_artifact(root: Path) -> LoadedArtifact:
     if not resolved.is_dir():
         raise ValueError("artifact root must be a directory")
     manifest_path = resolved / "manifest.json"
-    if not manifest_path.exists() or manifest_path.is_symlink():
+    if manifest_path.is_symlink() or not manifest_path.is_file():
         entries = tuple(resolved.iterdir())
-        if not entries or all(
-            entry.name.startswith(".") and ".tmp" in entry.name for entry in entries
+        manifest_missing = not manifest_path.exists() and not manifest_path.is_symlink()
+        if manifest_missing and (
+            not entries or all(_is_artifact_temporary(entry) for entry in entries)
         ):
             raise ValueError(
                 "artifact bootstrap did not publish a manifest; directory is safe to remove"
             )
         raise ValueError("artifact manifest.json is missing or unsafe")
-    manifest = ArtifactManifest.from_document(read_json_document(manifest_path))
+    manifest = ArtifactManifest.from_document(
+        decode_json_bytes(_read_regular_file_bytes(manifest_path, "artifact manifest.json"))
+    )
     if manifest.status is not ArtifactStatus.COMPLETE:
         raise ValueError("public artifact loader rejects an incomplete manifest")
     expected_payloads = required_payload_names(manifest.trainer, manifest.profile)
@@ -1730,7 +1786,7 @@ def load_artifact(root: Path) -> LoadedArtifact:
     return LoadedArtifact(root=resolved, manifest=manifest)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class ArtifactWriter:
     root: Path
     _bootstrap: ArtifactManifest
@@ -1797,8 +1853,6 @@ class ArtifactWriter:
     def publish_model(self, filename: str, save: Callable[[Path], None]) -> FileRecord:
         normalized = self._validate_publication_name(filename, json_payload=False)
         path = self.root / normalized
-        if path.exists() or path.is_symlink():
-            raise FileExistsError(path)
         temporary = _temporary_path(path, preserve_suffix=True)
         try:
             save(temporary)
@@ -1806,7 +1860,8 @@ class ArtifactWriter:
                 raise ValueError("model saver must create the exact requested temporary file")
             with temporary.open("rb") as stream:
                 os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            os.link(temporary, path)
+            temporary.unlink()
             _fsync_directory(self.root)
         finally:
             with suppress(FileNotFoundError):
@@ -1833,7 +1888,7 @@ class ArtifactWriter:
             root=self.root,
             manifest=self._bootstrap,
             files=tuple(records),
-            _owner=_PENDING_OWNER,
+            _owner=weakref.ref(self),
         )
 
     def _verify_bootstrap(self) -> None:
@@ -1897,12 +1952,27 @@ class ArtifactWriter:
         )
         _validate_config_manifest(config, final_manifest)
         _validate_summary_manifest(summary, final_manifest)
-        _atomic_replace_bytes(
-            self.root / "manifest.json",
-            canonical_json_bytes(final_manifest.to_document()),
-        )
+        manifest_path = self.root / "manifest.json"
+        temporary = _temporary_path(manifest_path, preserve_suffix=False)
+        try:
+            _write_fsynced_file(
+                temporary,
+                canonical_json_bytes(final_manifest.to_document()),
+            )
+            loaded = LoadedArtifact(root=self.root, manifest=final_manifest)
+        except BaseException:
+            with suppress(FileNotFoundError):
+                temporary.unlink()
+            raise
         self._completed = True
-        return load_artifact(self.root)
+        try:
+            os.replace(temporary, manifest_path)
+        except BaseException:
+            self._completed = False
+            with suppress(FileNotFoundError):
+                temporary.unlink()
+            raise
+        return loaded
 
 
 def _completion_is_eligible(bootstrap: ArtifactManifest, evaluation_device: DeviceName) -> bool:

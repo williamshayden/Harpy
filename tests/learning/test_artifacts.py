@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import os
 import subprocess
+import threading
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -803,15 +806,15 @@ def test_publication_failures_leave_incomplete_manifest_and_real_filesystem_stat
         writer.publish_model("model.pt", fail_saver)
     assert set(path.name for path in output.iterdir()) == {"manifest.json"}
 
-    original_replace = os.replace
+    original_link = os.link
 
-    def fail_payload_rename(source: Path, target: Path) -> None:
+    def fail_payload_link(source: Path, target: Path) -> None:
         if Path(target).name == "training-config.json":
-            raise OSError("injected payload rename failure")
-        original_replace(source, target)
+            raise OSError("injected payload link failure")
+        original_link(source, target)
 
-    monkeypatch.setattr(artifacts.os, "replace", fail_payload_rename)
-    with pytest.raises(OSError, match="payload rename"):
+    monkeypatch.setattr(artifacts.os, "link", fail_payload_link)
+    with pytest.raises(OSError, match="payload link"):
         writer.publish_json("training-config.json", _config_document().to_document())
     assert set(path.name for path in output.iterdir()) == {"manifest.json"}
     persisted = ArtifactManifest.from_document(
@@ -866,6 +869,34 @@ def test_pending_view_is_writer_owned_hash_checked_and_public_loader_stays_close
     (output / "model.pt").write_bytes(b"tampered\n")
     with pytest.raises(ValueError, match=r"size|hash"):
         writer.pending_view(("model.pt",))
+
+
+def test_pending_view_accessors_reject_a_view_minted_before_completion(tmp_path: Path) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    _publish_payloads(writer)
+    pending = writer.pending_view(("training-config.json", "model.pt"))
+
+    loaded = writer.complete(_completion())
+
+    assert loaded.file("model.pt").is_file()
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.file("model.pt")
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.document("training-config.json")
+
+
+def test_pending_view_accessors_reject_after_owning_writer_is_destroyed(tmp_path: Path) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    writer.publish_json("training-config.json", _config_document().to_document())
+    pending = writer.pending_view(("training-config.json",))
+    del writer
+    gc.collect()
+
+    assert (output / "training-config.json").is_file()
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.document("training-config.json")
 
 
 @pytest.mark.parametrize("trainer", list(TrainerKind))
@@ -1140,6 +1171,62 @@ def test_final_manifest_publication_failure_leaves_atomic_incomplete_manifest(
     assert persisted.status is ArtifactStatus.INCOMPLETE
 
 
+def test_completion_has_no_fallible_directory_fsync_after_final_manifest_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    _publish_payloads(writer)
+    pending = writer.pending_view(("training-config.json", "model.pt"))
+    original_fsync_directory = artifacts._fsync_directory
+
+    def reject_post_commit_fsync(path: Path) -> None:
+        persisted = ArtifactManifest.from_document(
+            decode_json_bytes((output / "manifest.json").read_bytes())
+        )
+        if persisted.status is ArtifactStatus.COMPLETE:
+            raise OSError("injected post-replace directory fsync failure")
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(artifacts, "_fsync_directory", reject_post_commit_fsync)
+
+    loaded = writer.complete(_completion())
+
+    assert loaded.manifest.status is ArtifactStatus.COMPLETE
+    assert load_artifact(output) == loaded
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.file("model.pt")
+    with pytest.raises(RuntimeError, match="complete"):
+        writer.pending_view(("model.pt",))
+
+
+def test_completion_does_not_reload_or_run_fallible_io_after_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    _publish_payloads(writer)
+    pending = writer.pending_view(("training-config.json",))
+
+    def forbidden_post_publication_load(_root: Path) -> LoadedArtifact:
+        raise OSError("injected post-publication load failure")
+
+    monkeypatch.setattr(artifacts, "load_artifact", forbidden_post_publication_load)
+
+    loaded = writer.complete(_completion())
+
+    assert loaded.root == output.resolve()
+    assert loaded.manifest.status is ArtifactStatus.COMPLETE
+    assert (
+        ArtifactManifest.from_document(
+            decode_json_bytes((output / "manifest.json").read_bytes())
+        ).status
+        is ArtifactStatus.COMPLETE
+    )
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.document("training-config.json")
+
+
 def test_write_new_bytes_is_atomic_create_only_and_never_overwrites(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
 
@@ -1165,6 +1252,50 @@ def test_write_new_bytes_link_failure_leaves_no_final_or_temporary_file(
         write_new_bytes(report, b"content\n")
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_json_publication_never_overwrites_file_raced_in_after_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    final = output / "training-config.json"
+    raced_content = b"raced-json-content\n"
+    original_write_fsynced_file = artifacts._write_fsynced_file
+
+    def stage_then_race(path: Path, content: bytes) -> None:
+        original_write_fsynced_file(path, content)
+        final.write_bytes(raced_content)
+
+    monkeypatch.setattr(artifacts, "_write_fsynced_file", stage_then_race)
+
+    with pytest.raises(FileExistsError):
+        writer.publish_json("training-config.json", _config_document().to_document())
+
+    assert final.read_bytes() == raced_content
+    assert writer.file_records == ()
+    assert set(path.name for path in output.iterdir()) == {
+        "manifest.json",
+        "training-config.json",
+    }
+
+
+def test_model_publication_never_overwrites_file_raced_in_by_saver(tmp_path: Path) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    final = output / "model.pt"
+    raced_content = b"raced-model-content\n"
+
+    def save_and_race(path: Path) -> None:
+        path.write_bytes(b"staged-model\n")
+        final.write_bytes(raced_content)
+
+    with pytest.raises(FileExistsError):
+        writer.publish_model("model.pt", save_and_race)
+
+    assert final.read_bytes() == raced_content
+    assert writer.file_records == ()
+    assert set(path.name for path in output.iterdir()) == {"manifest.json", "model.pt"}
 
 
 def _rewrite_payload_and_manifest(root: Path, filename: str, content: bytes) -> None:
@@ -1311,12 +1442,61 @@ def test_loader_identifies_only_empty_or_temp_only_bootstrap_residue_as_safe_to_
     output = tmp_path / "artifact"
     output.mkdir()
     if residue == "manifest-temp":
-        (output / ".manifest.json.deadbeef.tmp").write_bytes(b"partial")
+        (output / f".manifest.json.{'a' * 32}.tmp").write_bytes(b"partial")
     elif residue == "payload-temp":
-        (output / ".model.deadbeef.tmp.pt").write_bytes(b"partial")
+        (output / f".model.{'b' * 32}.tmp.pt").write_bytes(b"partial")
 
     with pytest.raises(ValueError, match="safe to remove"):
         load_artifact(output)
+
+
+@pytest.mark.parametrize("residue", ["deceptive-file", "exact-temp-directory"])
+def test_loader_does_not_call_deceptive_or_nonregular_temp_residue_safe_to_remove(
+    tmp_path: Path, residue: str
+) -> None:
+    output = tmp_path / "artifact"
+    output.mkdir()
+    if residue == "deceptive-file":
+        kept = output / ".important.tmp.backup"
+        kept.write_bytes(b"keep\n")
+    else:
+        kept = output / f".manifest.json.{'c' * 32}.tmp"
+        kept.mkdir()
+
+    with pytest.raises(ValueError, match="missing or unsafe") as raised:
+        load_artifact(output)
+
+    assert "safe to remove" not in str(raised.value)
+    assert kept.exists()
+
+
+@pytest.mark.parametrize("manifest_kind", ["directory", "fifo"])
+def test_loader_rejects_nonregular_manifest_without_reading_or_blocking(
+    tmp_path: Path, manifest_kind: str
+) -> None:
+    output = tmp_path / "artifact"
+    output.mkdir()
+    manifest_path = output / "manifest.json"
+    fifo_descriptor: int | None = None
+    release_fifo: threading.Timer | None = None
+    if manifest_kind == "directory":
+        manifest_path.mkdir()
+    else:
+        os.mkfifo(manifest_path)
+        fifo_descriptor = os.open(manifest_path, os.O_RDWR | os.O_NONBLOCK)
+        release_fifo = threading.Timer(0.1, os.close, args=(fifo_descriptor,))
+        release_fifo.start()
+
+    try:
+        with pytest.raises(ValueError, match="missing or unsafe"):
+            load_artifact(output)
+    finally:
+        if release_fifo is not None:
+            release_fifo.cancel()
+            release_fifo.join()
+        if fifo_descriptor is not None:
+            with suppress(OSError):
+                os.close(fifo_descriptor)
 
 
 def test_loader_does_not_call_unknown_manifestless_content_safe_to_remove(tmp_path: Path) -> None:
