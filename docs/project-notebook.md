@@ -1,6 +1,6 @@
 # Harpy project notebook
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 Status: exploratory project-level notes. Milestone specifications and their review status live under `docs/superpowers/specs/`.
 
@@ -18,7 +18,12 @@ The environment should make simple, solved cases cheap enough to validate the en
 
 ## Core track first: audio transformation, then inverse synthesis
 
-In the first retuning versions, the actor does **not** control oscillator, filter, envelope, or synthesizer-patch parameters. It manipulates an immutable audio asset through pitch tools.
+In the retuning track, the actor does **not** control oscillator, filter, envelope, or
+synthesizer-patch parameters. It manipulates pitch through bounded musical tools while
+the environment retains immutable source truth. Milestone C's procedural sine backend
+directly re-synthesizes each effective pitch from that truth; it does not transform a
+recorded sample buffer. Later asset-based environments must preserve the same
+immutable-source rule with a separately specified pitch-shift renderer.
 
 A synthesizer can still serve two useful roles:
 
@@ -29,39 +34,49 @@ A later inverse-synthesis track can let an actor control waveform, ADSR, and eve
 
 The environment should always derive each candidate render from the original source plus the current cumulative pitch offset. It should never repeatedly pitch-shift the previous output, because cumulative processing artifacts would turn action order into an unintended hidden variable.
 
-## What one episode may look like
+## Milestone C episode flow
 
-Working hypothesis for the first benchmark:
+The implemented first checkpoint is fixed:
 
-1. Select or generate an immutable base asset.
-2. Declare a symbolic musical goal and, where possible, generate an evaluator-only ideal render from the same source configuration.
-3. Give the actor the source/current audio, symbolic goal, permitted analysis tools, current tool state, and remaining action budget.
-4. Let the actor apply one constrained pitch action at a time.
-5. Re-render from the immutable base asset after each action.
-6. Score musical correctness against latent evaluator truth and audio fidelity as separate outcomes.
-7. Terminate when the candidate is inside the tuning tolerance; truncate when the action budget is exhausted.
-8. Record accuracy, trajectory, latency, environment steps, model metadata, and any available compute telemetry.
+1. Sample a symbolic target-note index and hidden integer-cent source from the frozen
+   procedural distribution, rejecting initially successful random pairs.
+2. Render the initial candidate from immutable source truth and zero controls.
+3. Give the actor its selected evidence track, symbolic target, independent control
+   state, and remaining 64-action budget.
+4. Apply one named Octave, Semitone, Cent, or Submit action at a time.
+5. For every applied pitch action, freshly re-synthesize from source truth plus the
+   cumulative controls; blocked actions and Submit do not render.
+6. Return progress reward and actor-safe transition information while retaining exact
+   pitch/error truth for the evaluator.
+7. Terminate only on Submit. Submit succeeds at an inclusive absolute error of at most
+   5 cents; a final non-Submit action truncates when the budget is exhausted.
+8. After completion, expose the immutable evaluator result with accuracy, trajectory,
+   action efficiency, return, and terminal reason.
 
-The source pitch, generated transform, and hidden ideal render are evaluator truth. The declared musical goal is actor-visible, but evaluator-only values must not accidentally leak through filenames, array lengths, loudness, phase, metadata fields, episode IDs, or debug information.
+Source pitch, current exact error, shortest path, and any ideal target representation
+are evaluator truth. The declared goal is actor-visible, but evaluator-only values must
+not leak through observation shapes, array lengths, amplitude, phase, metadata, IDs, or
+debug information. Milestone C creates no hidden target audio and records no model,
+latency, hardware, or telemetry metadata.
 
-## Candidate action surface
+## Implemented action surface
 
-The exact vocabulary is still open. A concrete starting point is a discrete action set with positive and negative versions of hierarchical pitch moves:
+Milestone C fixes one seven-value Gymnasium action vocabulary:
 
-- octave: 1,200 cents;
-- semitone: 100 cents;
-- coarse detune: perhaps 25 cents;
-- fine detune: perhaps 5 cents;
-- optionally submit/stop.
+| ID | Action | Effect |
+| ---: | --- | --- |
+| 0 | Octave Down | octaves `- 1` |
+| 1 | Semitone Down | semitones `- 1` |
+| 2 | Cent Down | cents `- 1` |
+| 3 | Submit | terminate and score the current candidate |
+| 4 | Cent Up | cents `+ 1` |
+| 5 | Semitone Up | semitones `+ 1` |
+| 6 | Octave Up | octaves `+ 1` |
 
-This preserves the idea of tool use without allowing an actor to set the answer directly. The terms “coarse pitch” and “fine pitch” need to be fixed explicitly before implementation.
-
-The action schema should be defined once and adapted to:
-
-- Gymnasium discrete actions;
-- a local policy interface;
-- hosted model tool/function calls;
-- buttons in a demonstration UI.
+The Octave, Semitone, and Cent controls are independent and never carry. Their bounds
+are respectively `-2..2`, `-12..12`, and `-100..100`. A bound-crossing action is a
+penalized no-op that still consumes one step. Hosted tool adapters and demonstration UI
+buttons remain future surfaces rather than Milestone C compatibility requirements.
 
 ## Observation and feedback variants
 
@@ -69,13 +84,19 @@ These variants answer different scientific questions and should not be conflated
 
 ### Symbolic goal with callable analysis tools
 
-The actor receives the source/current audio and a target note, chord, key, or interval. It may call a deliberately limited analyzer such as a spectrum, F0 estimator, or chromagram, then use pitch actions. This is the leading candidate for v0 because it tests whether an actor can combine musical intent, evidence, and constrained control without requiring an audible target.
+The actor receives source/current audio and a target note, chord, key, or interval, then
+may call a deliberately limited analyzer such as a spectrum, F0 estimator, or chromagram.
+This remains a later tool-using actor variant; Milestone C exposes a fixed observation
+rather than callable analysis.
 
 An explicit F0 or cents estimate makes perception an engineered preprocessing step. That is legitimate for a tool-use/control track, but it cannot support a claim that the policy learned pitch perception.
 
 ### Symbolic goal with non-oracle audio representation
 
-The actor receives the same musical goal but only raw audio or a declared representation such as a log-frequency magnitude spectrum. This combines perception and control and is a harder, scientifically distinct track.
+The actor receives the same musical goal but only raw audio or a declared representation
+such as a log-frequency magnitude spectrum. Milestone C chooses a fixed normalized
+`(1961,)` log-frequency magnitude spectrum as its headline lane. It contains no raw
+waveform, explicit F0, analyzer peak, current coordinate, source pitch, or cents error.
 
 ### Reference-conditioned audio
 
@@ -87,7 +108,9 @@ The actor sees its current controls and scalar feedback but no audio evidence. T
 
 ### Oracle descriptors
 
-The actor receives latent source pitch or exact cents error rather than an estimate derived from audio. This is useful as an easy pipeline check and upper-bound baseline, but it should never be presented as learned listening.
+Milestone C's oracle actor receives the exact current-pitch coordinate in place of the
+spectrum. It does not receive latent source pitch or exact cents error. This is an easy
+pipeline and planning check, not evidence of learned listening.
 
 ### Raw waveform versus spectral representation
 
@@ -103,7 +126,10 @@ The target format determines what the result demonstrates:
 - `target_chord: F:min` is globally reachable only when the source has the same quality and voicing relationship up to transposition.
 - a target key or timed note contour belongs to later, longer-form material.
 
-The main result should include both a one-shot signed-offset prediction view, which isolates perception, and a sequential-action view, which adds planning and refinement. Otherwise, repeated reward queries can conceal the fact that an actor is searching rather than listening.
+Milestone C reports only the sequential-action checkpoint. A one-shot signed-offset
+prediction task and supervised or learned comparisons remain later controlled studies.
+Repeated reward queries can conceal search as listening, so reward-only results remain a
+separate labeled control and are never pooled with the spectrum headline.
 
 ## Proposed curriculum
 
@@ -232,16 +258,18 @@ played frequency remains separate performance state. Graph-native A/D/S/R and cu
 controls therefore let a researcher create deterministic labeled source renders
 without turning the manual lab into the benchmark actor.
 
-This does not change the first retuning track's scientific boundary. The first actor
-still manipulates a rendered immutable audio asset with constrained pitch tools; it
-does not control the synthesizer or infer its patch. Direct synth control remains a
-later inverse-synthesis benchmark family. The sine-only Gym itself remains Milestone C
-and requires a new specification for actions, observations, rewards, leakage controls,
-model adapters, and benchmark protocol before implementation.
+This did not change the first retuning track's scientific boundary. The first actor
+uses constrained pitch tools and does not control or infer the synthesizer patch. Direct
+synth control remains a later inverse-synthesis benchmark family. Milestone C now
+implements the separately approved sine-only Gym contract with procedural direct
+resynthesis, fixed observations and rewards, leakage controls, and deterministic
+untrained baselines. It does not yet implement model adapters or recorded-asset
+transformation.
 
 ## Experiment record
 
-Every run should produce a portable manifest and summary containing:
+A later full experiment system should produce a portable manifest and summary
+containing:
 
 - Harpy suite and environment version;
 - Git commit and dirty-worktree flag;
@@ -254,7 +282,11 @@ Every run should produce a portable manifest and summary containing:
 - aggregate metrics with uncertainty;
 - pointers to optional audio, plots, logs, and video-ready replays.
 
-This experiment ledger is part of the product, not cleanup work after training.
+That durable experiment ledger remains future product work. The Milestone C checkpoint
+command writes one deterministic aggregate JSON document to standard output and creates
+no files. Its document identifies the checkpoint/config, episode count, seed, and four
+separate baseline summary rows; it does not inspect Git, hardware, model metadata, or
+telemetry.
 
 ## Evaluation principles and required baselines
 
@@ -266,12 +298,15 @@ The first evaluation should keep three questions separate:
 
 One scalar reward may be required for a particular trainer, but the benchmark report should retain these components. Otherwise, a musically correct but badly damaged render could look equivalent to a clean one, or a high-fidelity render at the wrong pitch could receive undue credit.
 
-Required comparisons:
+Milestone C ships these untrained reference comparisons:
 
 - random legal actions;
 - oracle shortest-path controller using latent pitch truth;
-- classical F0 estimator plus deterministic action planning;
+- spectrum maximum-bin estimator plus deterministic action planning;
 - reward-only hill climbing/search with audio hidden;
+
+Later comparisons may add:
+
 - supervised signed-offset estimator plus planner;
 - one standard RL baseline;
 - human/manual trajectories where useful for the narrative.
@@ -297,7 +332,11 @@ Reference: [Microsoft WSL advanced settings](https://learn.microsoft.com/windows
 
 ## Ecosystem and prior work
 
-The broad claim “RL uses audio similarity to control pitch or synthesis parameters” already exists. Harpy's defensible contribution is a standardized symbolic-retuning benchmark with explicit observation tracks, a controlled curriculum, model adapters, leakage tests, and a reproducible experiment ledger.
+The broad claim “RL uses audio similarity to control pitch or synthesis parameters”
+already exists. Milestone C's present contribution is narrower: a small auditable
+symbolic-retuning contract with explicit observation tracks, leakage tests, and a
+deterministic checkpoint. A controlled broader curriculum, model adapters, and a
+reproducible experiment ledger remain the longer-term direction.
 
 ### How established pitch tools bound the problem
 
@@ -358,17 +397,40 @@ Questions should be resolved one at a time during design:
 
 1. In V5/V6, does “across modes” mean mode diversity with interval-preserving transposition, or does the actor actually convert one rendered mode/chord quality into another?
 2. Is the leading learned track raw audio, a high-resolution log-frequency representation, or a separately labeled F0-assisted tool track?
-3. Is the first core symbolic goal an octave-specific note such as D4, with direct cents offset retained only as calibration?
-4. What precise actions correspond to “octave,” “semitone,” “coarse,” and “fine” pitch, and which targets are reachable on that action lattice?
-5. What first result counts as success: OOD frequency generalization, cross-timbre generalization, or both?
-6. Should training use sparse terminal success, dense latent progress, or controlled variants of both while keeping reward out of the evaluation observation?
-7. Which renderer is authoritative for uploaded/recorded audio, and what artifact budget is acceptable?
-8. What is the smallest supervised and RL actor worth comparing on the same observation encoder?
-9. When does the manual lab move from a replay/debug surface to a polished public demo?
-10. Which assets may be redistributed, and which remain private evaluation material?
-11. Should the repository adopt a permissive license, and which one?
+3. What first learned result counts as success: OOD frequency generalization, cross-timbre generalization, or both?
+4. Which renderer is authoritative for uploaded/recorded audio, and what artifact budget is acceptable?
+5. What is the smallest supervised and RL actor worth comparing on the same observation encoder?
+6. When does the manual lab move from a replay/debug surface to a polished public demo?
+7. Which assets may be redistributed, and which remain private evaluation material?
+8. Should the repository adopt a permissive license, and which one?
 
 ## Decision log
+
+### 2026-08-09
+
+- Implemented the first deterministic sine-pitch Gymnasium checkpoint with the frozen
+  procedural source range `4800..7200` cents, target-note indices `0..24`, fixed default
+  synth/tuning/render configuration, and sampled initial error greater than 5 cents.
+- Fixed three separately reported observation tracks: headline `(1961,)` normalized
+  log-spectrum, oracle exact current-pitch coordinate, and reward-only control. Results
+  from these tracks are never pooled.
+- Fixed the seven action IDs as Octave Down, Semitone Down, Cent Down, Submit, Cent Up,
+  Semitone Up, and Octave Up. Octave `-2..2`, Semitone `-12..12`, and Cent `-100..100`
+  remain independent, bounded controls with no carry.
+- Required explicit Submit for inclusive 5-cent success, recorded 1-cent accuracy
+  separately, and fixed a 64-action budget. Applied pitch reward is
+  `(absolute_error_before - absolute_error_after) / 6100 - 0.00001`; blocked moves
+  receive `-0.01`, Submit receives `+1` or `-1`, and final non-Submit actions add a `-1`
+  truncation surcharge.
+- Kept every candidate derived from immutable source truth. The procedural v0 backend
+  directly re-synthesizes a fresh sine at the effective pitch; this is not recorded-audio
+  pitch shifting.
+- Added deterministic Random, Spectrum Peak, Oracle, and Reward Search baselines. They
+  are untrained reference policies and do not establish learned perception or model
+  quality.
+- Added a deterministic checkpoint command that emits one labeled aggregate JSON
+  document and writes no files. Model training/adapters, held-out evaluation, telemetry,
+  durable experiment storage, richer audio, and GUI replay remain later checkpoints.
 
 ### 2026-08-08
 

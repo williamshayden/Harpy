@@ -5,6 +5,7 @@ description = "A constrained audio-control benchmark and native demonstration la
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "gymnasium>=1.3,<2",
   "numpy>=2.0,<3",
   "pyqtgraph>=0.13.7,<1",
   "pyside6>=6.8,<7",
@@ -12,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 harpy = "harpy.gui.app:main"
+harpy-sine-gym = "harpy.envs.checkpoint:main"
 
 [build-system]
 requires = ["hatchling"]

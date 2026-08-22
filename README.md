@@ -1,10 +1,11 @@
 # Harpy
 
-Harpy is currently a native deterministic sine workbench and the foundation for a
-future audio-reinforcement-learning research environment. Milestones A and B provide
+Harpy is a deterministic audio-control research workbench. Milestones A and B provide
 one monophonic NumPy sine engine, a PySide6/Qt Multimedia desktop workbench, strict
 versioned patch files, pure waveform/spectrum analysis, and graph-native envelope
-authoring. Harpy does not yet provide an RL environment.
+authoring. Milestone C adds Harpy's first headless Gymnasium checkpoint: a frozen,
+sine-only pitch-control environment and deterministic evaluation matrix. It proves the
+environment and evaluation contract; it does not provide or claim a trained RL policy.
 
 The project notebook records the broader research hypotheses, references, decisions,
 and open questions:
@@ -15,6 +16,9 @@ and open questions:
 - [Milestone B approved design](docs/superpowers/specs/2026-08-08-harpy-milestone-b-envelope-authoring-design.md)
 - [Milestone B graph-native implementation plan](docs/superpowers/plans/2026-08-08-harpy-milestone-b-graph-native-envelope-controls.md)
 - [Milestone B acceptance evidence](docs/verification/2026-08-08-milestone-b-acceptance.md)
+- [Milestone C approved design](docs/superpowers/specs/2026-08-09-harpy-milestone-c-sine-pitch-gym-design.md)
+- [Milestone C implementation plan](docs/superpowers/plans/2026-08-09-harpy-milestone-c-sine-pitch-gym.md)
+- [Milestone C acceptance evidence](docs/verification/2026-08-09-milestone-c-sine-pitch-gym-acceptance.md)
 
 ## Install, run, and verify
 
@@ -23,6 +27,12 @@ Harpy requires Python 3.12 and uses `uv` for its environment and lockfile.
 ```bash
 uv sync
 uv run harpy
+```
+
+Run the headless Milestone C checkpoint and write one JSON document to standard output:
+
+```bash
+uv run harpy-sine-gym --episodes 10 --seed 0
 ```
 
 Under WSLg, use the compositor's runtime directory if the inherited directory does not
@@ -39,6 +49,71 @@ uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+## Sine-pitch Gymnasium checkpoint
+
+Importing `harpy.envs` registers three versioned environments:
+
+| Environment ID | Observation track |
+| --- | --- |
+| `Harpy/SinePitch-v0` | Headline normalized log-frequency spectrum |
+| `Harpy/SinePitchOracle-v0` | Exact current-pitch coordinate control |
+| `Harpy/SinePitchRewardOnly-v0` | Controls, target, budget, and scalar feedback only |
+
+The default spectrum observation contains a normalized `float32` log-frequency magnitude
+array with shape `(1961,)`, the symbolic target note, the three control values, and the
+remaining action budget. Oracle replaces the spectrum with one exact current-pitch
+coordinate. Reward-only contains neither. These tracks answer different questions and
+their results must never be pooled.
+
+The stable discrete action IDs are:
+
+| ID | Action |
+| ---: | --- |
+| 0 | Octave Down |
+| 1 | Semitone Down |
+| 2 | Cent Down |
+| 3 | Submit |
+| 4 | Cent Up |
+| 5 | Semitone Up |
+| 6 | Octave Up |
+
+Octave, Semitone, and Cent are independent bounded controls with ranges `-2..2`,
+`-12..12`, and `-100..100`; they never carry into one another. An episode succeeds only
+when the actor explicitly submits at an inclusive absolute error of at most 5 cents.
+Accuracy within 1 cent is reported separately, and merely passing through either region
+does not terminate the episode.
+
+The public environment surface is:
+
+```python
+from harpy.envs import (
+    ControlState,
+    EpisodeResult,
+    ObservationMode,
+    PitchAction,
+    SinePitchEnv,
+    register_envs,
+)
+```
+
+Actor-facing observations and `info` omit source pitch, exact error, optimal actions,
+and other evaluator truth. A harness may read immutable `EpisodeResult` only after the
+episode is done. This is an honest capability boundary for supported actors, not a
+security sandbox against Python code deliberately reaching into private state or
+`env.unwrapped`.
+
+The checkpoint command evaluates Random and Spectrum Peak on the spectrum track, Oracle
+on the oracle track, and Reward Search on the reward-only track. It emits separate rows
+under schema version 1 with checkpoint ID `harpy-milestone-c-sine-pitch-v0` and config ID
+`fixed-default-sine-v0`. Rows report submitted and positional accuracy separately,
+absolute final error, action and excess-action means, return, truncation, and invalid
+actions. The four baselines are deterministic, frozen, untrained reference policies;
+their output is not evidence of learned listening or model quality.
+
+For this procedural checkpoint, every applied pitch action directly re-synthesizes a
+fresh sine from immutable source truth plus cumulative controls. That is an ideal
+sine-only transformation backend, not recorded-audio pitch shifting.
 
 ## Native workbench
 
@@ -87,8 +162,9 @@ A patch describes a sound, not a performance or a saved workbench session.
 
 ## Roadmap, not current capability
 
-The sine-only Gym proof remains Milestone C roadmap work. Constrained pitch actions,
-targets, actor-facing observations, rewards, model/tool adapters, training, and
-benchmark reporting are roadmap items, not implemented claims. Browser UI, MIDI
-input, imported-audio editing, a database, additional oscillators, polyphony, and
-third-party synth engines are likewise outside the current implementation.
+Model training and adapters, train/test splits and held-out generalization, recorded
+assets and real audio pitch shifting, raw-waveform observations, additional oscillators,
+chords and polyphony, hosted actors, telemetry, durable experiment storage, and Gym
+episode replay in the GUI remain later work. Browser UI, MIDI input, imported-audio
+editing, a database, and third-party synth engines are likewise outside the current
+implementation.
