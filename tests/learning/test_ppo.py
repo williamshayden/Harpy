@@ -933,7 +933,7 @@ def test_real_train_ppo_never_loads_bc_and_uses_stochastic_training_actions(
         "validate_bc_artifact",
         "_load_bc_state_dict",
     ):
-        monkeypatch.setattr(bc, name, poisoned_bc_path)
+        monkeypatch.setattr(bc, name, poisoned_bc_path, raising=False)
 
     config = PPOProfile(
         total_timesteps=2,

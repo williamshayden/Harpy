@@ -40,7 +40,6 @@ from harpy.learning.artifacts import (
     TrainingConfigDocument,
     TrainingSummaryDocument,
     capture_source_status,
-    load_artifact,
     read_training_config,
     read_training_summary,
     required_payload_names,
@@ -682,7 +681,7 @@ def train_bc_artifact(
         )
     full_view = writer.pending_view(required_payload_names(TrainerKind.BC, profile))
     validate_bc_artifact(full_view)
-    writer.complete(
+    return writer.complete(
         ArtifactCompletion(
             completed_at_utc=_utc_now(),
             training_counts=BCTrainingCounts(
@@ -695,7 +694,6 @@ def train_bc_artifact(
             bc_criterion_met=criterion.criterion_met,
         )
     )
-    return load_artifact(output)
 
 
 def _evaluate_bc_suite(

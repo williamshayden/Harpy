@@ -1171,6 +1171,41 @@ def test_final_manifest_publication_failure_leaves_atomic_incomplete_manifest(
     assert persisted.status is ArtifactStatus.INCOMPLETE
 
 
+def test_interrupt_after_final_manifest_rename_returns_the_committed_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifact"
+    writer = ArtifactWriter.begin(output, _incomplete_manifest())
+    _publish_payloads(writer)
+    pending = writer.pending_view(("training-config.json", "model.pt"))
+    original_replace = os.replace
+
+    def replace_then_interrupt(source: Path, target: Path) -> None:
+        original_replace(source, target)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(artifacts.os, "replace", replace_then_interrupt)
+
+    try:
+        loaded = writer.complete(_completion())
+    except KeyboardInterrupt:
+        persisted = ArtifactManifest.from_document(
+            decode_json_bytes((output / "manifest.json").read_bytes())
+        )
+        pytest.fail(
+            f"committed {persisted.status.value} manifest propagated KeyboardInterrupt",
+            pytrace=False,
+        )
+
+    assert loaded.manifest.status is ArtifactStatus.COMPLETE
+    assert load_artifact(output) == loaded
+    assert not any(path.name.startswith(".manifest.json.") for path in output.iterdir())
+    with pytest.raises(RuntimeError, match="no longer live"):
+        pending.file("model.pt")
+    with pytest.raises(RuntimeError, match="complete"):
+        writer.pending_view(("model.pt",))
+
+
 def test_completion_has_no_fallible_directory_fsync_after_final_manifest_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

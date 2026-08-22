@@ -1968,6 +1968,12 @@ class ArtifactWriter:
         try:
             os.replace(temporary, manifest_path)
         except BaseException:
+            try:
+                temporary.lstat()
+            except FileNotFoundError:
+                # An atomic replace consumed its staged source, so publication
+                # committed even if an interrupt arrived before the call returned.
+                return loaded
             self._completed = False
             with suppress(FileNotFoundError):
                 temporary.unlink()

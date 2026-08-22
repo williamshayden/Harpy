@@ -815,8 +815,11 @@ def test_full_pending_and_complete_validation_decode_every_evaluation_payload(
     full_pending = writer.pending_view(required_payload_names(TrainerKind.BC, profile))
 
     validate_bc_artifact(full_pending)
-    loaded = writer.complete(_completion(profile))
+    completed = writer.complete(_completion(profile))
+    loaded = load_artifact(completed.root)
     validate_bc_artifact(loaded)
+
+    assert loaded is not completed
 
 
 def test_evaluation_payloads_are_strictly_decoded_in_pending_and_complete_views(
@@ -880,7 +883,6 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
     real_load_actor = bc.load_bc_actor
     real_validate = bc.validate_bc_artifact
     real_criterion = bc.evaluate_bc_criterion
-    real_load_artifact = bc.load_artifact
 
     def publish_json(
         writer: ArtifactWriter,
@@ -895,9 +897,9 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
         return real_pending_view(writer, names)
 
     def complete(writer: ArtifactWriter, completion: ArtifactCompletion) -> LoadedArtifact:
-        events.append("complete")
         loaded = real_complete(writer, completion)
         completed_views.append(loaded)
+        events.append("complete")
         return loaded
 
     def save(path: Path, model: BCPolicyNetwork) -> None:
@@ -923,9 +925,10 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
         events.append("criterion")
         return real_criterion(**kwargs)  # type: ignore[arg-type]
 
-    def fresh_load(path: Path) -> LoadedArtifact:
-        events.append("fresh-load")
-        return real_load_artifact(path)
+    def forbidden_post_completion_load(path: Path) -> LoadedArtifact:
+        del path
+        events.append("post-completion-load")
+        raise AssertionError("no fallible workflow operation may run after completion")
 
     monkeypatch.setattr(ArtifactWriter, "publish_json", publish_json)
     monkeypatch.setattr(ArtifactWriter, "pending_view", pending_view)
@@ -934,7 +937,12 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
     monkeypatch.setattr(bc, "load_bc_actor", load_actor)
     monkeypatch.setattr(bc, "validate_bc_artifact", validate)
     monkeypatch.setattr(bc, "evaluate_bc_criterion", criterion)
-    monkeypatch.setattr(bc, "load_artifact", fresh_load)
+    monkeypatch.setattr(
+        bc,
+        "load_artifact",
+        forbidden_post_completion_load,
+        raising=False,
+    )
 
     artifact = train_bc_artifact(
         profile=profile,
@@ -946,7 +954,7 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
     assert artifact.manifest.status is ArtifactStatus.COMPLETE
     assert artifact.manifest.runtime.device is DeviceName.CPU
     assert artifact.manifest.evaluation_device is DeviceName.CPU
-    assert artifact is not completed_views[0]
+    assert artifact is completed_views[0]
     assert events.count("accuracy:cpu") == accuracy_calls
     assert events.count("examples:256") == accuracy_calls
     assert sum(event.startswith("evaluate:") for event in events) == expected_rollouts
@@ -967,7 +975,7 @@ def test_train_bc_artifact_publishes_validates_and_completes_in_exact_order(
     assert events.index("criterion") < events.index(f"publish:{expected_evaluations[0]}")
     full_inventory_size = 4 if profile is ProfileName.SMOKE else 5
     assert events.index(f"validate:{full_inventory_size}") < events.index("complete")
-    assert events.index("complete") < events.index("fresh-load")
+    assert events[-1] == "complete"
 
     assert tuple(
         record.relative_path for record in artifact.manifest.files
