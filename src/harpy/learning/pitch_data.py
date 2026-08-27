@@ -361,35 +361,37 @@ def _suite_episodes(
 
 
 @cache
-def _fixed_pitch_evaluation_suites() -> tuple[PitchEvaluationSuite, ...]:
+def _fixed_pitch_evaluation_suite(
+    suite_id: PitchEvaluationSuiteId,
+) -> PitchEvaluationSuite:
     split = pitch_coordinate_split()
-    suites: list[PitchEvaluationSuite] = []
-    for suite_id, suite_code, source_field, per_target, expected_digest in _SUITE_CONFIGS:
-        episodes = _suite_episodes(
-            suite_code=suite_code,
-            source_pool=getattr(split, source_field),
-            per_target=per_target,
-        )
-        digest = _canonical_digest(_suite_payload(suite_id, suite_code, episodes))
-        if digest != expected_digest:
-            raise RuntimeError(f"pinned {suite_id.value} digest does not match construction")
-        suites.append(
-            PitchEvaluationSuite(
-                schema_version=PITCH_SUITE_SCHEMA_VERSION,
-                suite_id=suite_id,
-                suite_seed=suite_code,
-                episodes=episodes,
-                digest_sha256=digest,
-            )
-        )
-    return tuple(suites)
+    suite_code, source_field, per_target, expected_digest = next(
+        (suite_code, source_field, per_target, expected_digest)
+        for configured_id, suite_code, source_field, per_target, expected_digest in _SUITE_CONFIGS
+        if configured_id is suite_id
+    )
+    episodes = _suite_episodes(
+        suite_code=suite_code,
+        source_pool=getattr(split, source_field),
+        per_target=per_target,
+    )
+    digest = _canonical_digest(_suite_payload(suite_id, suite_code, episodes))
+    if digest != expected_digest:
+        raise RuntimeError(f"pinned {suite_id.value} digest does not match construction")
+    return PitchEvaluationSuite(
+        schema_version=PITCH_SUITE_SCHEMA_VERSION,
+        suite_id=suite_id,
+        suite_seed=suite_code,
+        episodes=episodes,
+        digest_sha256=digest,
+    )
 
 
 def fixed_pitch_evaluation_suite(suite_id: PitchEvaluationSuiteId) -> PitchEvaluationSuite:
     """Return the pinned schema-v2 evaluation suite for ``suite_id``."""
     if not isinstance(suite_id, PitchEvaluationSuiteId):
         raise ValueError("suite_id must be a PitchEvaluationSuiteId")
-    return _fixed_pitch_evaluation_suites()[tuple(PitchEvaluationSuiteId).index(suite_id)]
+    return _fixed_pitch_evaluation_suite(suite_id)
 
 
 @cache

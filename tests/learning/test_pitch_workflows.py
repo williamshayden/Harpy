@@ -423,17 +423,35 @@ def _write_peek_manifest(
     *,
     schema_version: int,
     profile: ProfileName = ProfileName.SMOKE,
+    seed: int = 0,
 ) -> None:
     root.mkdir()
-    (root / "manifest.json").write_bytes(
-        canonical_json_bytes(
+    document: dict[str, object] = {
+        "schema_version": schema_version,
+        "profile": profile.value,
+        "seed": seed,
+        "trainer": "pitch" if schema_version == 2 else "bc",
+    }
+    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        eligible = profile is ProfileName.CHECKPOINT
+        document.update(
             {
-                "schema_version": schema_version,
-                "profile": profile.value,
-                "trainer": "pitch" if schema_version == 2 else "bc",
+                "status": "complete",
+                "source": {
+                    "commit": "test-commit",
+                    "dirty_tree": False,
+                    "dependency_lock_sha256": "a" * 64,
+                    "required_inputs_committed": True,
+                },
+                "runtime": {"device": "cpu"},
+                "evaluation_device": "cpu",
+                "eligible_for_aggregate": eligible,
+                "criterion_status": ("eligible_for_aggregate" if eligible else "ineligible"),
+                "criterion_met": None,
+                "compatibility_sha256": "b" * 64,
             }
         )
-    )
+    (root / "manifest.json").write_bytes(canonical_json_bytes(document))
 
 
 def test_evaluate_rejects_mixed_or_unknown_schema_before_loading(
@@ -480,11 +498,12 @@ def test_checkpoint_calls_exact_preflight_once_before_final_evaluation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = tuple(tmp_path / f"seed-{seed}" for seed in (2, 0, 1))
-    for path in paths:
+    for path, seed in zip(paths, (2, 0, 1), strict=True):
         _write_peek_manifest(
             path,
             schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
             profile=ProfileName.CHECKPOINT,
+            seed=seed,
         )
     events = []
     artifacts = tuple(object.__new__(LoadedPitchArtifact) for _ in range(3))
@@ -899,11 +918,12 @@ def test_final_pitch_diagnostics_preflight_once_and_consume_seed_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = tuple(tmp_path / f"input-{seed}" for seed in (2, 0, 1))
-    for path in paths:
+    for path, seed in zip(paths, (2, 0, 1), strict=True):
         _write_peek_manifest(
             path,
             schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
             profile=ProfileName.CHECKPOINT,
+            seed=seed,
         )
     artifacts = tuple(object.__new__(LoadedPitchArtifact) for _ in range(3))
     events: list[tuple[str, object]] = []

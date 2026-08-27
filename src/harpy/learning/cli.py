@@ -1,4 +1,4 @@
-"""Four-command CLI for training, evaluating, and running learned sine policies."""
+"""Six-command CLI for training, diagnosing, evaluating, and running sine policies."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import stat
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from harpy.learning.artifacts import write_new_bytes
 from harpy.learning.dependencies import require_training_dependencies
@@ -19,6 +20,9 @@ from harpy.learning.workflows import (
     evaluation_report_bytes,
     run_artifact,
 )
+
+if TYPE_CHECKING:
+    from harpy.learning.diagnostics import DiagnosticBundle
 
 TRUSTED_LOCAL_MODEL_WARNING = (
     "warning: learned model archives are trusted-local artifacts; "
@@ -35,9 +39,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_train(arguments, trainer="bc")
         if arguments.command == "train-ppo":
             return _run_train(arguments, trainer="ppo")
+        if arguments.command == "train-pitch":
+            return _run_train(arguments, trainer="pitch")
+        if arguments.command == "diagnose":
+            return _run_diagnose(arguments)
         if arguments.command == "evaluate":
             return _run_evaluate(arguments)
-        return _run_episode(arguments)
+        if arguments.command == "run":
+            return _run_episode(arguments)
+        raise LearningContractError(f"unsupported command: {arguments.command}")
     except KeyboardInterrupt:
         _write_diagnostic("interrupted")
         return 130
@@ -58,6 +68,20 @@ def _argument_parser() -> argparse.ArgumentParser:
 
     train_ppo = commands.add_parser("train-ppo")
     _add_training_arguments(train_ppo)
+
+    train_pitch = commands.add_parser("train-pitch")
+    _add_training_arguments(train_pitch)
+
+    diagnose = commands.add_parser("diagnose")
+    diagnose.add_argument("artifacts", nargs="+", type=_nonempty_path, metavar="ARTIFACT")
+    diagnose.add_argument(
+        "--suite",
+        choices=("smoke", "iid", "ood-lower", "ood-upper"),
+        required=True,
+    )
+    diagnose.add_argument("--output", type=_nonempty_path, required=True, metavar="FILE")
+    _add_device_argument(diagnose)
+    diagnose.add_argument("--bound-mask", action="store_true")
 
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("artifacts", nargs="+", type=_nonempty_path, metavar="ARTIFACT")
@@ -120,13 +144,47 @@ def _run_train(arguments: argparse.Namespace, *, trainer: str) -> int:
             device=arguments.device,
             output=output,
         )
-    else:
+    elif trainer == "ppo":
         _train_ppo_artifact(
             profile=arguments.profile,
             seed=arguments.seed,
             device=arguments.device,
             output=output,
         )
+    elif trainer == "pitch":
+        _train_pitch_artifact(
+            profile=arguments.profile,
+            seed=arguments.seed,
+            device=arguments.device,
+            output=output,
+        )
+    else:
+        raise LearningContractError(f"unsupported trainer: {trainer}")
+    return 0
+
+
+def _run_diagnose(arguments: argparse.Namespace) -> int:
+    artifacts = _canonical_input_directories(arguments.artifacts)
+    output = _preflight_new_output(arguments.output, role="diagnostic output")
+    output = _validate_diagnostic_output(output, artifacts=artifacts)
+    _preflight_diagnostic_request(
+        artifacts,
+        suite=arguments.suite,
+        device=arguments.device,
+        bound_mask=arguments.bound_mask,
+    )
+    _require_requested_device(arguments.device)
+    _create_parent(output)
+    bundle = _diagnose_artifacts(
+        artifacts,
+        suite=arguments.suite,
+        device=arguments.device,
+        bound_mask=arguments.bound_mask,
+    )
+    content = _diagnostic_bundle_bytes(bundle)
+    write_new_bytes(output, content)
+    _write_trusted_local_warning()
+    _write_stdout_bytes(content)
     return 0
 
 
@@ -255,6 +313,75 @@ def _train_ppo_artifact(
         device=device,
         output=output,
     )
+
+
+def _train_pitch_artifact(
+    *,
+    profile: ProfileName,
+    seed: int,
+    device: DeviceName,
+    output: Path,
+) -> object:
+    from harpy.learning.pitch_artifacts import train_pitch_artifact
+
+    return train_pitch_artifact(
+        profile=profile,
+        seed=seed,
+        device=device,
+        output=output,
+    )
+
+
+def _validate_diagnostic_output(output: Path, *, artifacts: Sequence[Path]) -> Path:
+    from harpy.learning.diagnostic_codecs import validate_diagnostic_output_path
+
+    try:
+        return validate_diagnostic_output_path(
+            output,
+            artifact_directories=artifacts,
+        )
+    except ValueError as error:
+        raise LearningContractError(str(error)) from error
+
+
+def _diagnose_artifacts(
+    artifacts: Sequence[Path],
+    *,
+    suite: str,
+    device: DeviceName,
+    bound_mask: bool,
+) -> DiagnosticBundle:
+    from harpy.learning.workflows import diagnose_artifacts
+
+    return diagnose_artifacts(
+        artifacts,
+        suite=suite,
+        device=device,
+        bound_mask=bound_mask,
+    )
+
+
+def _preflight_diagnostic_request(
+    artifacts: Sequence[Path],
+    *,
+    suite: str,
+    device: DeviceName,
+    bound_mask: bool,
+) -> None:
+    from harpy.learning.workflows import preflight_diagnostic_request
+
+    preflight_diagnostic_request(
+        artifacts,
+        suite=suite,
+        device=device,
+        bound_mask=bound_mask,
+    )
+
+
+def _diagnostic_bundle_bytes(bundle: DiagnosticBundle) -> bytes:
+    from harpy.learning.diagnostic_codecs import diagnostic_bundle_bytes
+
+    return diagnostic_bundle_bytes(bundle)
 
 
 def _write_trusted_local_warning() -> None:

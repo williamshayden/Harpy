@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,107 @@ def _assert_strict_json(content: bytes) -> dict[str, object]:
     return document
 
 
+def _assert_canonical_trace(content: bytes, *, expected_seed: int) -> tuple[int, ...]:
+    from harpy.envs.models import (
+        MAX_STEPS,
+        SUCCESS_TOLERANCE_CENTS,
+        PitchAction,
+        TerminalReason,
+    )
+    from harpy.learning.artifacts import canonical_json_bytes, decode_json_bytes
+    from harpy.learning.models import ENVIRONMENT_ID
+    from harpy.learning.trace import (
+        FULL_RANGE_DEMONSTRATION_DISTRIBUTION_ID,
+        EpisodeTrace,
+        TraceStep,
+        trace_json_bytes,
+    )
+
+    document = decode_json_bytes(content)
+    assert canonical_json_bytes(document) == content
+    assert set(document) == {
+        "environment_id",
+        "distribution_id",
+        "seed",
+        "target_note_index",
+        "target_note",
+        "steps",
+        "terminal_reason",
+        "final_absolute_error_cents",
+        "submitted_success",
+        "action_count",
+        "excess_actions",
+        "total_return",
+    }
+    assert document["environment_id"] == ENVIRONMENT_ID
+    assert document["distribution_id"] == FULL_RANGE_DEMONSTRATION_DISTRIBUTION_ID
+    assert type(document["seed"]) is int
+    assert document["seed"] == expected_seed
+    assert type(document["target_note_index"]) is int
+    assert type(document["target_note"]) is str
+    assert type(document["terminal_reason"]) is str
+    assert type(document["final_absolute_error_cents"]) is int
+    assert type(document["submitted_success"]) is bool
+    assert type(document["action_count"]) is int
+    assert document["excess_actions"] is None or type(document["excess_actions"]) is int
+    assert type(document["total_return"]) is float
+
+    raw_steps = document["steps"]
+    assert type(raw_steps) is list
+    assert raw_steps
+    steps: list[TraceStep] = []
+    for expected_step, raw_step in enumerate(raw_steps, start=1):
+        assert type(raw_step) is dict
+        assert set(raw_step) == {"step", "action", "reward"}
+        assert type(raw_step["step"]) is int
+        assert raw_step["step"] == expected_step
+        assert type(raw_step["action"]) is int
+        assert type(raw_step["reward"]) is float
+        steps.append(
+            TraceStep(
+                step=raw_step["step"],
+                action=PitchAction(raw_step["action"]),
+                reward=raw_step["reward"],
+            )
+        )
+
+    episode = EpisodeTrace(
+        environment_id=document["environment_id"],
+        distribution_id=document["distribution_id"],
+        seed=document["seed"],
+        target_note_index=document["target_note_index"],
+        target_note=document["target_note"],
+        steps=tuple(steps),
+        terminal_reason=TerminalReason(document["terminal_reason"]),
+        final_absolute_error_cents=document["final_absolute_error_cents"],
+        submitted_success=document["submitted_success"],
+        action_count=document["action_count"],
+        excess_actions=document["excess_actions"],
+        total_return=document["total_return"],
+    )
+    assert trace_json_bytes(episode) == content
+    assert episode.action_count == len(episode.steps)
+
+    actions = tuple(step.action for step in episode.steps)
+    if episode.terminal_reason is TerminalReason.SUBMITTED_SUCCESS:
+        assert actions[-1] is PitchAction.SUBMIT
+        assert episode.submitted_success is True
+        assert episode.final_absolute_error_cents <= SUCCESS_TOLERANCE_CENTS
+        assert episode.excess_actions is not None
+    elif episode.terminal_reason is TerminalReason.SUBMITTED_FAILURE:
+        assert actions[-1] is PitchAction.SUBMIT
+        assert episode.submitted_success is False
+        assert episode.final_absolute_error_cents > SUCCESS_TOLERANCE_CENTS
+        assert episode.excess_actions is None
+    else:
+        assert episode.terminal_reason is TerminalReason.BUDGET_EXHAUSTED
+        assert actions[-1] is not PitchAction.SUBMIT
+        assert episode.submitted_success is False
+        assert episode.action_count == MAX_STEPS
+        assert episode.excess_actions is None
+    return tuple(int(action) for action in actions)
+
+
 def _assert_closed_hashed_inventory(artifact: object) -> None:
     from harpy.learning.artifacts import LoadedArtifact, required_payload_names
 
@@ -52,6 +154,48 @@ def _assert_closed_hashed_inventory(artifact: object) -> None:
         assert record.sha256 == hashlib.sha256(content).hexdigest()
         if payload.suffix == ".json":
             _assert_strict_json(content)
+
+
+def _assert_pitch_closed_hashed_inventory(artifact: object) -> None:
+    from harpy.learning.pitch_artifacts import (
+        PITCH_REQUIRED_PAYLOAD_NAMES,
+        LoadedPitchArtifact,
+    )
+
+    assert isinstance(artifact, LoadedPitchArtifact)
+    assert (
+        tuple(record.relative_path for record in artifact.manifest.files)
+        == PITCH_REQUIRED_PAYLOAD_NAMES
+    )
+    assert {path.name for path in artifact.root.iterdir()} == {
+        "manifest.json",
+        *PITCH_REQUIRED_PAYLOAD_NAMES,
+    }
+    _assert_strict_json((artifact.root / "manifest.json").read_bytes())
+    for record in artifact.manifest.files:
+        payload = artifact.file(record.relative_path)
+        content = payload.read_bytes()
+        assert record.size_bytes == len(content)
+        assert record.sha256 == hashlib.sha256(content).hexdigest()
+        if payload.suffix == ".json":
+            _assert_strict_json(content)
+
+
+def _run_learning_cli(*arguments: str, timeout: int = 600) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "-m", "harpy.learning.cli", *arguments],
+        cwd=_REPOSITORY_ROOT,
+        env=os.environ.copy(),
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def _assert_one_trusted_local_warning(result: subprocess.CompletedProcess[bytes]) -> None:
+    from harpy.learning.cli import TRUSTED_LOCAL_MODEL_WARNING
+
+    assert result.stderr.decode("utf-8").splitlines() == [TRUSTED_LOCAL_MODEL_WARNING]
 
 
 def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Path) -> None:
@@ -125,6 +269,131 @@ def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Pa
     assert result.stderr.count(b"uv sync --group train") == 1
     assert b"PySide6" not in result.stderr
     assert not output.exists()
+
+
+@_REQUIRES_TRAIN_STACK
+def test_real_pitch_smoke_cli_trains_reloads_diagnoses_evaluates_and_traces(
+    tmp_path: Path,
+) -> None:
+    """The public pitch CLI must cross every persisted Milestone E smoke boundary."""
+
+    from harpy.learning.artifacts import (
+        PITCH_ARTIFACT_SCHEMA_VERSION,
+        ArtifactStatus,
+        CriterionStatus,
+    )
+    from harpy.learning.diagnostic_codecs import (
+        diagnostic_bundle_bytes,
+        diagnostic_bundle_from_bytes,
+    )
+    from harpy.learning.models import DeviceName, ProfileName
+    from harpy.learning.pitch_artifacts import load_pitch_artifact
+    from harpy.learning.pitch_data import PitchEvaluationSuiteId, PitchTrainerKind
+    from harpy.learning.pitch_reports import PitchEvaluationReport
+    from harpy.learning.workflows import (
+        evaluation_report_bytes,
+        evaluation_report_from_bytes,
+    )
+
+    artifact_path = tmp_path / "pitch-smoke"
+    diagnostic_path = tmp_path / "pitch-smoke-diagnostics.json"
+    report_path = tmp_path / "pitch-smoke-report.json"
+    artifact_resolved = artifact_path.resolve(strict=False)
+    assert not diagnostic_path.resolve(strict=False).is_relative_to(artifact_resolved)
+    assert not report_path.resolve(strict=False).is_relative_to(artifact_resolved)
+    assert not artifact_path.exists()
+    assert not diagnostic_path.exists()
+    assert not report_path.exists()
+
+    training = _run_learning_cli(
+        "train-pitch",
+        "--profile",
+        "smoke",
+        "--seed",
+        "0",
+        "--output",
+        str(artifact_path),
+        "--device",
+        "cpu",
+    )
+    assert training.returncode == 0, training.stderr.decode("utf-8")
+    assert training.stdout == b""
+
+    artifact = load_pitch_artifact(artifact_path)
+    assert artifact.manifest.schema_version == PITCH_ARTIFACT_SCHEMA_VERSION
+    assert artifact.manifest.status is ArtifactStatus.COMPLETE
+    assert artifact.manifest.trainer is PitchTrainerKind.PITCH
+    assert artifact.manifest.profile is ProfileName.SMOKE
+    assert artifact.manifest.seed == 0
+    assert artifact.manifest.runtime.device is DeviceName.CPU
+    assert artifact.manifest.evaluation_device is DeviceName.CPU
+    assert artifact.manifest.eligible_for_aggregate is False
+    assert artifact.manifest.criterion_status is CriterionStatus.INELIGIBLE
+    assert artifact.manifest.criterion_met is None
+    _assert_pitch_closed_hashed_inventory(artifact)
+
+    diagnosis = _run_learning_cli(
+        "diagnose",
+        str(artifact_path),
+        "--suite",
+        "smoke",
+        "--output",
+        str(diagnostic_path),
+        "--device",
+        "cpu",
+    )
+    assert diagnosis.returncode == 0, diagnosis.stderr.decode("utf-8")
+    assert diagnosis.stdout == diagnostic_path.read_bytes()
+    _assert_one_trusted_local_warning(diagnosis)
+    diagnostic_bundle = diagnostic_bundle_from_bytes(diagnosis.stdout)
+    assert diagnostic_bundle_bytes(diagnostic_bundle) == diagnosis.stdout
+    assert diagnostic_bundle.suite_id == PitchEvaluationSuiteId.SMOKE.value
+    assert diagnostic_bundle.device == DeviceName.CPU.value
+    assert diagnostic_bundle.bound_mask is False
+    assert len(diagnostic_bundle.reports) == 1
+    assert diagnostic_bundle.reports[0].seed == 0
+    assert len(diagnostic_bundle.reports[0].episodes) == 50
+
+    evaluation = _run_learning_cli(
+        "evaluate",
+        str(artifact_path),
+        "--output",
+        str(report_path),
+        "--device",
+        "cpu",
+    )
+    assert evaluation.returncode == 0, evaluation.stderr.decode("utf-8")
+    assert evaluation.stdout == report_path.read_bytes()
+    _assert_one_trusted_local_warning(evaluation)
+    report = evaluation_report_from_bytes(evaluation.stdout)
+    assert isinstance(report, PitchEvaluationReport)
+    assert evaluation_report_bytes(report) == evaluation.stdout
+    assert report.profile is ProfileName.SMOKE
+    assert report.evaluation_device is DeviceName.CPU
+    assert len(report.terminal_rows) == 7
+    assert report.coordinate_evaluations == ()
+    assert report.register_ood_aggregates == ()
+    assert report.criterion.status == "ineligible"
+
+    run_arguments = (
+        "run",
+        str(artifact_path),
+        "--seed",
+        "123",
+        "--json",
+        "--device",
+        "cpu",
+    )
+    first_trace = _run_learning_cli(*run_arguments)
+    second_trace = _run_learning_cli(*run_arguments)
+    assert first_trace.returncode == 0, first_trace.stderr.decode("utf-8")
+    assert second_trace.returncode == 0, second_trace.stderr.decode("utf-8")
+    _assert_one_trusted_local_warning(first_trace)
+    _assert_one_trusted_local_warning(second_trace)
+    assert first_trace.stdout == second_trace.stdout
+    first_actions = _assert_canonical_trace(first_trace.stdout, expected_seed=123)
+    second_actions = _assert_canonical_trace(second_trace.stdout, expected_seed=123)
+    assert first_actions == second_actions
 
 
 @_REQUIRES_TRAIN_STACK

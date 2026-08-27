@@ -8,6 +8,7 @@ import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -21,7 +22,7 @@ from harpy.envs.models import (
 from harpy.envs.planning import minimum_action_plan
 from harpy.learning import artifacts as learning_artifacts
 from harpy.learning import cache as learning_cache
-from harpy.learning import pitch_artifacts, pitch_evaluation
+from harpy.learning import pitch_artifacts, pitch_data, pitch_evaluation
 from harpy.learning.artifacts import (
     ARTIFACT_SCHEMA_V1_REGISTRY,
     ARTIFACT_SCHEMA_VERSION,
@@ -51,6 +52,7 @@ from harpy.learning.pitch import (
     PITCH_PROFILE_CONFIGS,
     PitchDatasetMetrics,
     PitchEpochMetrics,
+    PitchTrainingResult,
     PitchTrainingSummary,
     load_pitch_estimator_model,
     save_pitch_estimator_model,
@@ -81,6 +83,7 @@ from harpy.learning.pitch_artifacts import (
 from harpy.learning.pitch_data import (
     PITCH_DISTRIBUTION_ID,
     PITCH_SPLIT_DIGEST_SHA256,
+    PitchEpisodeSpec,
     PitchEvaluationSuiteId,
     PitchTrainerKind,
     fixed_pitch_evaluation_suite,
@@ -100,16 +103,24 @@ _DIGEST_A = "a" * 64
 _DIGEST_B = "b" * 64
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 _REQUIRED_PITCH_SOURCE_INPUTS = (
+    "src/harpy/__init__.py",
+    "src/harpy/analysis.py",
+    "src/harpy/envs/__init__.py",
     "src/harpy/envs/baselines.py",
     "src/harpy/envs/models.py",
     "src/harpy/envs/planning.py",
     "src/harpy/envs/sine_pitch.py",
     "src/harpy/envs/spectrum.py",
+    "src/harpy/learning/__init__.py",
     "src/harpy/learning/action_masks.py",
     "src/harpy/learning/actors.py",
     "src/harpy/learning/artifacts.py",
     "src/harpy/learning/cache.py",
+    "src/harpy/learning/dependencies.py",
+    "src/harpy/learning/diagnostic_codecs.py",
+    "src/harpy/learning/diagnostics.py",
     "src/harpy/learning/envs.py",
+    "src/harpy/learning/errors.py",
     "src/harpy/learning/evaluation.py",
     "src/harpy/learning/models.py",
     "src/harpy/learning/observations.py",
@@ -120,6 +131,12 @@ _REQUIRED_PITCH_SOURCE_INPUTS = (
     "src/harpy/learning/pitch_artifacts.py",
     "src/harpy/learning/pitch_evaluation.py",
     "src/harpy/learning/suites.py",
+    "src/harpy/synth/__init__.py",
+    "src/harpy/synth/curves.py",
+    "src/harpy/synth/engine.py",
+    "src/harpy/synth/envelope.py",
+    "src/harpy/synth/models.py",
+    "src/harpy/tuning.py",
     "uv.lock",
 )
 
@@ -496,10 +513,14 @@ def test_pitch_provenance_requires_the_exact_schema_v2_source_inputs() -> None:
 @pytest.mark.parametrize(
     "missing",
     [
+        "src/harpy/analysis.py",
         "src/harpy/learning/action_masks.py",
         "src/harpy/learning/artifacts.py",
+        "src/harpy/learning/dependencies.py",
         "src/harpy/learning/evaluation.py",
         "src/harpy/learning/pitch_evaluation.py",
+        "src/harpy/synth/engine.py",
+        "src/harpy/tuning.py",
     ],
 )
 def test_pitch_source_capture_rejects_uncommitted_required_semantics(
@@ -1452,3 +1473,461 @@ def test_pitch_completion_runs_no_fallible_work_after_atomic_manifest_replace(
     assert decode_json_bytes((output / "manifest.json").read_bytes())["status"] == "complete"
     with pytest.raises(RuntimeError, match="no longer live"):
         pending.document("training-config.json")
+
+
+def _install_fast_pitch_artifact_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    output: Path,
+    events: list[str],
+    *,
+    fail_stage: str | None = None,
+    real_probe_factory: bool = False,
+) -> dict[str, object]:
+    """Install deterministic workflow seams while retaining real artifact codecs."""
+
+    training_model = PitchEstimatorNetwork()
+    with torch.no_grad():
+        for parameter in training_model.parameters():
+            parameter.fill_(0.125)
+    selected_state = {
+        name: tensor.detach().cpu().clone() for name, tensor in training_model.state_dict().items()
+    }
+    actor_models: list[object] = []
+    persisted_models: list[object] = []
+    cache_ids: list[int] = []
+    real_load = pitch_artifacts.load_pitch_estimator_model
+    real_publish_json = PitchArtifactWriter.publish_json
+
+    def capture_source(path: Path) -> SourceStatus:
+        assert path.name == "pitch_artifacts.py"
+        events.append("source")
+        return _source()
+
+    def capture_runtime(device: DeviceName) -> RuntimeStatus:
+        events.append(f"runtime:{device.value}")
+        return _runtime(device)
+
+    def build_datasets(
+        profile: ProfileName,
+        *,
+        cache: learning_cache.SpectrumEvidenceCache | None = None,
+        evidence_provider: object | None = None,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        assert evidence_provider is None
+        assert isinstance(cache, learning_cache.SpectrumEvidenceCache)
+        assert decode_json_bytes((output / "manifest.json").read_bytes())["status"] == (
+            "incomplete"
+        )
+        assert {path.name for path in output.iterdir()} == {"manifest.json"}
+        events.append("build")
+        cache_ids.append(id(cache))
+        configured = PITCH_PROFILE_CONFIGS[profile]
+        return (
+            tuple(range(configured.training_coordinate_count)),
+            tuple(range(configured.validation_coordinate_count)),
+        )
+
+    def train(
+        training_dataset: object,
+        validation_dataset: object,
+        *,
+        profile: object,
+        seed: int,
+        device: torch.device,
+    ) -> PitchTrainingResult:
+        events.append(f"train:{device.type}")
+        if fail_stage == "train":
+            raise RuntimeError("injected pitch training failure")
+        profile_name = next(
+            name for name, configured in PITCH_PROFILE_CONFIGS.items() if configured == profile
+        )
+        assert len(training_dataset) == (  # type: ignore[arg-type]
+            PITCH_PROFILE_CONFIGS[profile_name].training_coordinate_count
+        )
+        assert len(validation_dataset) == (  # type: ignore[arg-type]
+            PITCH_PROFILE_CONFIGS[profile_name].validation_coordinate_count
+        )
+        return PitchTrainingResult(
+            model=training_model,
+            selected_state=selected_state,
+            summary=_summary(profile_name, seed, DeviceName(device.type)),
+        )
+
+    def tracked_load(
+        path: Path,
+        *,
+        device: torch.device | None = None,
+    ) -> PitchEstimatorNetwork:
+        events.append(f"load:{path.name}:{'default' if device is None else device.type}")
+        model = real_load(path, device=device)
+        if path.name == "model.pt":
+            persisted_models.append(model)
+        return model
+
+    class Actor:
+        def __init__(self, model: object, *, device: object | None = None) -> None:
+            assert device == torch.device("cpu")
+            actor_models.append(model)
+            events.append("actor:cpu")
+
+    def make_environment(cache: learning_cache.SpectrumEvidenceCache) -> object:
+        cache_ids.append(id(cache))
+        events.append("env")
+        return object()
+
+    def probe_factory(environment_factory: object, probe: str) -> object:
+        assert callable(environment_factory)
+        events.append(f"probe-factory:{probe}")
+
+        def factory() -> object:
+            return environment_factory()
+
+        factory._pitch_test_probe = probe  # type: ignore[attr-defined]
+        return factory
+
+    def evaluate_learned(
+        actor: object,
+        suite: object,
+        *,
+        environment_factory: object,
+    ) -> tuple[TerminalEpisodeRecord, ...]:
+        del actor
+        assert suite.suite_id is PitchEvaluationSuiteId.SMOKE  # type: ignore[union-attr]
+        probe = getattr(environment_factory, "_pitch_test_probe", None)
+        lane = "base" if probe is None else probe
+        events.append(f"evaluate:{lane}")
+        if fail_stage == "evaluate" and probe is None:
+            raise RuntimeError("injected pitch evaluation failure")
+        if not real_probe_factory:
+            assert callable(environment_factory)
+            environment_factory()
+        assert (output / "model.pt").is_file()
+        assert not (output / "evaluation-smoke.json").exists()
+        return _terminal_records()
+
+    def evaluate_baseline(
+        kind: BaselineKind,
+        suite: object,
+        *,
+        cache: learning_cache.SpectrumEvidenceCache,
+    ) -> tuple[TerminalEpisodeRecord, ...]:
+        assert suite.suite_id is PitchEvaluationSuiteId.SMOKE  # type: ignore[union-attr]
+        cache_ids.append(id(cache))
+        events.append(f"baseline:{kind.value}")
+        return _terminal_records()
+
+    def tracked_publish_json(
+        self: PitchArtifactWriter,
+        filename: str,
+        document: object,
+    ) -> object:
+        events.append(f"publish:{filename}")
+        return real_publish_json(self, filename, document)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pitch_artifacts, "capture_pitch_source_status", capture_source)
+    monkeypatch.setattr(pitch_artifacts, "_capture_pitch_runtime_status", capture_runtime)
+    monkeypatch.setattr(pitch_artifacts, "build_pitch_coordinate_datasets", build_datasets)
+    monkeypatch.setattr(pitch_artifacts, "train_pitch_estimator", train)
+    monkeypatch.setattr(pitch_artifacts, "load_pitch_estimator_model", tracked_load)
+    monkeypatch.setattr(pitch_artifacts, "PitchPlannerActor", Actor)
+    monkeypatch.setattr(pitch_artifacts, "make_cached_sine_pitch_env", make_environment)
+    if not real_probe_factory:
+        monkeypatch.setattr(pitch_artifacts, "_pitch_probe_factory", probe_factory)
+    monkeypatch.setattr(pitch_artifacts, "evaluate_pitch_learned_actor", evaluate_learned)
+    monkeypatch.setattr(pitch_artifacts, "evaluate_pitch_baseline_suite", evaluate_baseline)
+    monkeypatch.setattr(PitchArtifactWriter, "publish_json", tracked_publish_json)
+    return {
+        "training_model": training_model,
+        "actor_models": actor_models,
+        "persisted_models": persisted_models,
+        "cache_ids": cache_ids,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("profile", "smoke"),
+        ("seed", True),
+        ("seed", 1.0),
+        ("seed", -1),
+        ("device", "cpu"),
+        ("output", "pitch"),
+    ],
+)
+def test_train_pitch_artifact_rejects_invalid_inputs_before_creating_output(
+    tmp_path: Path,
+    field: str,
+    invalid: object,
+) -> None:
+    output = tmp_path / "pitch"
+    arguments: dict[str, object] = {
+        "profile": ProfileName.SMOKE,
+        "seed": 0,
+        "device": DeviceName.CPU,
+        "output": output,
+    }
+    arguments[field] = invalid
+
+    with pytest.raises(ValueError):
+        pitch_artifacts.train_pitch_artifact(**arguments)  # type: ignore[arg-type]
+
+    assert not output.exists()
+
+
+def test_train_pitch_artifact_is_create_only_and_rejects_unavailable_cuda(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(FileExistsError):
+        pitch_artifacts.train_pitch_artifact(
+            profile=ProfileName.SMOKE,
+            seed=0,
+            device=DeviceName.CPU,
+            output=existing,
+        )
+
+    unavailable = SimpleNamespace(
+        torch=SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    )
+    monkeypatch.setattr(pitch_artifacts, "require_training_dependencies", lambda: unavailable)
+    output = tmp_path / "cuda"
+    with pytest.raises(ValueError, match=r"CUDA.*unavailable"):
+        pitch_artifacts.train_pitch_artifact(
+            profile=ProfileName.SMOKE,
+            seed=0,
+            device=DeviceName.CUDA,
+            output=output,
+        )
+    assert not output.exists()
+
+
+def test_train_pitch_artifact_publishes_strict_lifecycle_from_persisted_cpu_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "pitch"
+    events: list[str] = []
+    observed = _install_fast_pitch_artifact_workflow(monkeypatch, output, events)
+
+    artifact = pitch_artifacts.train_pitch_artifact(
+        profile=ProfileName.SMOKE,
+        seed=7,
+        device=DeviceName.CPU,
+        output=output,
+    )
+
+    assert isinstance(artifact, LoadedPitchArtifact)
+    assert artifact.manifest.status is ArtifactStatus.COMPLETE
+    assert artifact.manifest.evaluation_device is DeviceName.CPU
+    assert artifact.manifest.eligible_for_aggregate is False
+    assert {path.name for path in output.iterdir()} == {
+        "manifest.json",
+        *PITCH_REQUIRED_PAYLOAD_NAMES,
+    }
+    assert events[:6] == [
+        "source",
+        "runtime:cpu",
+        "build",
+        "train:cpu",
+        "publish:training-config.json",
+        "publish:training-summary.json",
+    ]
+    assert events.index("load:model.pt:cpu") < events.index("actor:cpu")
+    assert events.index("actor:cpu") < events.index("evaluate:base")
+    assert events.index("evaluate:base") < events.index(f"evaluate:{PITCH_ZERO_SPECTRUM_PROBE}")
+    assert events.index(f"evaluate:{PITCH_SHUFFLED_SPECTRUM_PROBE}") < events.index(
+        "baseline:random"
+    )
+    assert [event for event in events if event.startswith("baseline:")] == [
+        "baseline:random",
+        "baseline:reward_search",
+        "baseline:spectrum_peak",
+        "baseline:oracle",
+    ]
+    assert events.index("publish:evaluation-smoke.json") < events.index(
+        "publish:evaluation-smoke-probes.json"
+    )
+    actor_models = observed["actor_models"]
+    persisted_models = observed["persisted_models"]
+    assert isinstance(actor_models, list) and isinstance(persisted_models, list)
+    assert len(actor_models) == 1
+    assert actor_models[0] is persisted_models[0]
+    assert actor_models[0] is not observed["training_model"]
+    cache_ids = observed["cache_ids"]
+    assert isinstance(cache_ids, list) and len(set(cache_ids)) == 1
+
+
+def test_cuda_training_still_reloads_and_evaluates_on_cpu_and_is_ineligible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "pitch-cuda"
+    events: list[str] = []
+    observed = _install_fast_pitch_artifact_workflow(monkeypatch, output, events)
+    available = SimpleNamespace(
+        torch=SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: True),
+            device=torch.device,
+        )
+    )
+    monkeypatch.setattr(pitch_artifacts, "require_training_dependencies", lambda: available)
+
+    artifact = pitch_artifacts.train_pitch_artifact(
+        profile=ProfileName.CHECKPOINT,
+        seed=0,
+        device=DeviceName.CUDA,
+        output=output,
+    )
+
+    assert "train:cuda" in events
+    assert "load:model.pt:cpu" in events
+    assert "actor:cpu" in events
+    assert artifact.manifest.runtime.device is DeviceName.CUDA
+    assert artifact.manifest.evaluation_device is DeviceName.CPU
+    assert artifact.manifest.eligible_for_aggregate is False
+    assert artifact.manifest.criterion_status is CriterionStatus.INELIGIBLE
+    actor_models = observed["actor_models"]
+    persisted_models = observed["persisted_models"]
+    assert isinstance(actor_models, list) and isinstance(persisted_models, list)
+    assert actor_models == persisted_models[:1]
+
+
+def test_checkpoint_training_never_constructs_final_suites_or_direct_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "checkpoint"
+    events: list[str] = []
+    _install_fast_pitch_artifact_workflow(
+        monkeypatch,
+        output,
+        events,
+        real_probe_factory=True,
+    )
+    pitch_artifacts._pitch_shuffle_permutation.cache_clear()
+    pitch_data._fixed_pitch_evaluation_suite.cache_clear()
+    real_fixed = pitch_data.fixed_pitch_evaluation_suite
+    accessed: list[PitchEvaluationSuiteId] = []
+    constructed_suite_codes: list[int] = []
+    real_suite_episodes = pitch_data._suite_episodes
+
+    def record_suite_construction(
+        *, suite_code: int, source_pool: tuple[int, ...], per_target: int
+    ) -> tuple[PitchEpisodeSpec, ...]:
+        constructed_suite_codes.append(suite_code)
+        return real_suite_episodes(
+            suite_code=suite_code,
+            source_pool=source_pool,
+            per_target=per_target,
+        )
+
+    def smoke_only(suite_id: PitchEvaluationSuiteId) -> object:
+        accessed.append(suite_id)
+        if suite_id is not PitchEvaluationSuiteId.SMOKE:
+            raise AssertionError("training accessed a final evaluation suite")
+        return real_fixed(suite_id)
+
+    def forbidden_direct(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("training accessed final direct-coordinate evaluation")
+
+    monkeypatch.setattr(pitch_artifacts, "fixed_pitch_evaluation_suite", smoke_only)
+    monkeypatch.setattr(pitch_data, "fixed_pitch_evaluation_suite", smoke_only)
+    monkeypatch.setattr(pitch_data, "_suite_episodes", record_suite_construction)
+    monkeypatch.setattr(pitch_evaluation, "fixed_pitch_evaluation_suite", smoke_only)
+    monkeypatch.setattr(
+        pitch_evaluation,
+        "evaluate_final_pitch_coordinates",
+        forbidden_direct,
+    )
+
+    artifact = pitch_artifacts.train_pitch_artifact(
+        profile=ProfileName.CHECKPOINT,
+        seed=0,
+        device=DeviceName.CPU,
+        output=output,
+    )
+
+    assert artifact.manifest.profile is ProfileName.CHECKPOINT
+    assert set(accessed) == {PitchEvaluationSuiteId.SMOKE}
+    assert constructed_suite_codes == [401]
+    assert artifact.manifest.eligible_for_aggregate is True
+
+
+def test_artifact_smoke_shuffle_matches_the_pinned_v2_probe_without_suite_access() -> None:
+    pitch_artifacts._pitch_shuffle_permutation.cache_clear()
+
+    assert (
+        pitch_artifacts._pitch_shuffle_permutation()
+        == pitch_data.iid_shuffled_spectrum_permutation()
+    )
+
+
+@pytest.mark.parametrize(
+    ("fail_stage", "expected_payloads"),
+    [
+        ("train", set()),
+        ("evaluate", {"training-config.json", "training-summary.json", "model.pt"}),
+    ],
+)
+def test_train_pitch_artifact_failure_preserves_recoverable_incomplete_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_stage: str,
+    expected_payloads: set[str],
+) -> None:
+    output = tmp_path / fail_stage
+    events: list[str] = []
+    _install_fast_pitch_artifact_workflow(
+        monkeypatch,
+        output,
+        events,
+        fail_stage=fail_stage,
+    )
+
+    with pytest.raises(RuntimeError, match="injected pitch"):
+        pitch_artifacts.train_pitch_artifact(
+            profile=ProfileName.SMOKE,
+            seed=0,
+            device=DeviceName.CPU,
+            output=output,
+        )
+
+    manifest = PitchArtifactManifest.from_document(
+        decode_json_bytes((output / "manifest.json").read_bytes())
+    )
+    assert manifest.status is ArtifactStatus.INCOMPLETE
+    assert {path.name for path in output.iterdir()} == {"manifest.json", *expected_payloads}
+
+
+def test_train_pitch_artifact_returns_completion_immediately_as_last_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "pitch"
+    events: list[str] = []
+    _install_fast_pitch_artifact_workflow(monkeypatch, output, events)
+    sentinel = object()
+
+    def complete(
+        self: PitchArtifactWriter,
+        completion: PitchArtifactCompletion,
+    ) -> object:
+        assert completion.evaluation_device is DeviceName.CPU
+        assert set(self.file_records)  # type: ignore[arg-type]
+        events.append("complete")
+        return sentinel
+
+    monkeypatch.setattr(PitchArtifactWriter, "complete", complete)
+
+    result = pitch_artifacts.train_pitch_artifact(
+        profile=ProfileName.SMOKE,
+        seed=0,
+        device=DeviceName.CPU,
+        output=output,
+    )
+
+    assert result is sentinel
+    assert events[-1] == "complete"

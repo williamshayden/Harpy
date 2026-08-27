@@ -10,18 +10,24 @@ from __future__ import annotations
 import hashlib
 import operator
 import os
+import platform as platform_module
 import re
 import subprocess
 import weakref
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
+from functools import cache as memoize
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import gymnasium
+import numpy as np
+
+from harpy.envs.baselines import BaselineKind
 from harpy.envs.models import ObservationMode, PitchAction
 from harpy.learning.artifacts import (
     PITCH_ARTIFACT_SCHEMA_VERSION,
@@ -58,7 +64,11 @@ from harpy.learning.artifacts import (
     decode_json_bytes,
     read_json_document,
 )
+from harpy.learning.cache import SpectrumEvidenceCache
+from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.envs import make_cached_sine_pitch_env
 from harpy.learning.errors import PitchArtifactSetError
+from harpy.learning.evaluation import make_indexed_spectrum_probe_factory
 from harpy.learning.models import (
     ENVIRONMENT_CONTRACT_ID,
     ENVIRONMENT_ID,
@@ -74,14 +84,27 @@ from harpy.learning.pitch import (
     PitchDatasetMetrics,
     PitchEpochMetrics,
     PitchTrainingProfile,
+    PitchTrainingResult,
     PitchTrainingSummary,
+    build_pitch_coordinate_datasets,
     load_pitch_estimator_model,
+    save_pitch_estimator_model,
+    train_pitch_estimator,
 )
+from harpy.learning.pitch_actor import PitchPlannerActor
 from harpy.learning.pitch_data import (
     PITCH_DISTRIBUTION_ID,
     PITCH_SPLIT_DIGEST_SHA256,
     PitchEvaluationSuiteId,
     PitchTrainerKind,
+    fixed_pitch_evaluation_suite,
+)
+from harpy.learning.pitch_evaluation import (
+    PITCH_SHUFFLED_SPECTRUM_PROBE,
+    PITCH_ZERO_SPECTRUM_PROBE,
+    build_pitch_evaluation_row,
+    evaluate_pitch_baseline_suite,
+    evaluate_pitch_learned_actor,
 )
 from harpy.learning.pitch_network import (
     PITCH_ESTIMATOR_ARCHITECTURE_ID,
@@ -99,6 +122,19 @@ PITCH_REQUIRED_PAYLOAD_NAMES: Final = (
     "evaluation-smoke.json",
     "evaluation-smoke-probes.json",
 )
+_PITCH_CORE_PAYLOAD_NAMES: Final = (
+    "training-config.json",
+    "training-summary.json",
+    "model.pt",
+)
+_PITCH_SMOKE_BASELINE_ORDER: Final = (
+    BaselineKind.RANDOM,
+    BaselineKind.REWARD_SEARCH,
+    BaselineKind.SPECTRUM_PEAK,
+    BaselineKind.ORACLE,
+)
+_PITCH_SHUFFLE_SUITE_CODE: Final = 405
+_PITCH_SPECTRUM_BIN_COUNT: Final = 1_961
 PITCH_EVALUATION_SUITE_RECORDS: Final = (
     (
         PitchEvaluationSuiteId.SMOKE.value,
@@ -119,16 +155,24 @@ PITCH_EVALUATION_SUITE_RECORDS: Final = (
 )
 
 _PITCH_REQUIRED_SOURCE_INPUTS = (
+    "src/harpy/__init__.py",
+    "src/harpy/analysis.py",
+    "src/harpy/envs/__init__.py",
     "src/harpy/envs/baselines.py",
     "src/harpy/envs/models.py",
     "src/harpy/envs/planning.py",
     "src/harpy/envs/sine_pitch.py",
     "src/harpy/envs/spectrum.py",
+    "src/harpy/learning/__init__.py",
     "src/harpy/learning/action_masks.py",
     "src/harpy/learning/actors.py",
     "src/harpy/learning/artifacts.py",
     "src/harpy/learning/cache.py",
+    "src/harpy/learning/dependencies.py",
+    "src/harpy/learning/diagnostic_codecs.py",
+    "src/harpy/learning/diagnostics.py",
     "src/harpy/learning/envs.py",
+    "src/harpy/learning/errors.py",
     "src/harpy/learning/evaluation.py",
     "src/harpy/learning/models.py",
     "src/harpy/learning/observations.py",
@@ -139,6 +183,12 @@ _PITCH_REQUIRED_SOURCE_INPUTS = (
     "src/harpy/learning/pitch_artifacts.py",
     "src/harpy/learning/pitch_evaluation.py",
     "src/harpy/learning/suites.py",
+    "src/harpy/synth/__init__.py",
+    "src/harpy/synth/curves.py",
+    "src/harpy/synth/engine.py",
+    "src/harpy/synth/envelope.py",
+    "src/harpy/synth/models.py",
+    "src/harpy/tuning.py",
     "uv.lock",
 )
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -1955,6 +2005,300 @@ def capture_pitch_source_status(start: Path) -> SourceStatus:
     )
 
 
+def _validate_pitch_artifact_training_inputs(
+    profile: object,
+    seed: object,
+    device: object,
+    output: object,
+) -> tuple[int, object]:
+    """Validate the complete create-only boundary before publishing any state."""
+
+    if not isinstance(profile, ProfileName):
+        raise ValueError("profile must be a ProfileName")
+    normalized_seed = _integer(seed, "seed")
+    if not isinstance(device, DeviceName):
+        raise ValueError("device must be a DeviceName")
+    if not isinstance(output, Path):
+        raise ValueError("output must be a pathlib.Path")
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(output)
+    training_stack = require_training_dependencies()
+    if device is DeviceName.CUDA and not training_stack.torch.cuda.is_available():
+        raise ValueError("CUDA training requested but CUDA is unavailable")
+    return normalized_seed, training_stack
+
+
+def _capture_pitch_runtime_status(device: DeviceName) -> RuntimeStatus:
+    """Capture the optional training stack and selected device before publication."""
+
+    training_stack = require_training_dependencies()
+    torch = training_stack.torch
+    if device is DeviceName.CPU:
+        device_description = platform_module.processor() or "CPU"
+        cuda_runtime_version = None
+    else:
+        device_description = torch.cuda.get_device_name(torch.cuda.current_device())
+        cuda_runtime_version = torch.version.cuda
+    return RuntimeStatus(
+        python_version=platform_module.python_version(),
+        platform=platform_module.platform(),
+        processor=platform_module.processor(),
+        numpy_version=np.__version__,
+        gymnasium_version=gymnasium.__version__,
+        torch_version=training_stack.torch_version,
+        stable_baselines3_version=training_stack.stable_baselines3_version,
+        device=device,
+        device_description=device_description,
+        cuda_runtime_version=cuda_runtime_version,
+        cuda_driver_version=None,
+    )
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+@memoize
+def _pitch_shuffle_permutation() -> tuple[int, ...]:
+    """Derive the v2 probe permutation without constructing a final episode suite."""
+
+    iid_digest = bytes.fromhex(
+        next(
+            digest
+            for suite_id, digest in PITCH_EVALUATION_SUITE_RECORDS
+            if suite_id == PitchEvaluationSuiteId.IID.value
+        )
+    )
+    digest_words = tuple(
+        int.from_bytes(iid_digest[index : index + 4], "big")
+        for index in range(0, len(iid_digest), 4)
+    )
+    permutation = np.random.default_rng(
+        np.random.SeedSequence([1, _PITCH_SHUFFLE_SUITE_CODE, *digest_words])
+    ).permutation(_PITCH_SPECTRUM_BIN_COUNT)
+    return tuple(int(index) for index in permutation)
+
+
+def _pitch_probe_factory(environment_factory: object, probe: str) -> object:
+    """Build an exact v2 probe without reading IID/OOD episode membership."""
+
+    if not callable(environment_factory):
+        raise ValueError("environment_factory must be callable")
+    return make_indexed_spectrum_probe_factory(
+        environment_factory,
+        probe,
+        shuffle_permutation=_pitch_shuffle_permutation(),
+    )
+
+
+def _pitch_smoke_documents(
+    *,
+    actor: object,
+    cache: SpectrumEvidenceCache,
+    manifest: PitchArtifactManifest,
+    summary: PitchTrainingSummary,
+) -> tuple[PitchSmokeEvaluationDocument, PitchSmokeEvaluationDocument]:
+    """Run only the exact smoke base, two probes, and four frozen baselines."""
+
+    suite = fixed_pitch_evaluation_suite(PitchEvaluationSuiteId.SMOKE)
+
+    def environment_factory() -> object:
+        return make_cached_sine_pitch_env(cache)
+
+    common = {
+        "actor_id": f"pitch-{manifest.seed}",
+        "trainer": PitchTrainerKind.PITCH,
+        "seed": manifest.seed,
+        "environment_id": manifest.environment_id,
+        "observation_mode": ObservationMode.SPECTRUM,
+        "suite": suite,
+        "parameter_count": manifest.parameter_count,
+        "training_examples": summary.training_examples,
+        "training_wall_time_seconds": summary.training_wall_time_seconds,
+    }
+    learned = build_pitch_evaluation_row(
+        records=evaluate_pitch_learned_actor(
+            actor,  # type: ignore[arg-type]
+            suite,
+            environment_factory=environment_factory,  # type: ignore[arg-type]
+        ),
+        **common,  # type: ignore[arg-type]
+    )
+    probes = tuple(
+        build_pitch_evaluation_row(
+            records=evaluate_pitch_learned_actor(
+                actor,  # type: ignore[arg-type]
+                suite,
+                environment_factory=_pitch_probe_factory(
+                    environment_factory,
+                    probe,
+                ),  # type: ignore[arg-type]
+            ),
+            probe=probe,
+            **common,  # type: ignore[arg-type]
+        )
+        for probe in (PITCH_ZERO_SPECTRUM_PROBE, PITCH_SHUFFLED_SPECTRUM_PROBE)
+    )
+    baselines = tuple(
+        build_pitch_evaluation_row(
+            actor_id=kind.value,
+            trainer=None,
+            seed=None,
+            environment_id=kind.environment_id,
+            observation_mode=kind.observation_mode,
+            suite=suite,
+            records=evaluate_pitch_baseline_suite(kind, suite, cache=cache),
+        )
+        for kind in _PITCH_SMOKE_BASELINE_ORDER
+    )
+    return (
+        PitchSmokeEvaluationDocument(
+            schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+            payload_kind=PitchSmokePayloadKind.BASE,
+            suite_id=suite.suite_id,
+            suite_digest_sha256=suite.digest_sha256,
+            rows=(learned, *baselines),
+        ),
+        PitchSmokeEvaluationDocument(
+            schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+            payload_kind=PitchSmokePayloadKind.PROBES,
+            suite_id=suite.suite_id,
+            suite_digest_sha256=suite.digest_sha256,
+            rows=probes,
+        ),
+    )
+
+
+def train_pitch_artifact(
+    *,
+    profile: ProfileName,
+    seed: int,
+    device: DeviceName,
+    output: Path,
+) -> LoadedPitchArtifact:
+    """Train, persist, CPU-reload, smoke-evaluate, and close one pitch artifact."""
+
+    normalized_seed, training_stack = _validate_pitch_artifact_training_inputs(
+        profile,
+        seed,
+        device,
+        output,
+    )
+    source = capture_pitch_source_status(Path(__file__))
+    runtime = _capture_pitch_runtime_status(device)
+    configured = PITCH_PROFILE_CONFIGS[profile]
+    bootstrap = PitchArtifactManifest(
+        schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+        status=ArtifactStatus.INCOMPLETE,
+        trainer=PitchTrainerKind.PITCH,
+        profile=profile,
+        seed=normalized_seed,
+        created_at_utc=_utc_now(),
+        completed_at_utc=None,
+        source=source,
+        runtime=runtime,
+        environment_id=ENVIRONMENT_ID,
+        environment_contract_id=ENVIRONMENT_CONTRACT_ID,
+        train_distribution_id=PITCH_DISTRIBUTION_ID,
+        coordinate_split_digest_sha256=PITCH_SPLIT_DIGEST_SHA256,
+        evaluation_suites=PITCH_EVALUATION_SUITE_RECORDS,
+        spectrum_grid_id=SPECTRUM_GRID_ID,
+        preprocessing_schema_id=PITCH_PREPROCESSING_SCHEMA_ID,
+        architecture_schema_id=PITCH_ESTIMATOR_ARCHITECTURE_ID,
+        policy_semantics_id=PITCH_POLICY_SEMANTICS_ID,
+        parameter_count=PITCH_ESTIMATOR_PARAMETER_COUNT,
+        selected_epoch=None,
+        training_counts=PitchTrainingCounts(
+            configured_training_coordinates=configured.training_coordinate_count,
+            configured_validation_coordinates=configured.validation_coordinate_count,
+            training_examples=None,
+            validation_examples=None,
+        ),
+        evaluation_device=None,
+        eligible_for_aggregate=False,
+        criterion_status=CriterionStatus.INELIGIBLE,
+        criterion_met=None,
+        compatibility_sha256=pitch_compatibility_sha256(profile),
+        files=(),
+    )
+    writer = PitchArtifactWriter.begin(output, bootstrap)
+    cache = SpectrumEvidenceCache()
+    training_dataset, validation_dataset = build_pitch_coordinate_datasets(
+        profile,
+        cache=cache,
+    )
+    training_device = training_stack.torch.device(device.value)  # type: ignore[union-attr]
+    result = train_pitch_estimator(
+        training_dataset,
+        validation_dataset,
+        profile=configured,
+        seed=normalized_seed,
+        device=training_device,
+    )
+    if not isinstance(result, PitchTrainingResult):
+        raise ValueError("pitch trainer must return a PitchTrainingResult")
+    config_document = PitchTrainingConfigDocument(
+        schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+        trainer=PitchTrainerKind.PITCH,
+        profile=profile,
+        seed=normalized_seed,
+        device=device,
+        environment_id=ENVIRONMENT_ID,
+        environment_contract_id=ENVIRONMENT_CONTRACT_ID,
+        train_distribution_id=PITCH_DISTRIBUTION_ID,
+        coordinate_split_digest_sha256=PITCH_SPLIT_DIGEST_SHA256,
+        evaluation_suites=PITCH_EVALUATION_SUITE_RECORDS,
+        spectrum_grid_id=SPECTRUM_GRID_ID,
+        preprocessing_schema_id=PITCH_PREPROCESSING_SCHEMA_ID,
+        architecture_schema_id=PITCH_ESTIMATOR_ARCHITECTURE_ID,
+        policy_semantics_id=PITCH_POLICY_SEMANTICS_ID,
+        parameter_count=PITCH_ESTIMATOR_PARAMETER_COUNT,
+        profile_config=configured,
+        compatibility_sha256=pitch_compatibility_sha256(profile),
+    )
+    summary_document = PitchTrainingSummaryDocument(
+        schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+        trainer=PitchTrainerKind.PITCH,
+        profile=profile,
+        seed=normalized_seed,
+        summary=result.summary,
+    )
+    writer.publish_json("training-config.json", config_document.to_document())
+    writer.publish_json("training-summary.json", summary_document.to_document())
+    writer.publish_model(lambda path: save_pitch_estimator_model(path, result.model))
+
+    core = writer.pending_view(_PITCH_CORE_PAYLOAD_NAMES)
+    read_pitch_training_config(core)
+    persisted_summary = read_pitch_training_summary(core)
+    cpu_device = training_stack.torch.device("cpu")  # type: ignore[union-attr]
+    persisted_model = load_pitch_estimator_model(core.file("model.pt"), device=cpu_device)
+    actor = PitchPlannerActor(persisted_model, device=cpu_device)
+    base, probes = _pitch_smoke_documents(
+        actor=actor,
+        cache=cache,
+        manifest=bootstrap,
+        summary=persisted_summary.summary,
+    )
+    writer.publish_json("evaluation-smoke.json", base.to_document())
+    writer.publish_json("evaluation-smoke-probes.json", probes.to_document())
+
+    full = writer.pending_view(PITCH_REQUIRED_PAYLOAD_NAMES)
+    strict_summary = read_pitch_training_summary(full)
+    strict_base, strict_probes = _semantic_evaluation_payloads(full, strict_summary)
+    validate_pitch_smoke_evaluation_pair(strict_base, strict_probes)
+    completion = PitchArtifactCompletion(
+        completed_at_utc=_utc_now(),
+        training_counts=PitchTrainingCounts(
+            configured_training_coordinates=configured.training_coordinate_count,
+            configured_validation_coordinates=configured.validation_coordinate_count,
+            training_examples=result.summary.training_examples,
+            validation_examples=result.summary.validation_examples,
+        ),
+        evaluation_device=DeviceName.CPU,
+    )
+    return writer.complete(completion)
+
+
 __all__ = [
     "PITCH_ACTION_SCHEMA_ID",
     "PITCH_ARTIFACT_SCHEMA_REGISTRIES",
@@ -1981,5 +2325,6 @@ __all__ = [
     "preflight_pitch_artifacts",
     "read_pitch_training_config",
     "read_pitch_training_summary",
+    "train_pitch_artifact",
     "validate_pitch_smoke_evaluation_pair",
 ]
