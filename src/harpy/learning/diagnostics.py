@@ -32,6 +32,22 @@ from harpy.envs.planning import minimum_action_plan
 DIAGNOSTIC_REPORT_SCHEMA_ID = "harpy-sine-diagnostic-report-v1"
 DIAGNOSTIC_BUNDLE_SCHEMA_ID = "harpy-sine-diagnostic-bundle-v1"
 
+# These identities form the dependency-light diagnostic registry.  Keep the
+# schema-v2 value here instead of importing ``pitch_artifacts``: that module owns
+# Torch model persistence and must remain lazy for report decoding.
+_BC_ACTOR_SEMANTICS_ID = "harpy-sine-policy-bc-v1"
+_MASKED_BC_ACTOR_SEMANTICS_ID = "harpy-sine-policy-bc-public-bound-mask-v1"
+_PPO_ACTOR_SEMANTICS_ID = "harpy-sine-policy-ppo-v1"
+_PITCH_ACTOR_SEMANTICS_ID = "harpy-sine-pitch-estimator-planner-v1"
+_LEGACY_ACTOR_SEMANTICS_IDS = frozenset(
+    {
+        _BC_ACTOR_SEMANTICS_ID,
+        _MASKED_BC_ACTOR_SEMANTICS_ID,
+        _PPO_ACTOR_SEMANTICS_ID,
+    }
+)
+_KNOWN_ACTOR_SEMANTICS_IDS = _LEGACY_ACTOR_SEMANTICS_IDS | {_PITCH_ACTOR_SEMANTICS_ID}
+
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _ESTIMATE_MIN_CENTS = 1_100
 _ESTIMATE_MAX_CENTS = 10_900
@@ -495,9 +511,97 @@ class SubmitErrorBand:
         object.__setattr__(self, "count", _integer(self.count, "count", minimum=0))
 
 
+def _registered_suite_contract(
+    suite_id: str,
+) -> tuple[bool, str, tuple[tuple[int, int, int], ...]] | None:
+    """Resolve one workflow suite without importing optional training dependencies."""
+
+    from harpy.learning.models import EvaluationSuiteId
+
+    try:
+        legacy_suite_id = EvaluationSuiteId(suite_id)
+    except ValueError:
+        legacy_suite_id = None
+    if legacy_suite_id is not None:
+        from harpy.learning.suites import fixed_evaluation_suite
+
+        suite = fixed_evaluation_suite(legacy_suite_id)
+        return (
+            False,
+            suite.digest_sha256,
+            tuple(
+                (episode_index, episode.target_note_index, episode.source_pitch_cents)
+                for episode_index, episode in enumerate(suite.episodes)
+            ),
+        )
+
+    from harpy.learning.pitch_data import (
+        PitchEvaluationSuiteId,
+        fixed_pitch_evaluation_suite,
+    )
+
+    try:
+        pitch_suite_id = PitchEvaluationSuiteId(suite_id)
+    except ValueError:
+        return None
+    suite = fixed_pitch_evaluation_suite(pitch_suite_id)
+    return (
+        True,
+        suite.digest_sha256,
+        tuple(
+            (episode_index, episode.target_note_index, episode.source_pitch_cents)
+            for episode_index, episode in enumerate(suite.episodes)
+        ),
+    )
+
+
+def _validate_report_identity(
+    *,
+    actor_semantics: str,
+    bound_mask: bool,
+    suite_id: str,
+    suite_digest_sha256: str,
+    episodes: tuple[EpisodeDiagnostic, ...],
+) -> None:
+    if actor_semantics not in _KNOWN_ACTOR_SEMANTICS_IDS:
+        raise ValueError("actor_semantics must be a registered diagnostic actor identity")
+    expected_bound_mask = actor_semantics == _MASKED_BC_ACTOR_SEMANTICS_ID
+    if bound_mask is not expected_bound_mask:
+        raise ValueError("bound_mask must be true exactly for masked-BC actor semantics")
+
+    is_pitch_actor = actor_semantics == _PITCH_ACTOR_SEMANTICS_ID
+    estimates = tuple(decision.estimate for episode in episodes for decision in episode.decisions)
+    if is_pitch_actor and any(estimate is None for estimate in estimates):
+        raise ValueError("pitch actor diagnostics require an estimate on every decision")
+    if not is_pitch_actor and any(estimate is not None for estimate in estimates):
+        raise ValueError("legacy actor diagnostics require null estimates on every decision")
+
+    contract = _registered_suite_contract(suite_id)
+    if contract is None:
+        return
+    is_pitch_suite, expected_digest, expected_membership = contract
+    if suite_digest_sha256 != expected_digest:
+        raise ValueError("suite_digest_sha256 must match the pinned registered suite")
+    if is_pitch_suite != is_pitch_actor:
+        expected_lane = "pitch" if is_pitch_suite else "legacy BC/PPO"
+        raise ValueError(f"registered suite requires {expected_lane} actor semantics")
+    membership = tuple(
+        (episode.episode_index, episode.target_note_index, episode.source_pitch_cents)
+        for episode in episodes
+    )
+    if membership != expected_membership:
+        raise ValueError("episodes must match the exact pinned ordered suite membership")
+
+
 @dataclass(frozen=True, slots=True)
 class DiagnosticReport:
-    """One strict report for one artifact seed and one fixed suite."""
+    """One strict report for one artifact seed and one fixed suite.
+
+    The seven workflow-exposed suite identities are closed over their pinned digest
+    and ordered membership.  Unregistered suite identities remain available only to
+    low-level diagnostic-algorithm fixtures; they still obey the closed actor,
+    estimator, and mask semantics below.
+    """
 
     schema_id: str
     seed: int
@@ -527,6 +631,13 @@ class DiagnosticReport:
         episodes = _typed_tuple(self.episodes, EpisodeDiagnostic, "episodes", nonempty=True)
         if tuple(episode.episode_index for episode in episodes) != tuple(range(len(episodes))):
             raise ValueError("episodes must use consecutive zero-based indices")
+        _validate_report_identity(
+            actor_semantics=actor_semantics,
+            bound_mask=bound_mask,
+            suite_id=suite_id,
+            suite_digest_sha256=suite_digest,
+            episodes=episodes,
+        )
         expected = _derive_report_fields(episodes)
         actual_matrix = _confusion_matrix(self.confusion_matrix)
         metrics = _typed_tuple(self.per_action_metrics, PerActionMetrics, "per_action_metrics")

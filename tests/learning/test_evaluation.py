@@ -15,6 +15,8 @@ from harpy.envs.baselines import BaselineKind
 from harpy.envs.models import EpisodeResult, ObservationMode, PitchAction, TerminalReason
 from harpy.envs.sine_pitch import SinePitchEnv, _CandidateEvidence
 from harpy.learning.cache import SpectrumEvidenceCache
+from harpy.learning.diagnostics import DiagnosticDecisionInput
+from harpy.learning.errors import LearningExecutionError
 from harpy.learning.evaluation import (
     SHUFFLED_SPECTRUM_PROBE,
     ZERO_SPECTRUM_PROBE,
@@ -506,3 +508,77 @@ def test_shuffled_spectrum_uses_pinned_permutation_across_actor_evaluation_order
             assert len(actor_spectra) == len(suite.episodes)
             for observed, pinned in zip(actor_spectra, expected, strict=True):
                 np.testing.assert_array_equal(observed, pinned)
+
+
+def test_diagnostic_runner_calls_one_decision_adapter_per_step_and_retains_estimate() -> None:
+    suite = _suite(EpisodeSpec(target_note_index=12, source_pitch_cents=6_000))
+    environments: list[FastSinePitchEnv] = []
+    observations: list[Mapping[str, object]] = []
+
+    def environment_factory() -> FastSinePitchEnv:
+        env = FastSinePitchEnv()
+        environments.append(env)
+        return env
+
+    def decide(observation: Mapping[str, object]) -> DiagnosticDecisionInput:
+        observations.append(observation)
+        return DiagnosticDecisionInput(PitchAction.SUBMIT, 6_000)
+
+    episodes = evaluation.diagnose_actor_suite(
+        decide=decide,
+        suite=suite,
+        environment_factory=environment_factory,
+    )
+
+    assert len(observations) == 1
+    assert tuple(sorted(observations[0])) == (
+        "controls",
+        "spectrum",
+        "steps_remaining",
+        "target_note",
+    )
+    assert episodes[0].decisions[0].estimate is not None
+    assert episodes[0].decisions[0].estimate.estimated_candidate_cents == 6_000
+    assert environments[0].closed is True
+
+
+def test_diagnostic_runner_rejects_hidden_keys_before_decision_adapter() -> None:
+    class HiddenKeyEnv(FastSinePitchEnv):
+        def reset(self, **kwargs: Any):
+            observation, info = super().reset(**kwargs)
+            return {**observation, "source_pitch_cents": 6_000}, info
+
+    env = HiddenKeyEnv()
+    suite = _suite(EpisodeSpec(target_note_index=12, source_pitch_cents=6_000))
+
+    with pytest.raises(LearningExecutionError, match="exactly"):
+        evaluation.diagnose_actor_suite(
+            decide=lambda observation: pytest.fail(
+                f"hidden observation reached decision adapter: {observation}"
+            ),
+            suite=suite,
+            environment_factory=lambda: env,
+        )
+
+    assert env.closed is True
+
+
+def test_diagnostic_runner_rejects_terminal_truth_for_a_shifted_suite_episode() -> None:
+    class ShiftedEpisodeEnv(FastSinePitchEnv):
+        def reset(self, **kwargs: Any):
+            options = dict(kwargs["options"])
+            options["target_note_index"] += 1
+            options["source_pitch_cents"] += 100
+            return super().reset(options=options)
+
+    env = ShiftedEpisodeEnv()
+    suite = _suite(EpisodeSpec(target_note_index=12, source_pitch_cents=6_000))
+
+    with pytest.raises(LearningExecutionError, match="terminal EpisodeResult"):
+        evaluation.diagnose_actor_suite(
+            decide=lambda observation: DiagnosticDecisionInput(PitchAction.SUBMIT),
+            suite=suite,
+            environment_factory=lambda: env,
+        )
+
+    assert env.closed is True

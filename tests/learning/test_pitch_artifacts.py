@@ -36,7 +36,7 @@ from harpy.learning.artifacts import (
     decode_json_bytes,
     load_artifact,
 )
-from harpy.learning.errors import LearningContractError
+from harpy.learning.errors import LearningContractError, PitchArtifactSetError
 from harpy.learning.evaluation import TerminalEpisodeRecord
 from harpy.learning.models import (
     ENVIRONMENT_CONTRACT_ID,
@@ -934,7 +934,7 @@ def test_exact_three_preflight_rejects_every_identity_failure(
     monkeypatch.setattr(pitch_artifacts, "load_pitch_estimator_model", forbidden)
     monkeypatch.setattr(pitch_evaluation, "fixed_pitch_evaluation_suite", forbidden)
     monkeypatch.setattr(learning_cache, "SpectrumEvidenceCache", forbidden)
-    with pytest.raises(ValueError):
+    with pytest.raises(PitchArtifactSetError):
         preflight_pitch_artifacts(tuple(item.root for item in artifacts))
 
 
@@ -942,7 +942,7 @@ def test_aggregate_compatibility_identity_gate_rejects_a_mixed_set() -> None:
     shared = ("1" * 40, _DIGEST_A, True, _DIGEST_A)
     incompatible = ("1" * 40, _DIGEST_A, True, _DIGEST_B)
 
-    with pytest.raises(ValueError, match="share source, lock, and compatibility"):
+    with pytest.raises(PitchArtifactSetError, match="share source, lock, and compatibility"):
         pitch_artifacts._validate_pitch_aggregate_identities((shared, shared, incompatible))
 
 
@@ -1077,7 +1077,7 @@ def test_preflight_rejects_bad_seeds_before_suite_or_model_construction(
 
     monkeypatch.setattr(pitch_artifacts, "load_pitch_estimator_model", forbidden)
     monkeypatch.setattr(pitch_evaluation, "fixed_pitch_evaluation_suite", forbidden)
-    with pytest.raises(ValueError, match="seeds"):
+    with pytest.raises(PitchArtifactSetError, match="seeds"):
         preflight_pitch_artifacts(tuple(item.root for item in artifacts))
 
 

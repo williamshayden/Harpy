@@ -276,6 +276,10 @@ def _install_fast_workflow(
         events.append(f"load:{path.name}")
         return artifacts[path.resolve()]
 
+    def peek(path: Path):
+        manifest = artifacts[path.resolve()].manifest
+        return 1, manifest.profile, manifest.trainer.value
+
     def validate(artifact: object) -> None:
         events.append(f"validate:{artifact.root.name}")
 
@@ -304,6 +308,7 @@ def _install_fast_workflow(
         )
 
     monkeypatch.setattr(workflows, "load_artifact", load)
+    monkeypatch.setattr(workflows, "_peek_artifact_identity", peek)
     monkeypatch.setattr(workflows, "_validate_artifact_payload", validate)
     monkeypatch.setattr(workflows, "_load_artifact_actor", load_actor)
     monkeypatch.setattr(workflows, "_evaluate_learned_rows", learned_rows)
@@ -685,6 +690,15 @@ def test_evaluate_rejects_duplicate_identity_and_compatibility_before_actors(
         second_root.resolve(): _artifact(second_root, second_manifest),
     }
     monkeypatch.setattr(workflows, "load_artifact", lambda path: artifacts[path.resolve()])
+    monkeypatch.setattr(
+        workflows,
+        "_peek_artifact_identity",
+        lambda path: (
+            1,
+            artifacts[path.resolve()].manifest.profile,
+            artifacts[path.resolve()].manifest.trainer.value,
+        ),
+    )
     monkeypatch.setattr(
         workflows,
         "_load_artifact_actor",

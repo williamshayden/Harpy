@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import gymnasium
+import numpy as np
 
 import harpy.envs  # noqa: F401  # Register the frozen public environments.
 from harpy.envs.models import (
@@ -24,6 +25,7 @@ from harpy.learning.actors import Actor
 from harpy.learning.artifacts import canonical_json_bytes
 from harpy.learning.errors import LearningExecutionError
 from harpy.learning.models import ENVIRONMENT_ID
+from harpy.learning.observations import preprocess_observation
 from harpy.tuning import Tuning
 
 FULL_RANGE_DEMONSTRATION_DISTRIBUTION_ID = "harpy-sine-pitch-full-range-demo-v1"
@@ -175,10 +177,9 @@ def trace_episode(actor: Actor, *, seed: int) -> EpisodeTrace:
     steps: list[TraceStep] = []
     try:
         observation, _ = env.reset(seed=normalized_seed)
-        if not isinstance(observation, Mapping):
-            raise LearningExecutionError("environment observation must be a mapping")
         while True:
-            action = actor.act(observation)
+            actor_observation = _validated_actor_observation(observation)
+            action = actor.act(actor_observation)
             if not isinstance(action, PitchAction):
                 raise LearningExecutionError("actor must return a PitchAction")
             observation, reward, terminated, truncated, _ = env.step(action)
@@ -200,9 +201,6 @@ def trace_episode(actor: Actor, *, seed: int) -> EpisodeTrace:
                         "environment produced no valid EpisodeResult after done"
                     )
                 break
-            if not isinstance(observation, Mapping):
-                raise LearningExecutionError("environment observation must be a mapping")
-
         actions = tuple(step.action for step in steps)
         if result.actions != actions:
             raise LearningExecutionError("terminal EpisodeResult actions do not match the trace")
@@ -233,6 +231,30 @@ def trace_episode(actor: Actor, *, seed: int) -> EpisodeTrace:
         )
     finally:
         env.close()
+
+
+def _validated_actor_observation(observation: object) -> dict[str, object]:
+    """Validate and own-copy one exact raw observation before actor access."""
+
+    if not isinstance(observation, Mapping):
+        raise LearningExecutionError("environment observation must be a mapping")
+    raw_keys = ("spectrum", "target_note", "controls", "steps_remaining")
+    if set(observation) != set(raw_keys):
+        raise LearningExecutionError(
+            "environment observation must contain exactly spectrum, target_note, controls, "
+            "and steps_remaining"
+        )
+    snapshot: dict[str, object] = {}
+    for key in raw_keys:
+        value = observation[key]
+        snapshot[key] = (
+            np.array(value, copy=True, order="C") if isinstance(value, np.ndarray) else value
+        )
+    try:
+        preprocess_observation(snapshot)
+    except Exception as error:
+        raise LearningExecutionError(f"invalid environment observation: {error}") from error
+    return snapshot
 
 
 def format_human_trace(episode: EpisodeTrace) -> str:

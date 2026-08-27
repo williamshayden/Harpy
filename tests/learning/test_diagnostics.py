@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 
 import pytest
 
 from harpy.envs.models import PitchAction, TerminalReason
+from harpy.learning import diagnostics as diagnostics_module
+from harpy.learning.actors import (
+    BC_ACTOR_SEMANTICS_ID,
+    MASKED_BC_ACTOR_SEMANTICS_ID,
+    PPO_ACTOR_SEMANTICS_ID,
+)
 from harpy.learning.diagnostics import (
     DiagnosticDecisionInput,
     build_diagnostic_report,
@@ -12,6 +20,31 @@ from harpy.learning.diagnostics import (
 )
 
 _DIGEST_A = "a" * 64
+
+
+def test_diagnostic_registry_matches_actor_artifact_ids_and_imports_lazily() -> None:
+    from harpy.learning.pitch_artifacts import PITCH_POLICY_SEMANTICS_ID
+
+    assert diagnostics_module._BC_ACTOR_SEMANTICS_ID == BC_ACTOR_SEMANTICS_ID
+    assert diagnostics_module._MASKED_BC_ACTOR_SEMANTICS_ID == MASKED_BC_ACTOR_SEMANTICS_ID
+    assert diagnostics_module._PPO_ACTOR_SEMANTICS_ID == PPO_ACTOR_SEMANTICS_ID
+    assert diagnostics_module._PITCH_ACTOR_SEMANTICS_ID == PITCH_POLICY_SEMANTICS_ID
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import harpy.learning.diagnostics; "
+                "assert 'torch' not in sys.modules; "
+                "assert 'stable_baselines3' not in sys.modules"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _decision(
@@ -23,7 +56,7 @@ def _decision(
     )
 
 
-def _commuting_episode():
+def _commuting_episode(*, with_estimates: bool = True):
     # True error is -1,300 cents. The canonical planner starts with Octave Up,
     # but Semitone Up commutes and remains on a shortest successful path.
     return diagnose_episode(
@@ -31,9 +64,9 @@ def _commuting_episode():
         source_pitch_cents=4_900,
         target_note_index=14,
         decisions=(
-            _decision(PitchAction.SEMITONE_UP, 4_895),
-            _decision(PitchAction.OCTAVE_UP, 4_995),
-            _decision(PitchAction.SUBMIT, 6_195),
+            _decision(PitchAction.SEMITONE_UP, 4_895 if with_estimates else None),
+            _decision(PitchAction.OCTAVE_UP, 4_995 if with_estimates else None),
+            _decision(PitchAction.SUBMIT, 6_195 if with_estimates else None),
         ),
     )
 
@@ -187,7 +220,7 @@ def test_submit_error_bands_cover_all_fixed_boundaries() -> None:
     report = build_diagnostic_report(
         seed=0,
         artifact_manifest_sha256=_DIGEST_A,
-        actor_semantics="legacy-v1",
+        actor_semantics=BC_ACTOR_SEMANTICS_ID,
         bound_mask=False,
         suite_id="bands-v1",
         suite_digest_sha256=_DIGEST_A,
@@ -207,11 +240,11 @@ def test_report_pins_confusion_metrics_shortest_accuracy_and_survival() -> None:
     report = build_diagnostic_report(
         seed=0,
         artifact_manifest_sha256=_DIGEST_A,
-        actor_semantics="pitch-planner-v1",
+        actor_semantics=BC_ACTOR_SEMANTICS_ID,
         bound_mask=False,
         suite_id="crafted-v1",
         suite_digest_sha256=_DIGEST_A,
-        episodes=(_commuting_episode(), _looping_episode()),
+        episodes=(_commuting_episode(with_estimates=False), _looping_episode()),
     )
 
     matrix = report.confusion_matrix
@@ -257,6 +290,78 @@ def test_report_pins_confusion_metrics_shortest_accuracy_and_survival() -> None:
         ("100+", 1),
     )
     assert all(math.isfinite(entry.rate) for entry in report.survival_curve)
+
+
+def test_report_rejects_unknown_actor_semantics_and_mismatched_bound_mask() -> None:
+    episode = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=4_800,
+        target_note_index=0,
+        decisions=(_decision(PitchAction.SUBMIT),),
+    )
+    with pytest.raises(ValueError, match="actor_semantics"):
+        build_diagnostic_report(
+            seed=0,
+            artifact_manifest_sha256=_DIGEST_A,
+            actor_semantics="invented-policy-v1",
+            bound_mask=False,
+            suite_id="crafted-v1",
+            suite_digest_sha256=_DIGEST_A,
+            episodes=(episode,),
+        )
+
+    for semantics, bound_mask in (
+        (BC_ACTOR_SEMANTICS_ID, True),
+        (PPO_ACTOR_SEMANTICS_ID, True),
+        (MASKED_BC_ACTOR_SEMANTICS_ID, False),
+    ):
+        with pytest.raises(ValueError, match="bound_mask"):
+            build_diagnostic_report(
+                seed=0,
+                artifact_manifest_sha256=_DIGEST_A,
+                actor_semantics=semantics,
+                bound_mask=bound_mask,
+                suite_id="crafted-v1",
+                suite_digest_sha256=_DIGEST_A,
+                episodes=(episode,),
+            )
+
+
+def test_report_rejects_estimates_that_do_not_match_actor_lane() -> None:
+    estimated_episode = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=4_800,
+        target_note_index=0,
+        decisions=(_decision(PitchAction.SUBMIT, 4_800),),
+    )
+    with pytest.raises(ValueError, match=r"legacy.*null estimates"):
+        build_diagnostic_report(
+            seed=0,
+            artifact_manifest_sha256=_DIGEST_A,
+            actor_semantics=BC_ACTOR_SEMANTICS_ID,
+            bound_mask=False,
+            suite_id="crafted-v1",
+            suite_digest_sha256=_DIGEST_A,
+            episodes=(estimated_episode,),
+        )
+
+    with pytest.raises(ValueError, match=r"pitch.*estimate"):
+        build_diagnostic_report(
+            seed=0,
+            artifact_manifest_sha256=_DIGEST_A,
+            actor_semantics="harpy-sine-pitch-estimator-planner-v1",
+            bound_mask=False,
+            suite_id="crafted-v1",
+            suite_digest_sha256=_DIGEST_A,
+            episodes=(
+                diagnose_episode(
+                    episode_index=0,
+                    source_pitch_cents=4_800,
+                    target_note_index=0,
+                    decisions=(_decision(PitchAction.SUBMIT),),
+                ),
+            ),
+        )
 
 
 @pytest.mark.parametrize(

@@ -58,6 +58,7 @@ from harpy.learning.artifacts import (
     decode_json_bytes,
     read_json_document,
 )
+from harpy.learning.errors import PitchArtifactSetError
 from harpy.learning.models import (
     ENVIRONMENT_CONTRACT_ID,
     ENVIRONMENT_ID,
@@ -1838,7 +1839,9 @@ def _validate_pitch_aggregate_identities(
     """Require one source, lock, input status, and compatibility identity."""
     normalized = tuple(identities)
     if len(normalized) != 3 or len(set(normalized)) != 1:
-        raise ValueError("pitch aggregate artifacts must share source, lock, and compatibility")
+        raise PitchArtifactSetError(
+            "pitch aggregate artifacts must share source, lock, and compatibility"
+        )
 
 
 def preflight_pitch_artifacts(
@@ -1846,16 +1849,16 @@ def preflight_pitch_artifacts(
 ) -> tuple[LoadedPitchArtifact, LoadedPitchArtifact, LoadedPitchArtifact]:
     """Validate the canonical checkpoint triple before suite or model construction."""
     if isinstance(artifact_paths, (str, bytes)):
-        raise ValueError("artifact_paths must contain exactly three Paths")
+        raise PitchArtifactSetError("artifact_paths must contain exactly three Paths")
     try:
         supplied = tuple(artifact_paths)
     except TypeError as error:
-        raise ValueError("artifact_paths must contain exactly three Paths") from error
+        raise PitchArtifactSetError("artifact_paths must contain exactly three Paths") from error
     if len(supplied) != 3 or not all(isinstance(item, Path) for item in supplied):
-        raise ValueError("artifact_paths must contain exactly three Paths")
+        raise PitchArtifactSetError("artifact_paths must contain exactly three Paths")
     roots = tuple(item.resolve(strict=True) for item in supplied)
     if len(set(roots)) != 3:
-        raise ValueError("pitch aggregate artifacts must be distinct")
+        raise PitchArtifactSetError("pitch aggregate artifacts must be distinct")
 
     # This first phase checks complete manifests, exact inventories, every hash,
     # duplicate/nonfinite-decodes every JSON payload, and re-derives config/summary
@@ -1864,7 +1867,7 @@ def preflight_pitch_artifacts(
     ordered_pairs = tuple(sorted(metadata, key=lambda item: item[0].manifest.seed))
     ordered = tuple(item[0] for item in ordered_pairs)
     if tuple(item.manifest.seed for item in ordered) != (0, 1, 2):
-        raise ValueError("pitch aggregate seeds must be exactly 0, 1, and 2")
+        raise PitchArtifactSetError("pitch aggregate seeds must be exactly 0, 1, and 2")
     if any(
         item.manifest.profile is not ProfileName.CHECKPOINT
         or not item.manifest.eligible_for_aggregate
@@ -1875,7 +1878,9 @@ def preflight_pitch_artifacts(
         or not item.manifest.source.required_inputs_committed
         for item in ordered
     ):
-        raise ValueError("pitch aggregate artifacts must each be eligible CPU checkpoints")
+        raise PitchArtifactSetError(
+            "pitch aggregate artifacts must each be eligible CPU checkpoints"
+        )
     identities = tuple(
         (
             item.manifest.source.commit,

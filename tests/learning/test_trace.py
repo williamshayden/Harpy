@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,8 +15,11 @@ import harpy.learning.trace as trace
 import harpy.learning.workflows as workflows
 from harpy.envs.models import EpisodeResult, PitchAction, TerminalReason
 from harpy.envs.sine_pitch import SinePitchEnv, _CandidateEvidence
+from harpy.learning.artifacts import LoadedArtifact
 from harpy.learning.errors import ArtifactError, LearningContractError, LearningExecutionError
-from harpy.learning.models import DeviceName, TrainerKind
+from harpy.learning.models import DeviceName, ProfileName, TrainerKind
+from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+from harpy.learning.pitch_data import PitchTrainerKind
 from harpy.tuning import Tuning
 
 
@@ -136,6 +139,74 @@ def test_trace_rejects_non_pitch_action_before_step_and_closes(
     assert env.closed is True
 
 
+@pytest.mark.parametrize("poison_at", ["reset", "intermediate"])
+def test_trace_rejects_hidden_observation_keys_before_they_reach_actor(
+    poison_at: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PoisonedEnv(FastDirectEnv):
+        def reset(self, **kwargs: Any):
+            observation, info = super().reset(**kwargs)
+            if poison_at == "reset":
+                observation = {**observation, "source_pitch_cents": 4_400}
+            return observation, info
+
+        def step(self, action: int):
+            observation, reward, terminated, truncated, info = super().step(action)
+            if poison_at == "intermediate" and not (terminated or truncated):
+                observation = {**observation, "current_pitch_cents": 4_500}
+            return observation, reward, terminated, truncated, info
+
+    env = PoisonedEnv()
+    _install_env(monkeypatch, env)
+    actor = SequenceActor(PitchAction.CENT_UP, PitchAction.SUBMIT)
+
+    with pytest.raises(LearningExecutionError, match="exactly"):
+        trace.trace_episode(actor, seed=1)
+
+    expected_calls = 0 if poison_at == "reset" else 1
+    assert len(actor.observations) == expected_calls
+    assert env.closed is True
+
+
+def test_trace_reads_each_environment_observation_value_once_before_copying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SingleReadMapping(Mapping[str, object]):
+        def __init__(self, values: Mapping[str, object]) -> None:
+            self._values = dict(values)
+            self.reads = {key: 0 for key in values}
+
+        def __getitem__(self, key: str) -> object:
+            self.reads[key] += 1
+            if self.reads[key] != 1:
+                raise AssertionError(f"observation value {key!r} was read more than once")
+            return self._values[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    class SingleReadEnv(FastDirectEnv):
+        supplied: SingleReadMapping | None = None
+
+        def reset(self, **kwargs: Any):
+            observation, info = super().reset(**kwargs)
+            self.supplied = SingleReadMapping(observation)
+            return self.supplied, info
+
+    env = SingleReadEnv()
+    _install_env(monkeypatch, env)
+
+    result = trace.trace_episode(SequenceActor(PitchAction.SUBMIT), seed=4)
+
+    assert result.action_count == 1
+    assert env.supplied is not None
+    assert env.supplied.reads == {key: 1 for key in env.supplied}
+
+
 def test_trace_closes_environment_when_actor_or_reset_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -240,12 +311,24 @@ def test_run_artifact_validates_complete_payload_before_actor_and_trace(
 ) -> None:
     root = tmp_path / "artifact"
     root.mkdir()
-    artifact = SimpleNamespace(
-        root=root.resolve(),
-        manifest=SimpleNamespace(trainer=TrainerKind.BC, seed=0),
+    artifact = object.__new__(LoadedArtifact)
+    object.__setattr__(artifact, "root", root.resolve())
+    object.__setattr__(
+        artifact,
+        "manifest",
+        SimpleNamespace(
+            trainer=TrainerKind.BC,
+            seed=0,
+            profile=ProfileName.SMOKE,
+        ),
     )
     events: list[str] = []
     monkeypatch.setattr(workflows, "load_artifact", lambda path: artifact)
+    monkeypatch.setattr(
+        workflows,
+        "_peek_artifact_identity",
+        lambda path: (1, ProfileName.SMOKE, TrainerKind.BC.value),
+    )
 
     def validate(value: object) -> None:
         assert value is artifact
@@ -288,6 +371,11 @@ def test_run_artifact_rejects_invalid_seed_and_incomplete_artifact_before_actor(
     )
     monkeypatch.setattr(
         workflows,
+        "_peek_artifact_identity",
+        lambda path: (1, ProfileName.SMOKE, TrainerKind.BC.value),
+    )
+    monkeypatch.setattr(
+        workflows,
         "_load_artifact_actor",
         lambda *args, **kwargs: pytest.fail("invalid artifact reached actor loading"),
     )
@@ -298,6 +386,66 @@ def test_run_artifact_rejects_invalid_seed_and_incomplete_artifact_before_actor(
 
     with pytest.raises(ArtifactError, match="incomplete"):
         workflows.run_artifact(root, seed=0)
+
+
+def test_run_artifact_dispatches_pitch_without_v1_fallthrough(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "artifact"
+    root.mkdir()
+    (root / "manifest.json").write_bytes(
+        workflows.canonical_json_bytes(
+            {
+                "schema_version": 2,
+                "profile": ProfileName.SMOKE.value,
+                "trainer": PitchTrainerKind.PITCH.value,
+            }
+        )
+    )
+    artifact = object.__new__(LoadedPitchArtifact)
+    object.__setattr__(artifact, "root", root.resolve())
+    object.__setattr__(
+        artifact,
+        "manifest",
+        SimpleNamespace(
+            trainer=PitchTrainerKind.PITCH,
+            profile=ProfileName.SMOKE,
+            seed=0,
+        ),
+    )
+    events: list[str] = []
+    monkeypatch.setattr(workflows, "load_artifact", lambda path: artifact)
+    monkeypatch.setattr(workflows, "_require_evaluation_device", lambda device: None)
+    monkeypatch.setattr(
+        workflows,
+        "_validate_artifact_payload",
+        lambda value: pytest.fail("pitch artifact reached legacy payload validation"),
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_load_artifact_actor",
+        lambda *args, **kwargs: pytest.fail("pitch artifact reached legacy actor loading"),
+    )
+    actor = object()
+
+    def load_pitch(value: object, *, device: DeviceName) -> object:
+        assert value is artifact and device is DeviceName.CPU
+        events.append("pitch-actor")
+        return actor
+
+    sentinel = object()
+
+    def capture(value: object, *, seed: int) -> object:
+        assert value is actor and seed == 9
+        events.append("trace")
+        return sentinel
+
+    monkeypatch.setattr(workflows, "_load_pitch_artifact_actor", load_pitch)
+    monkeypatch.setattr(trace, "trace_episode", capture)
+
+    assert workflows.run_artifact(root, seed=9) is sentinel
+    assert events == ["pitch-actor", "trace"]
 
 
 def test_trace_model_cross_checks_terminal_action_truth() -> None:

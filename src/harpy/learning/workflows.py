@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import operator
 from collections.abc import Mapping, Sequence
@@ -12,9 +13,12 @@ from typing import Any
 import gymnasium
 
 from harpy.envs.baselines import BaselineKind
-from harpy.envs.models import ObservationMode
+from harpy.envs.models import ObservationMode, PitchAction
 from harpy.learning.artifacts import (
+    ARTIFACT_SCHEMA_VERSION,
+    PITCH_ARTIFACT_SCHEMA_VERSION,
     LoadedArtifact,
+    _read_regular_file_bytes,
     canonical_json_bytes,
     decode_json_bytes,
     load_artifact,
@@ -28,6 +32,7 @@ from harpy.learning.errors import (
     DependencyUnavailableError,
     LearningContractError,
     LearningExecutionError,
+    PitchArtifactSetError,
 )
 from harpy.learning.evaluation import (
     EVALUATION_SCHEMA_VERSION,
@@ -278,30 +283,65 @@ class EvaluationReport:
         )
 
 
-def evaluation_report_bytes(report: EvaluationReport) -> bytes:
-    """Encode a report as one sorted finite JSON object plus one newline."""
+def evaluation_report_bytes(report: object) -> bytes:
+    """Schema-first encode one v1 or v2 evaluation report."""
 
-    if not isinstance(report, EvaluationReport):
-        raise ValueError("report must be an EvaluationReport")
-    return canonical_json_bytes(report.to_document())
+    if isinstance(report, EvaluationReport):
+        return canonical_json_bytes(report.to_document())
+    from harpy.learning.pitch_reports import PitchEvaluationReport
+
+    if isinstance(report, PitchEvaluationReport):
+        return canonical_json_bytes(report.to_document())
+    raise ValueError("report must be an EvaluationReport or PitchEvaluationReport")
 
 
-def evaluation_report_from_bytes(content: bytes) -> EvaluationReport:
-    """Decode report bytes with Task 6's strict duplicate-free JSON decoder."""
+def evaluation_report_from_bytes(content: bytes) -> object:
+    """Strictly peek schema before dispatching to the frozen v1 or pitch codec."""
 
-    return EvaluationReport.from_document(decode_json_bytes(content))
+    document = decode_json_bytes(content)
+    schema_version = _integer(
+        document.get("schema_version"),
+        "schema_version",
+        minimum=1,
+    )
+    if schema_version == EVALUATION_REPORT_SCHEMA_VERSION:
+        return EvaluationReport.from_document(document)
+    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        from harpy.learning.pitch_reports import PitchEvaluationReport
+
+        return PitchEvaluationReport.from_document(document)
+    raise ValueError(f"unsupported evaluation report schema_version {schema_version}")
 
 
 def evaluate_artifacts(
     artifact_paths: Sequence[Path],
     *,
     device: DeviceName = DeviceName.CPU,
-) -> EvaluationReport:
-    """Validate a compatible complete set, then evaluate every actor and baseline."""
+) -> object:
+    """Schema-peek a homogeneous set before any full artifact or actor load."""
 
     if not isinstance(device, DeviceName):
         raise LearningContractError("device must be a DeviceName")
     paths = _canonical_artifact_paths(artifact_paths)
+    identities = tuple(_peek_artifact_identity(path) for path in paths)
+    schemas = {identity[0] for identity in identities}
+    if len(schemas) != 1:
+        raise LearningContractError("mixed artifact schemas are not supported")
+    schema_version = next(iter(schemas))
+    if schema_version == ARTIFACT_SCHEMA_VERSION:
+        return _evaluate_v1_artifacts(paths, device=device)
+    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        return _evaluate_pitch_artifacts(paths, identities, device=device)
+    raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
+
+
+def _evaluate_v1_artifacts(
+    paths: tuple[Path, ...],
+    *,
+    device: DeviceName,
+) -> EvaluationReport:
+    """Preserve the frozen schema-v1 multi-artifact evaluation behavior."""
+
     artifacts = tuple(_load_complete_artifact(path) for path in paths)
     _validate_artifact_set(artifacts)
     _require_evaluation_device(device)
@@ -370,6 +410,318 @@ def evaluate_artifacts(
     )
 
 
+def _peek_artifact_identity(path: Path) -> tuple[int, ProfileName, str]:
+    """Read only the manifest schema/profile/trainer dispatch fields."""
+
+    try:
+        document = decode_json_bytes(
+            _read_regular_file_bytes(path / "manifest.json", "artifact manifest.json")
+        )
+        schema_version = _integer(
+            document.get("schema_version"),
+            "schema_version",
+            minimum=1,
+        )
+    except Exception as error:
+        raise ArtifactError(f"invalid artifact manifest dispatch at {path}: {error}") from error
+    if schema_version not in (
+        ARTIFACT_SCHEMA_VERSION,
+        PITCH_ARTIFACT_SCHEMA_VERSION,
+    ):
+        raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
+    try:
+        profile = _enum(ProfileName, document.get("profile"), "profile")
+        trainer = _string(document.get("trainer"), "trainer")
+    except Exception as error:
+        raise ArtifactError(f"invalid artifact manifest dispatch at {path}: {error}") from error
+    if schema_version == ARTIFACT_SCHEMA_VERSION:
+        if trainer not in (TrainerKind.BC.value, TrainerKind.PPO.value):
+            raise LearningContractError("schema-v1 artifacts require trainer bc or ppo")
+    elif schema_version == PITCH_ARTIFACT_SCHEMA_VERSION and trainer != "pitch":
+        raise LearningContractError("schema-v2 artifacts require trainer pitch")
+    return schema_version, profile, trainer
+
+
+def _preflight_pitch_artifacts(
+    paths: Sequence[Path],
+) -> tuple[object, object, object]:
+    """Lazy Task 6 bridge retained as the one exact-three gate call."""
+
+    from harpy.learning.pitch_artifacts import preflight_pitch_artifacts
+
+    return preflight_pitch_artifacts(paths)
+
+
+def _evaluate_pitch_artifacts(
+    paths: tuple[Path, ...],
+    identities: tuple[tuple[int, ProfileName, str], ...],
+    *,
+    device: DeviceName,
+) -> object:
+    """Route smoke or exact-three checkpoint schema-v2 evaluation."""
+
+    profiles = tuple(identity[1] for identity in identities)
+    if len(paths) == 1:
+        if profiles != (ProfileName.SMOKE,):
+            raise LearningContractError(
+                "checkpoint pitch evaluation requires exactly three artifacts"
+            )
+        artifact = _load_complete_artifact(paths[0])
+        from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+
+        if not isinstance(artifact, LoadedPitchArtifact):
+            raise LearningContractError("schema-v2 dispatch did not load a pitch artifact")
+        if (
+            artifact.manifest.profile is not profiles[0]
+            or artifact.manifest.trainer.value != identities[0][2]
+        ):
+            raise LearningContractError("loaded pitch artifact does not match manifest dispatch")
+        if artifact.manifest.evaluation_device is not device:
+            raise LearningContractError(
+                "smoke report reconstruction requires the artifact evaluation device"
+            )
+        _require_evaluation_device(device)
+        return _evaluate_pitch_smoke(artifact, device=device)
+    if len(paths) != 3 or any(profile is not ProfileName.CHECKPOINT for profile in profiles):
+        raise LearningContractError(
+            "pitch evaluation requires one smoke artifact or exactly three checkpoints"
+        )
+    try:
+        artifacts = _preflight_pitch_artifacts(paths)
+    except PitchArtifactSetError as error:
+        raise LearningContractError(f"invalid pitch checkpoint set: {error}") from error
+    except LearningContractError as error:
+        raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
+    except ValueError as error:
+        raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
+    _require_evaluation_device(device)
+    try:
+        return _evaluate_pitch_checkpoint(artifacts, device=device)
+    except DependencyUnavailableError:
+        raise
+    except (ArtifactError, LearningContractError, LearningExecutionError):
+        raise
+    except Exception as error:
+        raise LearningExecutionError(f"pitch checkpoint evaluation failed: {error}") from error
+
+
+def _evaluate_pitch_smoke(artifact: object, *, device: DeviceName) -> object:
+    """Reconstruct the exact persisted seven-row ineligible smoke report."""
+
+    from harpy.learning.pitch_artifacts import (
+        LoadedPitchArtifact,
+        PitchSmokeEvaluationDocument,
+        validate_pitch_smoke_evaluation_pair,
+    )
+    from harpy.learning.pitch_evaluation import evaluate_pitch_criterion
+    from harpy.learning.pitch_reports import PitchEvaluationReport
+
+    if not isinstance(artifact, LoadedPitchArtifact):
+        raise LearningContractError("artifact must be a LoadedPitchArtifact")
+    manifest = artifact.manifest
+    if manifest.profile is not ProfileName.SMOKE:
+        raise LearningContractError("single pitch artifacts may evaluate only smoke")
+    if device is not manifest.evaluation_device:
+        raise LearningContractError(
+            "smoke report reconstruction requires the artifact evaluation device"
+        )
+    base = PitchSmokeEvaluationDocument.from_document(artifact.document("evaluation-smoke.json"))
+    probes = PitchSmokeEvaluationDocument.from_document(
+        artifact.document("evaluation-smoke-probes.json")
+    )
+    rows = validate_pitch_smoke_evaluation_pair(base, probes)
+    return PitchEvaluationReport(
+        schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+        profile=manifest.profile,
+        evaluation_device=manifest.evaluation_device,
+        environment_contract_id=manifest.environment_contract_id,
+        spectrum_grid_id=manifest.spectrum_grid_id,
+        preprocessing_schema_id=manifest.preprocessing_schema_id,
+        architecture_schema_id=manifest.architecture_schema_id,
+        policy_semantics_id=manifest.policy_semantics_id,
+        coordinate_distribution_id=manifest.train_distribution_id,
+        coordinate_split_digest_sha256=manifest.coordinate_split_digest_sha256,
+        compatibility_sha256=manifest.compatibility_sha256,
+        terminal_rows=rows,
+        coordinate_evaluations=(),
+        register_ood_aggregates=(),
+        criterion=evaluate_pitch_criterion(
+            coordinate_evaluations=(),
+            terminal_rows=(),
+            eligible=False,
+        ),
+    )
+
+
+def _evaluate_pitch_checkpoint(
+    artifacts: Sequence[object],
+    *,
+    device: DeviceName,
+) -> object:
+    """Run final direct and closed-loop gates using one retained model per seed."""
+
+    from harpy.learning.pitch import load_pitch_estimator_model
+    from harpy.learning.pitch_actor import PitchPlannerActor
+    from harpy.learning.pitch_artifacts import (
+        LoadedPitchArtifact,
+        read_pitch_training_summary,
+    )
+    from harpy.learning.pitch_data import (
+        PitchEvaluationSuiteId,
+        PitchTrainerKind,
+        fixed_pitch_evaluation_suite,
+    )
+    from harpy.learning.pitch_evaluation import (
+        PITCH_SHUFFLED_SPECTRUM_PROBE,
+        PITCH_ZERO_SPECTRUM_PROBE,
+        RegisterOODAggregate,
+        build_pitch_evaluation_row,
+        default_pitch_evidence_provider,
+        evaluate_final_pitch_coordinates,
+        evaluate_pitch_baseline_suite,
+        evaluate_pitch_criterion,
+        evaluate_pitch_learned_actor,
+        make_pitch_model_grid_predictor,
+        make_pitch_spectrum_probe_factory,
+    )
+    from harpy.learning.pitch_reports import PitchEvaluationReport
+
+    normalized = tuple(artifacts)
+    if len(normalized) != 3 or not all(
+        isinstance(item, LoadedPitchArtifact) for item in normalized
+    ):
+        raise LearningContractError("checkpoint evaluation requires three loaded pitch artifacts")
+    if tuple(item.manifest.seed for item in normalized) != (0, 1, 2):
+        raise LearningContractError("checkpoint artifacts must be ordered seeds 0, 1, and 2")
+    stack = require_training_dependencies()
+    torch_device = stack.torch.device(device.value)
+    retained = []
+    for artifact in normalized:
+        model = load_pitch_estimator_model(artifact.file("model.pt"), device=torch_device)
+        actor = PitchPlannerActor(model, device=torch_device)
+        predictor = make_pitch_model_grid_predictor(model, device=torch_device)
+        retained.append((artifact, model, actor, predictor))
+
+    cache = SpectrumEvidenceCache()
+    provider = default_pitch_evidence_provider(cache)
+
+    def environment_factory() -> gymnasium.Env:
+        return make_cached_sine_pitch_env(cache)
+
+    coordinates = tuple(
+        evaluate_final_pitch_coordinates(
+            seed=artifact.manifest.seed,
+            evidence_provider=provider,
+            predict_grid_index=predictor,
+        )
+        for artifact, _model, _actor, predictor in retained
+    )
+    suites = {
+        suite_id: fixed_pitch_evaluation_suite(suite_id)
+        for suite_id in (
+            PitchEvaluationSuiteId.IID,
+            PitchEvaluationSuiteId.OOD_LOWER,
+            PitchEvaluationSuiteId.OOD_UPPER,
+        )
+    }
+    rows = []
+    for artifact, _model, actor, _predictor in retained:
+        manifest = artifact.manifest
+        summary = read_pitch_training_summary(artifact).summary
+        common = {
+            "actor_id": f"pitch-{manifest.seed}",
+            "trainer": PitchTrainerKind.PITCH,
+            "seed": manifest.seed,
+            "environment_id": manifest.environment_id,
+            "observation_mode": ObservationMode.SPECTRUM,
+            "parameter_count": manifest.parameter_count,
+            "training_examples": summary.training_examples,
+            "training_wall_time_seconds": summary.training_wall_time_seconds,
+        }
+        seed_rows = []
+        for suite_id in (
+            PitchEvaluationSuiteId.IID,
+            PitchEvaluationSuiteId.OOD_LOWER,
+            PitchEvaluationSuiteId.OOD_UPPER,
+        ):
+            suite = suites[suite_id]
+            seed_rows.append(
+                build_pitch_evaluation_row(
+                    suite=suite,
+                    records=evaluate_pitch_learned_actor(
+                        actor,
+                        suite,
+                        environment_factory=environment_factory,
+                    ),
+                    **common,
+                )
+            )
+        iid_suite = suites[PitchEvaluationSuiteId.IID]
+        for probe in (PITCH_ZERO_SPECTRUM_PROBE, PITCH_SHUFFLED_SPECTRUM_PROBE):
+            seed_rows.append(
+                build_pitch_evaluation_row(
+                    suite=iid_suite,
+                    records=evaluate_pitch_learned_actor(
+                        actor,
+                        iid_suite,
+                        environment_factory=make_pitch_spectrum_probe_factory(
+                            environment_factory,
+                            probe,
+                        ),
+                    ),
+                    probe=probe,
+                    **common,
+                )
+            )
+        rows.extend(seed_rows)
+    for kind in _BASELINE_ORDER:
+        for suite_id in (
+            PitchEvaluationSuiteId.IID,
+            PitchEvaluationSuiteId.OOD_LOWER,
+            PitchEvaluationSuiteId.OOD_UPPER,
+        ):
+            suite = suites[suite_id]
+            rows.append(
+                build_pitch_evaluation_row(
+                    actor_id=kind.value,
+                    trainer=None,
+                    seed=None,
+                    environment_id=kind.environment_id,
+                    observation_mode=kind.observation_mode,
+                    suite=suite,
+                    records=evaluate_pitch_baseline_suite(kind, suite, cache=cache),
+                )
+            )
+    terminal_rows = tuple(rows)
+    aggregates = tuple(
+        RegisterOODAggregate.from_rows(terminal_rows[start], terminal_rows[start + 1])
+        for start in (1, 6, 11, 16, 19, 22, 25)
+    )
+    criterion = evaluate_pitch_criterion(
+        coordinate_evaluations=coordinates,
+        terminal_rows=terminal_rows,
+        eligible=device is DeviceName.CPU,
+    )
+    reference = normalized[0].manifest
+    return PitchEvaluationReport(
+        schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+        profile=ProfileName.CHECKPOINT,
+        evaluation_device=device,
+        environment_contract_id=reference.environment_contract_id,
+        spectrum_grid_id=reference.spectrum_grid_id,
+        preprocessing_schema_id=reference.preprocessing_schema_id,
+        architecture_schema_id=reference.architecture_schema_id,
+        policy_semantics_id=reference.policy_semantics_id,
+        coordinate_distribution_id=reference.train_distribution_id,
+        coordinate_split_digest_sha256=reference.coordinate_split_digest_sha256,
+        compatibility_sha256=reference.compatibility_sha256,
+        terminal_rows=terminal_rows,
+        coordinate_evaluations=coordinates,
+        register_ood_aggregates=aggregates,
+        criterion=criterion,
+    )
+
+
 def run_artifact(
     artifact_path: Path,
     *,
@@ -385,24 +737,42 @@ def run_artifact(
     if not isinstance(device, DeviceName):
         raise LearningContractError("device must be a DeviceName")
     path = _canonical_artifact_paths((artifact_path,))[0]
+    identity = _peek_artifact_identity(path)
     artifact = _load_complete_artifact(path)
     _require_evaluation_device(device)
-    try:
-        _validate_artifact_payload(artifact)
-    except DependencyUnavailableError:
-        raise
-    except Exception as error:
-        raise ArtifactError(
-            f"invalid {artifact.manifest.trainer.value} artifact: {error}"
-        ) from error
-    try:
-        actor = _load_artifact_actor(artifact, device=device)
-    except DependencyUnavailableError:
-        raise
-    except Exception as error:
-        raise ArtifactError(
-            f"could not load {artifact.manifest.trainer.value} actor: {error}"
-        ) from error
+    schema_version, profile, trainer = identity
+    if schema_version == ARTIFACT_SCHEMA_VERSION:
+        if not isinstance(artifact, LoadedArtifact):
+            raise LearningContractError("schema-v1 dispatch did not load a v1 artifact")
+        if artifact.manifest.profile is not profile or artifact.manifest.trainer.value != trainer:
+            raise LearningContractError("loaded v1 artifact does not match manifest dispatch")
+        try:
+            _validate_artifact_payload(artifact)
+        except DependencyUnavailableError:
+            raise
+        except Exception as error:
+            raise ArtifactError(f"invalid {trainer} artifact: {error}") from error
+        try:
+            actor = _load_artifact_actor(artifact, device=device)
+        except DependencyUnavailableError:
+            raise
+        except Exception as error:
+            raise ArtifactError(f"could not load {trainer} actor: {error}") from error
+    elif schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+
+        if not isinstance(artifact, LoadedPitchArtifact):
+            raise LearningContractError("schema-v2 dispatch did not load a pitch artifact")
+        if artifact.manifest.profile is not profile or artifact.manifest.trainer.value != trainer:
+            raise LearningContractError("loaded pitch artifact does not match manifest dispatch")
+        try:
+            actor = _load_pitch_artifact_actor(artifact, device=device)
+        except DependencyUnavailableError:
+            raise
+        except Exception as error:
+            raise ArtifactError(f"could not load pitch actor: {error}") from error
+    else:
+        raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
     try:
         from harpy.learning import trace as trace_module
 
@@ -411,6 +781,274 @@ def run_artifact(
         if isinstance(error, LearningExecutionError):
             raise
         raise LearningExecutionError(f"artifact run failed: {error}") from error
+
+
+def diagnose_artifacts(
+    artifact_paths: Sequence[Path],
+    *,
+    suite: str,
+    device: DeviceName = DeviceName.CPU,
+    bound_mask: bool = False,
+) -> object:
+    """Run one historical or pitch diagnostic lane after schema-local preflight."""
+
+    if suite not in {"smoke", "iid", "ood-lower", "ood-upper"}:
+        raise LearningContractError("suite must be smoke, iid, ood-lower, or ood-upper")
+    if not isinstance(device, DeviceName):
+        raise LearningContractError("device must be a DeviceName")
+    if not isinstance(bound_mask, bool):
+        raise LearningContractError("bound_mask must be a bool")
+    paths = _canonical_artifact_paths(artifact_paths)
+    identities = tuple(_peek_artifact_identity(path) for path in paths)
+    schemas = {identity[0] for identity in identities}
+    if len(schemas) != 1:
+        raise LearningContractError("mixed artifact schemas are not supported")
+    schema_version = next(iter(schemas))
+    if schema_version == ARTIFACT_SCHEMA_VERSION:
+        if len(paths) != 1:
+            raise LearningContractError("legacy diagnostics require exactly one artifact")
+        if suite in {"ood-lower", "ood-upper"}:
+            raise LearningContractError(
+                "schema-v1 diagnostics expose only their historical suite identities"
+            )
+        if bound_mask and identities[0][2] != TrainerKind.BC.value:
+            raise LearningContractError("bound_mask requires exactly one schema-v1 BC artifact")
+        return _diagnose_v1_artifact(
+            paths[0],
+            identity=identities[0],
+            suite=suite,
+            device=device,
+            bound_mask=bound_mask,
+        )
+    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        if bound_mask:
+            raise LearningContractError("bound_mask requires exactly one schema-v1 BC artifact")
+        profiles = tuple(identity[1] for identity in identities)
+        if suite == "smoke":
+            if len(paths) != 1 or profiles != (ProfileName.SMOKE,):
+                raise LearningContractError(
+                    "pitch smoke diagnostics require exactly one smoke artifact"
+                )
+            artifact = _load_complete_artifact(paths[0])
+            from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+
+            if not isinstance(artifact, LoadedPitchArtifact):
+                raise LearningContractError("schema-v2 dispatch did not load a pitch artifact")
+            if (
+                artifact.manifest.profile is not profiles[0]
+                or artifact.manifest.trainer.value != identities[0][2]
+            ):
+                raise LearningContractError(
+                    "loaded pitch artifact does not match manifest dispatch"
+                )
+            _require_evaluation_device(device)
+            return _diagnose_pitch_artifacts((artifact,), suite=suite, device=device)
+        if len(paths) != 3 or any(profile is not ProfileName.CHECKPOINT for profile in profiles):
+            raise LearningContractError(
+                "final pitch diagnostics require exactly three checkpoint artifacts"
+            )
+        try:
+            artifacts = _preflight_pitch_artifacts(paths)
+        except PitchArtifactSetError as error:
+            raise LearningContractError(f"invalid pitch checkpoint set: {error}") from error
+        except LearningContractError as error:
+            raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
+        except ValueError as error:
+            raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
+        _require_evaluation_device(device)
+        return _diagnose_pitch_artifacts(artifacts, suite=suite, device=device)
+    raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
+
+
+def _diagnose_v1_artifact(
+    path: Path,
+    *,
+    identity: tuple[int, ProfileName, str],
+    suite: str,
+    device: DeviceName,
+    bound_mask: bool,
+) -> object:
+    """Strict-load and diagnose one declared historical schema-v1 suite."""
+
+    suite_id = {
+        "smoke": EvaluationSuiteId.SMOKE,
+        "iid": EvaluationSuiteId.IID,
+    }[suite]
+    profile = identity[1]
+    if suite_id not in PROFILE_CONFIGS[profile].evaluation_suites:
+        raise LearningContractError("diagnostic suite is not declared by the artifact profile")
+    artifact = _load_complete_artifact(path)
+    if not isinstance(artifact, LoadedArtifact):
+        raise LearningContractError("schema-v1 dispatch did not load a v1 artifact")
+    manifest = artifact.manifest
+    if manifest.profile is not profile or manifest.trainer.value != identity[2]:
+        raise LearningContractError("loaded v1 artifact does not match manifest dispatch")
+    _require_evaluation_device(device)
+    try:
+        _validate_artifact_payload(artifact)
+        if bound_mask:
+            from harpy.learning.bc import load_masked_bc_actor
+
+            actor = load_masked_bc_actor(artifact, device=device)
+        else:
+            actor = _load_artifact_actor(artifact, device=device)
+    except DependencyUnavailableError:
+        raise
+    except Exception as error:
+        raise ArtifactError(f"could not load diagnostic actor: {error}") from error
+    from harpy.learning.actors import (
+        BC_ACTOR_SEMANTICS_ID,
+        MASKED_BC_ACTOR_SEMANTICS_ID,
+        PPO_ACTOR_SEMANTICS_ID,
+    )
+    from harpy.learning.diagnostics import (
+        build_diagnostic_bundle,
+        build_diagnostic_report,
+    )
+    from harpy.learning.evaluation import diagnose_actor_suite
+
+    if manifest.trainer is TrainerKind.BC:
+        actor_semantics = MASKED_BC_ACTOR_SEMANTICS_ID if bound_mask else BC_ACTOR_SEMANTICS_ID
+    elif manifest.trainer is TrainerKind.PPO:
+        actor_semantics = PPO_ACTOR_SEMANTICS_ID
+    else:
+        raise LearningContractError("schema-v1 artifact has an unsupported trainer")
+    fixed_suite = fixed_evaluation_suite(suite_id)
+    cache = SpectrumEvidenceCache()
+    episodes = diagnose_actor_suite(
+        decide=_legacy_diagnostic_decider(actor),
+        suite=fixed_suite,
+        environment_factory=lambda: make_cached_sine_pitch_env(cache),
+    )
+    report = build_diagnostic_report(
+        seed=manifest.seed,
+        artifact_manifest_sha256=_artifact_manifest_sha256(artifact.root),
+        actor_semantics=actor_semantics,
+        bound_mask=bound_mask,
+        suite_id=fixed_suite.suite_id.value,
+        suite_digest_sha256=fixed_suite.digest_sha256,
+        episodes=episodes,
+    )
+    return build_diagnostic_bundle(
+        device=device.value,
+        bound_mask=bound_mask,
+        reports=(report,),
+    )
+
+
+def _diagnose_pitch_artifacts(
+    artifacts: Sequence[object],
+    *,
+    suite: str,
+    device: DeviceName,
+) -> object:
+    """Diagnose one smoke artifact or the already-preflighted final triple."""
+
+    from harpy.learning.diagnostics import (
+        build_diagnostic_bundle,
+        build_diagnostic_report,
+    )
+    from harpy.learning.evaluation import diagnose_actor_suite
+    from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+    from harpy.learning.pitch_data import (
+        PitchEvaluationSuiteId,
+        fixed_pitch_evaluation_suite,
+    )
+
+    normalized = tuple(artifacts)
+    if not normalized or not all(
+        isinstance(artifact, LoadedPitchArtifact) for artifact in normalized
+    ):
+        raise LearningContractError("pitch diagnostics require loaded pitch artifacts")
+    suite_id = {
+        "smoke": PitchEvaluationSuiteId.SMOKE,
+        "iid": PitchEvaluationSuiteId.IID,
+        "ood-lower": PitchEvaluationSuiteId.OOD_LOWER,
+        "ood-upper": PitchEvaluationSuiteId.OOD_UPPER,
+    }[suite]
+    if suite_id is PitchEvaluationSuiteId.SMOKE:
+        if len(normalized) != 1 or normalized[0].manifest.profile is not ProfileName.SMOKE:
+            raise LearningContractError("pitch smoke diagnostics require one smoke artifact")
+    elif (
+        len(normalized) != 3
+        or tuple(artifact.manifest.seed for artifact in normalized) != (0, 1, 2)
+        or any(artifact.manifest.profile is not ProfileName.CHECKPOINT for artifact in normalized)
+    ):
+        raise LearningContractError("final pitch diagnostics require preflighted seeds 0, 1, and 2")
+    fixed_suite = fixed_pitch_evaluation_suite(suite_id)
+    cache = SpectrumEvidenceCache()
+    reports = []
+    for artifact in normalized:
+        actor = _load_pitch_artifact_actor(artifact, device=device)
+        episodes = diagnose_actor_suite(
+            decide=_pitch_diagnostic_decider(actor),
+            suite=fixed_suite,
+            environment_factory=lambda: make_cached_sine_pitch_env(cache),
+        )
+        reports.append(
+            build_diagnostic_report(
+                seed=artifact.manifest.seed,
+                artifact_manifest_sha256=_artifact_manifest_sha256(artifact.root),
+                actor_semantics=artifact.manifest.policy_semantics_id,
+                bound_mask=False,
+                suite_id=fixed_suite.suite_id.value,
+                suite_digest_sha256=fixed_suite.digest_sha256,
+                episodes=episodes,
+            )
+        )
+    return build_diagnostic_bundle(
+        device=device.value,
+        bound_mask=False,
+        reports=tuple(reports),
+    )
+
+
+def _legacy_diagnostic_decider(actor: object):
+    """Adapt exactly one legacy ``act`` call to typed diagnostic input."""
+
+    from harpy.learning.diagnostics import DiagnosticDecisionInput
+
+    act = getattr(actor, "act", None)
+    if not callable(act):
+        raise LearningContractError("legacy diagnostic actor must provide act")
+
+    def decide(observation: Mapping[str, object]) -> DiagnosticDecisionInput:
+        action = act(observation)
+        if not isinstance(action, PitchAction):
+            raise LearningExecutionError("legacy diagnostic actor must return a PitchAction")
+        return DiagnosticDecisionInput(action)
+
+    return decide
+
+
+def _pitch_diagnostic_decider(actor: object):
+    """Adapt exactly one pitch ``decide`` call without also calling ``act``."""
+
+    from harpy.learning.diagnostics import DiagnosticDecisionInput
+    from harpy.learning.pitch_actor import PitchDecision
+
+    actor_decide = getattr(actor, "decide", None)
+    if not callable(actor_decide):
+        raise LearningContractError("pitch diagnostic actor must provide decide")
+
+    def decide(observation: Mapping[str, object]) -> DiagnosticDecisionInput:
+        decision = actor_decide(observation)
+        if not isinstance(decision, PitchDecision):
+            raise LearningExecutionError("pitch diagnostic actor must return PitchDecision")
+        return DiagnosticDecisionInput(
+            decision.action,
+            decision.estimated_candidate_cents,
+        )
+
+    return decide
+
+
+def _artifact_manifest_sha256(root: Path) -> str:
+    """Hash the exact persisted manifest bytes through the no-follow reader."""
+
+    return hashlib.sha256(
+        _read_regular_file_bytes(root / "manifest.json", "artifact manifest.json")
+    ).hexdigest()
 
 
 def _canonical_artifact_paths(artifact_paths: Sequence[Path]) -> tuple[Path, ...]:
@@ -440,7 +1078,7 @@ def _canonical_artifact_paths(artifact_paths: Sequence[Path]) -> tuple[Path, ...
     return tuple(resolved)
 
 
-def _load_complete_artifact(path: Path) -> LoadedArtifact:
+def _load_complete_artifact(path: Path) -> object:
     try:
         return load_artifact(path)
     except Exception as error:
@@ -483,10 +1121,12 @@ def _validate_artifact_payload(artifact: LoadedArtifact) -> None:
         from harpy.learning.bc import validate_bc_artifact
 
         validate_bc_artifact(artifact)
-    else:
+    elif artifact.manifest.trainer is TrainerKind.PPO:
         from harpy.learning.ppo import validate_ppo_artifact
 
         validate_ppo_artifact(artifact)
+    else:
+        raise LearningContractError("schema-v1 artifact has an unsupported trainer")
 
 
 def _load_artifact_actor(
@@ -498,14 +1138,34 @@ def _load_artifact_actor(
         from harpy.learning.bc import load_bc_actor
 
         return load_bc_actor(artifact, device=device)
-    from harpy.learning.ppo import load_ppo_actor
+    if artifact.manifest.trainer is TrainerKind.PPO:
+        from harpy.learning.ppo import load_ppo_actor
 
-    return load_ppo_actor(artifact, device=device)
+        return load_ppo_actor(artifact, device=device)
+    raise LearningContractError("schema-v1 artifact has an unsupported trainer")
+
+
+def _load_pitch_artifact_actor(artifact: object, *, device: DeviceName) -> object:
+    """Reload one persisted pitch model and expose only the actor protocol."""
+
+    from harpy.learning.pitch import load_pitch_estimator_model
+    from harpy.learning.pitch_actor import PitchPlannerActor
+    from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+
+    if not isinstance(artifact, LoadedPitchArtifact):
+        raise LearningContractError("artifact must be a LoadedPitchArtifact")
+    stack = require_training_dependencies()
+    torch_device = stack.torch.device(device.value)
+    model = load_pitch_estimator_model(artifact.file("model.pt"), device=torch_device)
+    return PitchPlannerActor(model, device=torch_device)
 
 
 def _artifact_order_key(artifact: LoadedArtifact) -> tuple[int, int]:
-    trainer_position = 0 if artifact.manifest.trainer is TrainerKind.BC else 1
-    return trainer_position, artifact.manifest.seed
+    if artifact.manifest.trainer is TrainerKind.BC:
+        return 0, artifact.manifest.seed
+    if artifact.manifest.trainer is TrainerKind.PPO:
+        return 1, artifact.manifest.seed
+    raise LearningContractError("schema-v1 artifact has an unsupported trainer")
 
 
 def _evaluate_learned_rows(
@@ -589,9 +1249,12 @@ def _manifest_is_scientifically_eligible(
     evaluation_device: DeviceName,
 ) -> bool:
     manifest = artifact.manifest
-    declared_seed = (
-        manifest.seed == 0 if manifest.trainer is TrainerKind.BC else manifest.seed in range(5)
-    )
+    if manifest.trainer is TrainerKind.BC:
+        declared_seed = manifest.seed == 0
+    elif manifest.trainer is TrainerKind.PPO:
+        declared_seed = manifest.seed in range(5)
+    else:
+        raise LearningContractError("schema-v1 artifact has an unsupported trainer")
     return (
         manifest.criterion_eligible
         and manifest.profile is ProfileName.CHECKPOINT

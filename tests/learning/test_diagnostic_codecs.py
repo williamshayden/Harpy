@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from functools import cache
 from pathlib import Path
 
 import pytest
 
 from harpy.envs.models import PitchAction
+from harpy.learning.actors import BC_ACTOR_SEMANTICS_ID
 from harpy.learning.diagnostic_codecs import (
     diagnostic_bundle_bytes,
     diagnostic_bundle_from_bytes,
@@ -17,14 +19,20 @@ from harpy.learning.diagnostic_codecs import (
 from harpy.learning.diagnostics import (
     DiagnosticDecisionInput,
     DiagnosticReportInventory,
+    EpisodeDiagnostic,
     build_diagnostic_bundle,
     build_diagnostic_report,
     diagnose_episode,
 )
+from harpy.learning.models import EvaluationSuiteId
+from harpy.learning.pitch_data import (
+    PitchEvaluationSuiteId,
+    fixed_pitch_evaluation_suite,
+)
+from harpy.learning.suites import fixed_evaluation_suite
 
 _DIGEST_A = "a" * 64
 _DIGEST_B = "b" * 64
-_FINAL_SUITE = "harpy-sine-pitch-e-iid-v1"
 
 
 def _episode(index: int = 0, *, source_pitch_cents: int = 4_800):
@@ -42,14 +50,60 @@ def _report(
     final: bool = False,
     source_pitch_cents: int = 4_800,
 ):
+    if final:
+        suite = fixed_pitch_evaluation_suite(PitchEvaluationSuiteId.IID)
+        return build_diagnostic_report(
+            seed=seed,
+            artifact_manifest_sha256=f"{seed + 1:064x}",
+            actor_semantics="harpy-sine-pitch-estimator-planner-v1",
+            bound_mask=False,
+            suite_id=suite.suite_id.value,
+            suite_digest_sha256=suite.digest_sha256,
+            episodes=_pitch_episodes(PitchEvaluationSuiteId.IID),
+        )
     return build_diagnostic_report(
         seed=seed,
         artifact_manifest_sha256=f"{seed + 1:064x}",
-        actor_semantics="pitch-planner-v1",
+        actor_semantics=BC_ACTOR_SEMANTICS_ID,
         bound_mask=False,
-        suite_id=_FINAL_SUITE if final else "legacy-smoke-v1",
+        suite_id="legacy-smoke-v1",
         suite_digest_sha256=_DIGEST_A,
         episodes=(_episode(source_pitch_cents=source_pitch_cents),),
+    )
+
+
+@cache
+def _pitch_episodes(
+    suite_id: PitchEvaluationSuiteId,
+) -> tuple[EpisodeDiagnostic, ...]:
+    suite = fixed_pitch_evaluation_suite(suite_id)
+    return tuple(
+        diagnose_episode(
+            episode_index=index,
+            source_pitch_cents=spec.source_pitch_cents,
+            target_note_index=spec.target_note_index,
+            decisions=(
+                DiagnosticDecisionInput(
+                    PitchAction.SUBMIT,
+                    1_100 + 5 * ((spec.source_pitch_cents - 1_100 + 2) // 5),
+                ),
+            ),
+        )
+        for index, spec in enumerate(suite.episodes)
+    )
+
+
+@cache
+def _legacy_episodes(suite_id: EvaluationSuiteId) -> tuple[EpisodeDiagnostic, ...]:
+    suite = fixed_evaluation_suite(suite_id)
+    return tuple(
+        diagnose_episode(
+            episode_index=index,
+            source_pitch_cents=spec.source_pitch_cents,
+            target_note_index=spec.target_note_index,
+            decisions=(DiagnosticDecisionInput(PitchAction.SUBMIT),),
+        )
+        for index, spec in enumerate(suite.episodes)
     )
 
 
@@ -68,6 +122,106 @@ def test_report_codec_is_canonical_strict_and_round_trips() -> None:
     assert content.endswith(b"\n") and not content.endswith(b"\n\n")
     assert content == diagnostic_report_bytes(diagnostic_report_from_bytes(content))
     assert diagnostic_report_from_bytes(content) == report
+
+
+def test_registered_legacy_report_round_trips_and_rejects_identity_spoofs() -> None:
+    suite = fixed_evaluation_suite(EvaluationSuiteId.SMOKE)
+    report = build_diagnostic_report(
+        seed=0,
+        artifact_manifest_sha256=f"{1:064x}",
+        actor_semantics=BC_ACTOR_SEMANTICS_ID,
+        bound_mask=False,
+        suite_id=suite.suite_id.value,
+        suite_digest_sha256=suite.digest_sha256,
+        episodes=_legacy_episodes(EvaluationSuiteId.SMOKE),
+    )
+    content = diagnostic_report_bytes(report)
+    assert diagnostic_report_from_bytes(content) == report
+    assert diagnostic_report_bytes(diagnostic_report_from_bytes(content)) == content
+
+    with pytest.raises(ValueError, match="pinned registered suite"):
+        replace(report, suite_digest_sha256=_DIGEST_B)
+
+    second = suite.episodes[1]
+    mutated_first = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=second.source_pitch_cents,
+        target_note_index=second.target_note_index,
+        decisions=(DiagnosticDecisionInput(PitchAction.SUBMIT),),
+    )
+    with pytest.raises(ValueError, match="pinned ordered suite membership"):
+        build_diagnostic_report(
+            seed=report.seed,
+            artifact_manifest_sha256=report.artifact_manifest_sha256,
+            actor_semantics=report.actor_semantics,
+            bound_mask=report.bound_mask,
+            suite_id=report.suite_id,
+            suite_digest_sha256=report.suite_digest_sha256,
+            episodes=(mutated_first, *report.episodes[1:]),
+        )
+
+
+@pytest.mark.parametrize("suite_id", tuple(EvaluationSuiteId))
+def test_every_registered_legacy_suite_closes_digest_and_membership(
+    suite_id: EvaluationSuiteId,
+) -> None:
+    suite = fixed_evaluation_suite(suite_id)
+    report = build_diagnostic_report(
+        seed=0,
+        artifact_manifest_sha256=f"{1:064x}",
+        actor_semantics=BC_ACTOR_SEMANTICS_ID,
+        bound_mask=False,
+        suite_id=suite.suite_id.value,
+        suite_digest_sha256=suite.digest_sha256,
+        episodes=_legacy_episodes(suite_id),
+    )
+    assert report.suite_digest_sha256 == suite.digest_sha256
+    with pytest.raises(ValueError, match="pinned registered suite"):
+        replace(report, suite_digest_sha256=_DIGEST_B)
+
+    second = suite.episodes[1]
+    mutated_first = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=second.source_pitch_cents,
+        target_note_index=second.target_note_index,
+        decisions=(DiagnosticDecisionInput(PitchAction.SUBMIT),),
+    )
+    with pytest.raises(ValueError, match="pinned ordered suite membership"):
+        replace(report, episodes=(mutated_first, *report.episodes[1:]))
+
+
+@pytest.mark.parametrize("suite_id", tuple(PitchEvaluationSuiteId))
+def test_every_registered_pitch_suite_closes_digest_and_membership(
+    suite_id: PitchEvaluationSuiteId,
+) -> None:
+    suite = fixed_pitch_evaluation_suite(suite_id)
+    report = build_diagnostic_report(
+        seed=0,
+        artifact_manifest_sha256=f"{1:064x}",
+        actor_semantics="harpy-sine-pitch-estimator-planner-v1",
+        bound_mask=False,
+        suite_id=suite.suite_id.value,
+        suite_digest_sha256=suite.digest_sha256,
+        episodes=_pitch_episodes(suite_id),
+    )
+    assert report.suite_digest_sha256 == suite.digest_sha256
+    with pytest.raises(ValueError, match="pinned registered suite"):
+        replace(report, suite_digest_sha256=_DIGEST_B)
+
+    second = suite.episodes[1]
+    mutated_first = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=second.source_pitch_cents,
+        target_note_index=second.target_note_index,
+        decisions=(
+            DiagnosticDecisionInput(
+                PitchAction.SUBMIT,
+                1_100 + 5 * ((second.source_pitch_cents - 1_100 + 2) // 5),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="pinned ordered suite membership"):
+        replace(report, episodes=(mutated_first, *report.episodes[1:]))
 
 
 @pytest.mark.parametrize(
@@ -96,6 +250,43 @@ def test_report_codec_rejects_derived_field_mismatch_and_noncanonical_bytes() ->
 
     with pytest.raises(ValueError, match="canonical"):
         diagnostic_report_from_bytes(content[:-1] + b"  \n")
+
+
+def test_report_codec_rejects_actor_estimate_and_mask_linkage_mutations() -> None:
+    document = json.loads(diagnostic_report_bytes(_report()))
+    document["actor_semantics"] = "invented-policy-v1"
+    with pytest.raises(ValueError, match="actor_semantics"):
+        diagnostic_report_from_bytes(_canonical(document))
+
+    document = json.loads(diagnostic_report_bytes(_report()))
+    document["bound_mask"] = True
+    with pytest.raises(ValueError, match="bound_mask"):
+        diagnostic_report_from_bytes(_canonical(document))
+
+    document = json.loads(diagnostic_report_bytes(_report()))
+    document["episodes"][0]["decisions"][0]["estimate"] = {
+        "estimated_candidate_cents": 4_800,
+        "signed_error_cents": 0,
+        "absolute_error_cents": 0,
+    }
+    with pytest.raises(ValueError, match=r"legacy.*null estimates"):
+        diagnostic_report_from_bytes(_canonical(document))
+
+    pitch_report = build_diagnostic_report(
+        seed=0,
+        artifact_manifest_sha256=f"{1:064x}",
+        actor_semantics="harpy-sine-pitch-estimator-planner-v1",
+        bound_mask=False,
+        suite_id=fixed_pitch_evaluation_suite(PitchEvaluationSuiteId.SMOKE).suite_id.value,
+        suite_digest_sha256=fixed_pitch_evaluation_suite(
+            PitchEvaluationSuiteId.SMOKE
+        ).digest_sha256,
+        episodes=_pitch_episodes(PitchEvaluationSuiteId.SMOKE),
+    )
+    document = json.loads(diagnostic_report_bytes(pitch_report))
+    document["episodes"][0]["decisions"][0]["estimate"] = None
+    with pytest.raises(ValueError, match=r"pitch.*estimate"):
+        diagnostic_report_from_bytes(_canonical(document))
 
 
 def test_bundle_requires_final_seeds_and_exact_hashed_inventory() -> None:
@@ -148,15 +339,33 @@ def test_bundle_codec_rejects_missing_inventory_and_wrong_suite_identity() -> No
         diagnostic_bundle_from_bytes(_canonical(document))
 
 
-def test_final_bundle_rejects_different_ordered_episode_memberships() -> None:
-    reports = (
-        _report(0, final=True, source_pitch_cents=4_800),
-        _report(1, final=True, source_pitch_cents=4_801),
-        _report(2, final=True, source_pitch_cents=4_802),
-    )
+def test_registered_suite_rejects_fake_digest_and_ordered_membership() -> None:
+    report = _report(0, final=True)
+    with pytest.raises(ValueError, match="pinned registered suite"):
+        replace(report, suite_digest_sha256=_DIGEST_B)
 
-    with pytest.raises(ValueError, match="episode membership"):
-        build_diagnostic_bundle(device="cpu", bound_mask=False, reports=reports)
+    _, second, *remaining = report.episodes
+    mutated_first = diagnose_episode(
+        episode_index=0,
+        source_pitch_cents=second.source_pitch_cents,
+        target_note_index=second.target_note_index,
+        decisions=(
+            DiagnosticDecisionInput(
+                PitchAction.SUBMIT,
+                1_100 + 5 * ((second.source_pitch_cents - 1_100 + 2) // 5),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="pinned ordered suite membership"):
+        build_diagnostic_report(
+            seed=report.seed,
+            artifact_manifest_sha256=report.artifact_manifest_sha256,
+            actor_semantics=report.actor_semantics,
+            bound_mask=report.bound_mask,
+            suite_id=report.suite_id,
+            suite_digest_sha256=report.suite_digest_sha256,
+            episodes=(mutated_first, second, *remaining),
+        )
 
 
 def test_single_legacy_bundle_is_allowed_but_multi_seed_legacy_is_not() -> None:

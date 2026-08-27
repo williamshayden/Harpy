@@ -7,6 +7,10 @@ class LearningContractError(ValueError):
     """Raised when data crosses the learning boundary outside its contract."""
 
 
+class PitchArtifactSetError(LearningContractError):
+    """Raised when a pitch checkpoint collection violates its aggregate contract."""
+
+
 class DependencyUnavailableError(RuntimeError):
     """Raised when an optional training dependency is not installed."""
 

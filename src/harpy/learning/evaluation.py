@@ -29,7 +29,13 @@ from harpy.envs.models import (
 )
 from harpy.learning.actors import Actor
 from harpy.learning.cache import SpectrumEvidenceCache
+from harpy.learning.diagnostics import (
+    DiagnosticDecisionInput,
+    EpisodeDiagnostic,
+    diagnose_episode,
+)
 from harpy.learning.envs import make_cached_sine_pitch_env
+from harpy.learning.errors import LearningExecutionError
 from harpy.learning.models import (
     ENVIRONMENT_ID,
     EpisodeSpec,
@@ -38,6 +44,7 @@ from harpy.learning.models import (
     JSONValue,
     TrainerKind,
 )
+from harpy.learning.observations import preprocess_observation
 
 EVALUATION_SCHEMA_VERSION = 1
 ZERO_SPECTRUM_PROBE = "zero_spectrum"
@@ -637,6 +644,92 @@ def evaluate_learned_actor(
     return tuple(records)
 
 
+def diagnose_actor_suite(
+    *,
+    decide: Callable[[Mapping[str, object]], DiagnosticDecisionInput],
+    suite: object,
+    environment_factory: Callable[[], gymnasium.Env],
+) -> tuple[EpisodeDiagnostic, ...]:
+    """Run one explicit decision adapter and retain only evaluator-owned diagnostics."""
+
+    if not callable(decide):
+        raise ValueError("decide must be callable")
+    if not callable(environment_factory):
+        raise ValueError("environment_factory must be callable")
+    if isinstance(suite, EpisodeSuite):
+        episodes = _validate_suite(suite).episodes
+    else:
+        from harpy.learning.pitch_data import PitchEvaluationSuite
+
+        if not isinstance(suite, PitchEvaluationSuite):
+            raise ValueError("suite must be an EpisodeSuite or PitchEvaluationSuite")
+        episodes = suite.episodes
+    env = environment_factory()
+    results: list[EpisodeDiagnostic] = []
+    try:
+        for episode_index, episode in enumerate(episodes):
+            observation, _ = env.reset(options=episode.reset_options())
+            decisions: list[DiagnosticDecisionInput] = []
+            while True:
+                decision = decide(_diagnostic_observation_snapshot(observation))
+                if not isinstance(decision, DiagnosticDecisionInput):
+                    raise LearningExecutionError(
+                        "diagnostic decision adapter must return DiagnosticDecisionInput"
+                    )
+                decisions.append(decision)
+                observation, _, terminated, truncated, _ = env.step(decision.action)
+                if terminated or truncated:
+                    terminal = _terminal_result(env)
+                    break
+            diagnostic = diagnose_episode(
+                episode_index=episode_index,
+                source_pitch_cents=episode.source_pitch_cents,
+                target_note_index=episode.target_note_index,
+                decisions=tuple(decisions),
+            )
+            if (
+                (terminal.target_note_index, terminal.source_pitch_cents)
+                != (episode.target_note_index, episode.source_pitch_cents)
+                or terminal.actions != tuple(item.action for item in decisions)
+                or terminal.terminal_reason is not diagnostic.terminal_reason
+                or terminal.final_absolute_error_cents != diagnostic.final_absolute_error_cents
+                or len(terminal.actions) != diagnostic.action_count
+                or terminal.excess_actions != diagnostic.excess_actions
+                or terminal.invalid_action_count != diagnostic.bound_blocked_action_count
+            ):
+                raise LearningExecutionError(
+                    "terminal EpisodeResult does not match the derived diagnostic"
+                )
+            results.append(diagnostic)
+    finally:
+        env.close()
+    return tuple(results)
+
+
+def _diagnostic_observation_snapshot(observation: object) -> dict[str, object]:
+    """Read raw values once, own arrays, then validate the exact snapshot."""
+
+    if not isinstance(observation, Mapping):
+        raise LearningExecutionError("environment observation must be a mapping")
+    raw_keys = ("spectrum", "target_note", "controls", "steps_remaining")
+    if set(observation) != set(raw_keys):
+        raise LearningExecutionError(
+            "environment observation must contain exactly spectrum, target_note, controls, "
+            "and steps_remaining"
+        )
+    snapshot: dict[str, object] = {}
+    for key in raw_keys:
+        value = observation[key]
+        snapshot[key] = (
+            np.array(value, copy=True, order="C") if isinstance(value, np.ndarray) else value
+        )
+    try:
+        preprocess_observation(snapshot)
+    except Exception as error:
+        raise LearningExecutionError(f"invalid environment observation: {error}") from error
+    return snapshot
+
+
 class _PlannerActor:
     """Episode-local adapter whose private cursor cannot cross episode boundaries."""
 
@@ -1065,12 +1158,14 @@ def _row_to_document(row: EvaluationRow) -> dict[str, JSONValue]:
         "training_environment_steps": row.training_environment_steps,
         "training_examples": row.training_examples,
         "training_wall_time_seconds": row.training_wall_time_seconds,
-        "metrics": _metrics_to_document(row.metrics),
-        "episodes": [_record_to_document(record) for record in row.episodes],
+        "metrics": aggregate_metrics_to_document(row.metrics),
+        "episodes": [terminal_episode_record_to_document(record) for record in row.episodes],
     }
 
 
-def _metrics_to_document(metrics: AggregateMetrics) -> dict[str, JSONValue]:
+def aggregate_metrics_to_document(metrics: AggregateMetrics) -> dict[str, JSONValue]:
+    """Encode one exact aggregate without weakening its raw-evidence constructor."""
+
     return {
         "episodes": metrics.episodes,
         "submitted_success_rate": metrics.submitted_success_rate,
@@ -1087,7 +1182,11 @@ def _metrics_to_document(metrics: AggregateMetrics) -> dict[str, JSONValue]:
     }
 
 
-def _record_to_document(record: TerminalEpisodeRecord) -> dict[str, JSONValue]:
+def terminal_episode_record_to_document(
+    record: TerminalEpisodeRecord,
+) -> dict[str, JSONValue]:
+    """Encode one immutable terminal episode record."""
+
     return {
         "episode_index": record.episode_index,
         "episode": {
@@ -1167,12 +1266,14 @@ def _row_from_document(value: object) -> EvaluationRow:
                 minimum=0.0,
             )
         ),
-        metrics=_metrics_from_document(mapping["metrics"]),
-        episodes=tuple(_record_from_document(item) for item in episodes_value),
+        metrics=aggregate_metrics_from_document(mapping["metrics"]),
+        episodes=tuple(terminal_episode_record_from_document(item) for item in episodes_value),
     )
 
 
-def _metrics_from_document(value: object) -> AggregateMetrics:
+def aggregate_metrics_from_document(value: object) -> AggregateMetrics:
+    """Strictly decode one aggregate metrics document."""
+
     mapping = _mapping(value, "aggregate metrics")
     fields = {
         "episodes",
@@ -1200,7 +1301,9 @@ def _metrics_from_document(value: object) -> AggregateMetrics:
     return AggregateMetrics(**arguments)  # type: ignore[arg-type]
 
 
-def _record_from_document(value: object) -> TerminalEpisodeRecord:
+def terminal_episode_record_from_document(value: object) -> TerminalEpisodeRecord:
+    """Strictly decode one terminal record through its immutable constructor."""
+
     mapping = _mapping(value, "terminal episode record")
     _exact_fields(
         mapping,
@@ -1289,6 +1392,14 @@ def _document_float(
     return _finite_float(value, field, minimum=minimum, maximum=maximum)
 
 
+# Frozen schema-v2 artifact codecs imported these names before the public codec seam
+# existed. Keep the exact aliases until that schema module can migrate independently.
+_metrics_from_document = aggregate_metrics_from_document
+_metrics_to_document = aggregate_metrics_to_document
+_record_from_document = terminal_episode_record_from_document
+_record_to_document = terminal_episode_record_to_document
+
+
 __all__ = [
     "EVALUATION_SCHEMA_VERSION",
     "SHUFFLED_SPECTRUM_PROBE",
@@ -1302,11 +1413,16 @@ __all__ = [
     "PPOScientificCriterion",
     "TerminalEpisodeRecord",
     "aggregate_episode_records",
+    "aggregate_metrics_from_document",
+    "aggregate_metrics_to_document",
     "build_evaluation_rows",
+    "diagnose_actor_suite",
     "evaluate_baseline_suite",
     "evaluate_bc_criterion",
     "evaluate_learned_actor",
     "evaluate_ppo_criterion",
     "make_indexed_spectrum_probe_factory",
     "make_spectrum_probe_factory",
+    "terminal_episode_record_from_document",
+    "terminal_episode_record_to_document",
 ]
