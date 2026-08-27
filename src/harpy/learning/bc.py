@@ -24,7 +24,7 @@ from harpy.envs.models import (
     PitchAction,
 )
 from harpy.envs.planning import minimum_action_plan
-from harpy.learning.actors import BCActor
+from harpy.learning.actors import BCActor, MaskedBCActor
 from harpy.learning.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     ArtifactCompletion,
@@ -521,6 +521,25 @@ def load_bc_actor(
     model = BCPolicyNetwork()
     model.load_state_dict(state, strict=True)
     return BCActor(model, device=torch.device(device.value))
+
+
+def load_masked_bc_actor(
+    artifact: LoadedArtifact | PendingArtifactView,
+    *,
+    device: DeviceName = DeviceName.CPU,
+) -> MaskedBCActor:
+    """Strictly reload a persisted BC model into the explicit diagnostic mask adapter."""
+
+    if not isinstance(device, DeviceName):
+        raise ValueError("device must be a DeviceName")
+    if device is DeviceName.CUDA and not torch.cuda.is_available():
+        raise ValueError("CUDA actor loading requested but CUDA is unavailable")
+    validate_bc_artifact(artifact)
+    state = _load_bc_state_dict(artifact.file("model.pt"))
+    _validate_bc_state_dict(state, expected_parameter_count=artifact.manifest.parameter_count)
+    model = BCPolicyNetwork()
+    model.load_state_dict(state, strict=True)
+    return MaskedBCActor(model, device=torch.device(device.value))
 
 
 def train_bc_artifact(
@@ -1150,6 +1169,7 @@ __all__ = [
     "OracleTrajectoryDataset",
     "build_oracle_examples",
     "load_bc_actor",
+    "load_masked_bc_actor",
     "next_action_accuracy",
     "save_bc_model",
     "train_bc_artifact",

@@ -7,10 +7,16 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from harpy.envs.models import PitchAction
+from harpy.envs.models import ControlState, PitchAction
+from harpy.learning.action_masks import legal_action_mask
 from harpy.learning.dependencies import require_training_dependencies
 from harpy.learning.errors import LearningContractError, LearningExecutionError
 from harpy.learning.observations import preprocess_observation
+
+BC_ACTOR_SEMANTICS_ID = "harpy-sine-policy-bc-v1"
+MASKED_BC_ACTOR_SEMANTICS_ID = "harpy-sine-policy-bc-public-bound-mask-v1"
+PPO_ACTOR_SEMANTICS_ID = "harpy-sine-policy-ppo-v1"
+_RAW_OBSERVATION_KEYS = frozenset({"spectrum", "target_note", "controls", "steps_remaining"})
 
 
 @runtime_checkable
@@ -35,6 +41,11 @@ class BCActor:
 
     def act(self, observation: Mapping[str, object]) -> PitchAction:
         """Select the first maximum of seven BC logits for one raw observation."""
+        logits = self._validated_logits(observation)
+        return PitchAction(int(self._torch.argmax(logits, dim=1).item()))
+
+    def _validated_logits(self, observation: Mapping[str, object]) -> object:
+        """Validate raw input and return one finite row of persisted-model logits."""
         policy_observation = preprocess_observation(observation)
         tensors = {
             "spectrum": self._torch.from_numpy(policy_observation["spectrum"])
@@ -50,7 +61,55 @@ class BCActor:
             raise LearningExecutionError("BC model must return logits with shape (1, 7)")
         if not self._torch.isfinite(logits).all():
             raise LearningExecutionError("BC model logits must contain only finite values")
-        return PitchAction(int(self._torch.argmax(logits, dim=1).item()))
+        return logits
+
+
+class MaskedBCActor(BCActor):
+    """Diagnostic BC adapter that removes only publicly bound-blocked actions."""
+
+    def act(self, observation: Mapping[str, object]) -> PitchAction:
+        """Mask illegal finite logits, then select their stable first maximum."""
+        snapshot = _owned_raw_observation_snapshot(observation)
+        logits = self._validated_logits(snapshot)
+        if not self._torch.is_floating_point(logits):
+            raise LearningExecutionError("BC model logits must use a floating-point dtype")
+        raw_controls = snapshot["controls"]
+        if not isinstance(raw_controls, np.ndarray):  # validated above; narrows typing
+            raise LearningContractError("controls must be an int16 ndarray")
+        controls = ControlState(*(int(value) for value in raw_controls))
+        legal = legal_action_mask(controls)
+        if not legal[PitchAction.SUBMIT]:
+            raise LearningExecutionError("Submit must remain legal in the BC action mask")
+        mask = self._torch.tensor(
+            legal,
+            dtype=self._torch.bool,
+            device=logits.device,
+        ).unsqueeze(0)
+        masked_logits = logits.masked_fill(~mask, -self._torch.inf)
+        return PitchAction(int(self._torch.argmax(masked_logits, dim=1).item()))
+
+
+def _owned_raw_observation_snapshot(
+    observation: Mapping[str, object],
+) -> dict[str, object]:
+    """Read raw fields once and own mutable arrays for masked-actor consistency."""
+    if not isinstance(observation, Mapping):
+        raise LearningContractError("observation must be a mapping")
+    if set(observation) != _RAW_OBSERVATION_KEYS:
+        raise LearningContractError(
+            "observation must contain exactly spectrum, target_note, controls, and steps_remaining"
+        )
+    snapshot = {
+        "spectrum": observation["spectrum"],
+        "target_note": observation["target_note"],
+        "controls": observation["controls"],
+        "steps_remaining": observation["steps_remaining"],
+    }
+    for field in ("spectrum", "controls"):
+        value = snapshot[field]
+        if isinstance(value, np.ndarray):
+            snapshot[field] = np.array(value, copy=True, order="C")
+    return snapshot
 
 
 class PPOActor:
@@ -83,4 +142,12 @@ def _ppo_action(value: object) -> PitchAction:
     return PitchAction(action)
 
 
-__all__ = ["Actor", "BCActor", "PPOActor"]
+__all__ = [
+    "BC_ACTOR_SEMANTICS_ID",
+    "MASKED_BC_ACTOR_SEMANTICS_ID",
+    "PPO_ACTOR_SEMANTICS_ID",
+    "Actor",
+    "BCActor",
+    "MaskedBCActor",
+    "PPOActor",
+]

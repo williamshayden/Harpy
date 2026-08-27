@@ -13,7 +13,7 @@ import torch
 from harpy.envs.models import MAX_STEPS, ControlState, ObservationMode, PitchAction, TerminalReason
 from harpy.envs.spectrum import LOG_SPECTRUM_SIZE
 from harpy.learning import bc
-from harpy.learning.actors import BCActor
+from harpy.learning.actors import BCActor, MaskedBCActor
 from harpy.learning.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     ArtifactCompletion,
@@ -36,6 +36,7 @@ from harpy.learning.bc import (
     BCExample,
     OracleTrajectoryDataset,
     load_bc_actor,
+    load_masked_bc_actor,
     next_action_accuracy,
     save_bc_model,
     train_bc_artifact,
@@ -743,6 +744,63 @@ def test_model_persistence_is_state_dict_only_and_actor_reload_validates_before_
     assert load_calls
     assert all(call == {"map_location": "cpu", "weights_only": True} for call in load_calls)
     assert writer.file_records[-1].relative_path == "model.pt"
+
+
+def test_masked_actor_loader_strictly_reloads_persisted_state_without_legacy_actor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, pending = _writer_with_core(tmp_path / "artifact")
+    events: list[str] = []
+    real_validate = bc.validate_bc_artifact
+    real_network = bc.BCPolicyNetwork
+    real_masked_actor = bc.MaskedBCActor
+
+    def recording_validate(artifact: LoadedArtifact | PendingArtifactView) -> None:
+        events.append("validate")
+        real_validate(artifact)
+
+    def recording_network() -> BCPolicyNetwork:
+        events.append("construct")
+        return real_network()
+
+    def recording_masked_actor(model: object, *, device: object) -> MaskedBCActor:
+        events.append("masked")
+        return real_masked_actor(model, device=device)
+
+    monkeypatch.setattr(bc, "validate_bc_artifact", recording_validate)
+    monkeypatch.setattr(bc, "BCPolicyNetwork", recording_network)
+    monkeypatch.setattr(bc, "MaskedBCActor", recording_masked_actor)
+    monkeypatch.setattr(
+        bc,
+        "BCActor",
+        lambda *args, **kwargs: pytest.fail("masked loader constructed a legacy BCActor"),
+    )
+
+    actor = load_masked_bc_actor(pending)
+
+    assert isinstance(actor, MaskedBCActor)
+    assert events[:3] == ["validate", "construct", "masked"]
+
+
+def test_masked_actor_loader_rejects_wrong_artifact_and_device_before_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, pending = _writer_with_core(tmp_path / "artifact")
+    monkeypatch.setattr(bc.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        bc,
+        "MaskedBCActor",
+        lambda *args, **kwargs: pytest.fail("invalid input constructed a masked actor"),
+    )
+
+    with pytest.raises(ValueError, match="DeviceName"):
+        load_masked_bc_actor(pending, device="cpu")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="CUDA"):
+        load_masked_bc_actor(pending, device=DeviceName.CUDA)
+    with pytest.raises(ValueError, match="artifact"):
+        load_masked_bc_actor(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
