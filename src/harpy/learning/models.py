@@ -51,12 +51,99 @@ class DeviceName(StrEnum):
     CUDA = "cuda"
 
 
+class PitchCoordinatePartition(StrEnum):
+    """The three disjoint final perception partitions in schema v2."""
+
+    IID = "iid"
+    OOD_LOWER = "ood_lower"
+    OOD_UPPER = "ood_upper"
+
+
 class EvaluationSuiteId(StrEnum):
     """Versioned identities for the fixed final evaluation suites."""
 
     SMOKE = "harpy-sine-policy-eval-smoke-v1"
     IID = "harpy-sine-policy-eval-iid-v1"
     REGISTER_OOD = "harpy-sine-policy-eval-register-ood-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class PitchCoordinateRecord:
+    """One raw schema-v2 pitch prediction with every derived field pinned."""
+
+    seed: int
+    distribution_id: str
+    split_digest_sha256: str
+    partition: PitchCoordinatePartition
+    true_coordinate_cents: int
+    predicted_grid_index: int
+    predicted_cents: int
+    signed_error_cents: int
+    absolute_error_cents: int
+
+    def __post_init__(self) -> None:
+        # Import schema-local identities only when a v2 record is constructed.  This
+        # leaves ordinary schema-v1 imports and bytes entirely unchanged.
+        from harpy.learning.pitch_data import (
+            PITCH_DISTRIBUTION_ID,
+            PITCH_SPLIT_DIGEST_SHA256,
+            pitch_coordinate_split,
+        )
+
+        seed = _integer(self.seed, "seed", minimum=0)
+        if self.distribution_id != PITCH_DISTRIBUTION_ID:
+            raise ValueError("distribution_id must match the pinned pitch distribution")
+        split_digest = _digest(self.split_digest_sha256, "split_digest_sha256")
+        if split_digest != PITCH_SPLIT_DIGEST_SHA256:
+            raise ValueError("split_digest_sha256 must match the pinned pitch split")
+        if not isinstance(self.partition, PitchCoordinatePartition):
+            raise ValueError("partition must be a PitchCoordinatePartition")
+        true_coordinate = _bounded_integer(
+            self.true_coordinate_cents,
+            "true_coordinate_cents",
+            SOURCE_MIN_CENTS,
+            SOURCE_MAX_CENTS,
+        )
+        split = pitch_coordinate_split()
+        partition_coordinates = {
+            PitchCoordinatePartition.IID: split.iid_holdout_coordinates,
+            PitchCoordinatePartition.OOD_LOWER: split.ood_lower_coordinates,
+            PitchCoordinatePartition.OOD_UPPER: split.ood_upper_coordinates,
+        }[self.partition]
+        if true_coordinate not in partition_coordinates:
+            raise ValueError("true_coordinate_cents must belong to its pinned partition")
+        predicted_index = _bounded_integer(
+            self.predicted_grid_index,
+            "predicted_grid_index",
+            0,
+            1_960,
+        )
+        predicted_cents = _bounded_integer(
+            self.predicted_cents,
+            "predicted_cents",
+            1_100,
+            10_900,
+        )
+        if predicted_cents != 1_100 + 5 * predicted_index:
+            raise ValueError("predicted_cents must be re-derived from predicted_grid_index")
+        signed_error = _integer(self.signed_error_cents, "signed_error_cents")
+        if signed_error != predicted_cents - true_coordinate:
+            raise ValueError("signed_error_cents must be re-derived from prediction and truth")
+        absolute_error = _integer(
+            self.absolute_error_cents,
+            "absolute_error_cents",
+            minimum=0,
+        )
+        if absolute_error != abs(signed_error):
+            raise ValueError("absolute_error_cents must be re-derived from signed_error_cents")
+
+        object.__setattr__(self, "seed", seed)
+        object.__setattr__(self, "split_digest_sha256", split_digest)
+        object.__setattr__(self, "true_coordinate_cents", true_coordinate)
+        object.__setattr__(self, "predicted_grid_index", predicted_index)
+        object.__setattr__(self, "predicted_cents", predicted_cents)
+        object.__setattr__(self, "signed_error_cents", signed_error)
+        object.__setattr__(self, "absolute_error_cents", absolute_error)
 
 
 def _integer(value: object, field: str, *, minimum: int | None = None) -> int:
@@ -545,6 +632,8 @@ __all__ = [
     "JSONValue",
     "PPOProfile",
     "PPOTrainingSummary",
+    "PitchCoordinatePartition",
+    "PitchCoordinateRecord",
     "ProfileName",
     "TrainerKind",
     "TrainingProfile",

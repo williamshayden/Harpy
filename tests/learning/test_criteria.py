@@ -8,7 +8,8 @@ from dataclasses import replace
 import pytest
 
 from harpy.envs.baselines import BaselineKind
-from harpy.envs.models import ObservationMode, TerminalReason
+from harpy.envs.models import TARGET_MIN_COORDINATE, ObservationMode, TerminalReason
+from harpy.envs.planning import minimum_action_plan
 from harpy.learning.evaluation import (
     SHUFFLED_SPECTRUM_PROBE,
     ZERO_SPECTRUM_PROBE,
@@ -19,7 +20,30 @@ from harpy.learning.evaluation import (
     evaluate_bc_criterion,
     evaluate_ppo_criterion,
 )
-from harpy.learning.models import EpisodeSpec, EpisodeSuite, EvaluationSuiteId, TrainerKind
+from harpy.learning.models import (
+    EpisodeSpec,
+    EpisodeSuite,
+    EvaluationSuiteId,
+    PitchCoordinatePartition,
+    PitchCoordinateRecord,
+    TrainerKind,
+)
+from harpy.learning.pitch_data import (
+    PITCH_DISTRIBUTION_ID,
+    PITCH_SPLIT_DIGEST_SHA256,
+    PitchEvaluationSuiteId,
+    PitchTrainerKind,
+    fixed_pitch_evaluation_suite,
+    pitch_coordinate_split,
+)
+from harpy.learning.pitch_evaluation import (
+    PITCH_SHUFFLED_SPECTRUM_PROBE,
+    PITCH_ZERO_SPECTRUM_PROBE,
+    PitchCoordinateEvaluation,
+    PitchEvaluationRow,
+    build_pitch_evaluation_row,
+    evaluate_pitch_criterion,
+)
 from harpy.learning.suites import fixed_evaluation_suite, suite_digest
 
 
@@ -469,3 +493,320 @@ def test_probe_rows_are_never_accepted_by_scientific_gates() -> None:
                 iid_row=_row(rate=0.5, probe=probe),
                 eligible=True,
             )
+
+
+def _pitch_coordinate_evaluation(
+    seed: int,
+    *,
+    iid_failures: int = 0,
+    lower_failures: int = 0,
+    upper_failures: int = 0,
+) -> PitchCoordinateEvaluation:
+    split = pitch_coordinate_split()
+    records: list[PitchCoordinateRecord] = []
+    for partition, coordinates, failures in (
+        (
+            PitchCoordinatePartition.IID,
+            tuple(sorted(split.iid_holdout_coordinates)),
+            iid_failures,
+        ),
+        (PitchCoordinatePartition.OOD_LOWER, split.ood_lower_coordinates, lower_failures),
+        (PitchCoordinatePartition.OOD_UPPER, split.ood_upper_coordinates, upper_failures),
+    ):
+        for index, coordinate in enumerate(coordinates):
+            prediction = coordinate - coordinate % 5 + (10 if index < failures else 0)
+            records.append(
+                PitchCoordinateRecord(
+                    seed=seed,
+                    distribution_id=PITCH_DISTRIBUTION_ID,
+                    split_digest_sha256=PITCH_SPLIT_DIGEST_SHA256,
+                    partition=partition,
+                    true_coordinate_cents=coordinate,
+                    predicted_grid_index=(prediction - 1_100) // 5,
+                    predicted_cents=prediction,
+                    signed_error_cents=prediction - coordinate,
+                    absolute_error_cents=abs(prediction - coordinate),
+                )
+            )
+    return PitchCoordinateEvaluation.from_records(seed=seed, records=tuple(records))
+
+
+def _pitch_terminal_records(
+    suite_id: PitchEvaluationSuiteId,
+    *,
+    successes: int,
+    invalid_actions: int = 0,
+    truncations: int = 0,
+    excess_actions: int = 3,
+) -> tuple[TerminalEpisodeRecord, ...]:
+    suite = fixed_pitch_evaluation_suite(suite_id)
+    records: list[TerminalEpisodeRecord] = []
+    for index, episode in enumerate(suite.episodes):
+        truncated = index >= len(suite.episodes) - truncations
+        success = index < successes and not truncated
+        optimal_action_count = len(
+            minimum_action_plan(
+                episode.source_pitch_cents
+                - 100 * (TARGET_MIN_COORDINATE + episode.target_note_index)
+            )
+        )
+        records.append(
+            TerminalEpisodeRecord(
+                episode_index=index,
+                episode=EpisodeSpec(episode.target_note_index, episode.source_pitch_cents),
+                submitted_success=success,
+                within_5_cents=success,
+                within_1_cent=success,
+                final_absolute_error_cents=0 if success else 100,
+                action_count=(
+                    64 if truncated else (optimal_action_count + excess_actions if success else 1)
+                ),
+                excess_actions=excess_actions if success else None,
+                invalid_action_count=invalid_actions if index == 0 else 0,
+                total_return=1.0 if success else -1.0,
+                terminal_reason=(
+                    TerminalReason.SUBMITTED_SUCCESS
+                    if success
+                    else (
+                        TerminalReason.BUDGET_EXHAUSTED
+                        if truncated
+                        else TerminalReason.SUBMITTED_FAILURE
+                    )
+                ),
+            )
+        )
+    return tuple(records)
+
+
+def _pitch_row(
+    seed: int,
+    suite_id: PitchEvaluationSuiteId,
+    *,
+    probe: str | None = None,
+    successes: int | None = None,
+    invalid_actions: int = 0,
+    truncations: int = 0,
+    excess_actions: int = 3,
+) -> PitchEvaluationRow:
+    suite = fixed_pitch_evaluation_suite(suite_id)
+    return build_pitch_evaluation_row(
+        actor_id=f"pitch-{seed}",
+        trainer=PitchTrainerKind.PITCH,
+        seed=seed,
+        environment_id="Harpy/SinePitch-v0",
+        observation_mode=ObservationMode.SPECTRUM,
+        suite=suite,
+        records=_pitch_terminal_records(
+            suite_id,
+            successes=len(suite.episodes) if successes is None else successes,
+            invalid_actions=invalid_actions,
+            truncations=truncations,
+            excess_actions=excess_actions,
+        ),
+        probe=probe,
+        parameter_count=2_497,
+        training_examples=1_400,
+        training_wall_time_seconds=1.0,
+    )
+
+
+def _pitch_baseline_row(kind: BaselineKind, suite_id: PitchEvaluationSuiteId):
+    suite = fixed_pitch_evaluation_suite(suite_id)
+    return build_pitch_evaluation_row(
+        actor_id=kind.value,
+        trainer=None,
+        seed=None,
+        environment_id=kind.environment_id,
+        observation_mode=kind.observation_mode,
+        suite=suite,
+        records=_pitch_terminal_records(suite_id, successes=len(suite.episodes)),
+    )
+
+
+def _pitch_checkpoint_rows(
+    *,
+    iid_successes: int = 250,
+    probe_successes: int = 100,
+    ood_successes: int = 200,
+    invalid_actions: int = 0,
+    truncations: int = 0,
+    excess_actions: int = 3,
+) -> tuple[PitchEvaluationRow, ...]:
+    rows: list[PitchEvaluationRow] = []
+    for seed in (0, 1, 2):
+        rows.extend(
+            (
+                _pitch_row(
+                    seed,
+                    PitchEvaluationSuiteId.IID,
+                    successes=iid_successes,
+                    invalid_actions=invalid_actions,
+                    truncations=truncations,
+                    excess_actions=excess_actions,
+                ),
+                _pitch_row(
+                    seed,
+                    PitchEvaluationSuiteId.OOD_LOWER,
+                    successes=ood_successes,
+                ),
+                _pitch_row(
+                    seed,
+                    PitchEvaluationSuiteId.OOD_UPPER,
+                    successes=ood_successes,
+                ),
+                _pitch_row(
+                    seed,
+                    PitchEvaluationSuiteId.IID,
+                    probe=PITCH_ZERO_SPECTRUM_PROBE,
+                    successes=probe_successes,
+                ),
+                _pitch_row(
+                    seed,
+                    PitchEvaluationSuiteId.IID,
+                    probe=PITCH_SHUFFLED_SPECTRUM_PROBE,
+                    successes=probe_successes,
+                ),
+            )
+        )
+    for kind in (
+        BaselineKind.RANDOM,
+        BaselineKind.REWARD_SEARCH,
+        BaselineKind.SPECTRUM_PEAK,
+        BaselineKind.ORACLE,
+    ):
+        rows.extend(
+            _pitch_baseline_row(kind, suite_id)
+            for suite_id in (
+                PitchEvaluationSuiteId.IID,
+                PitchEvaluationSuiteId.OOD_LOWER,
+                PitchEvaluationSuiteId.OOD_UPPER,
+            )
+        )
+    return tuple(rows)
+
+
+def test_pitch_criterion_recomputes_every_preregistered_threshold() -> None:
+    result = evaluate_pitch_criterion(
+        coordinate_evaluations=tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+        terminal_rows=_pitch_checkpoint_rows(),
+        eligible=True,
+    )
+
+    assert result.criterion_met is True
+    assert result.status == "criterion_met"
+    assert result.median_register_ood_submitted_success_rate == 1.0
+    assert tuple(seed.seed for seed in result.seeds) == (0, 1, 2)
+    assert all(seed.iid_coordinate_within_five_rate == 1.0 for seed in result.seeds)
+    assert all(seed.iid_mean_successful_excess_actions == 3.0 for seed in result.seeds)
+
+
+@pytest.mark.parametrize(
+    ("coordinate_evaluations", "terminal_rows", "failed_field"),
+    [
+        (
+            tuple(
+                _pitch_coordinate_evaluation(seed, iid_failures=5 if seed == 0 else 0)
+                for seed in (0, 1, 2)
+            ),
+            _pitch_checkpoint_rows(),
+            "iid_coordinate_within_five",
+        ),
+        (
+            tuple(
+                _pitch_coordinate_evaluation(seed, lower_failures=21 if seed == 0 else 0)
+                for seed in (0, 1, 2)
+            ),
+            _pitch_checkpoint_rows(),
+            "ood_lower_coordinate_within_five",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(iid_successes=237),
+            "iid_submitted_success",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(invalid_actions=1),
+            "iid_bound_blocked",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(truncations=1),
+            "iid_truncations",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(probe_successes=126),
+            "probe_margin",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(ood_successes=159),
+            "register_ood_submitted_success",
+        ),
+        (
+            tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+            _pitch_checkpoint_rows(excess_actions=5),
+            "iid_mean_successful_excess_actions",
+        ),
+    ],
+)
+def test_pitch_criterion_fails_each_independent_gate(
+    coordinate_evaluations,
+    terminal_rows,
+    failed_field: str,
+) -> None:
+    result = evaluate_pitch_criterion(
+        coordinate_evaluations=coordinate_evaluations,
+        terminal_rows=terminal_rows,
+        eligible=True,
+    )
+
+    assert result.criterion_met is False
+    assert result.status == "criterion_not_met"
+    assert failed_field in result.failed_gates
+
+
+def test_pitch_criterion_requires_exact_three_seed_raw_evidence_and_matrix() -> None:
+    evaluations = tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2))
+    rows = _pitch_checkpoint_rows()
+
+    with pytest.raises(ValueError, match="exact seeds 0, 1, and 2"):
+        evaluate_pitch_criterion(
+            coordinate_evaluations=evaluations[:2],
+            terminal_rows=rows,
+            eligible=True,
+        )
+    with pytest.raises(ValueError, match="exact checkpoint row matrix"):
+        evaluate_pitch_criterion(
+            coordinate_evaluations=evaluations,
+            terminal_rows=rows[:-1],
+            eligible=True,
+        )
+
+
+def test_pitch_criterion_ineligibility_does_not_inspect_evidence() -> None:
+    result = evaluate_pitch_criterion(
+        coordinate_evaluations=object(),  # type: ignore[arg-type]
+        terminal_rows=object(),  # type: ignore[arg-type]
+        eligible=False,
+    )
+
+    assert result.eligible is False
+    assert result.criterion_met is None
+    assert result.status == "ineligible"
+    assert result.seeds == ()
+    assert result.failed_gates == ()
+
+
+def test_pitch_criterion_summaries_cannot_be_constructed_without_raw_evidence() -> None:
+    result = evaluate_pitch_criterion(
+        coordinate_evaluations=tuple(_pitch_coordinate_evaluation(seed) for seed in (0, 1, 2)),
+        terminal_rows=_pitch_checkpoint_rows(),
+        eligible=True,
+    )
+
+    with pytest.raises(ValueError, match="raw evaluation evidence"):
+        replace(result)
+    with pytest.raises(ValueError, match="raw evaluation evidence"):
+        replace(result.seeds[0])

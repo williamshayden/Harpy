@@ -810,11 +810,20 @@ def build_evaluation_rows(
 
 
 class _SpectrumProbeWrapper(gymnasium.ObservationWrapper):
-    def __init__(self, env: gymnasium.Env, probe: str) -> None:
+    def __init__(
+        self,
+        env: gymnasium.Env,
+        probe: str,
+        *,
+        shuffle_permutation: np.ndarray[Any, np.dtype[np.int64]] | None = None,
+    ) -> None:
         super().__init__(env)
         if probe not in _PROBES:
             raise ValueError("probe must be zero_spectrum or shuffled_spectrum")
         self._probe = probe
+        self._shuffle_permutation = (
+            SPECTRUM_SHUFFLE_PERMUTATION if shuffle_permutation is None else shuffle_permutation
+        )
 
     def observation(self, observation: Mapping[str, object]) -> dict[str, object]:
         if "spectrum" not in observation:
@@ -827,7 +836,7 @@ class _SpectrumProbeWrapper(gymnasium.ObservationWrapper):
             spectrum.fill(0.0)
         else:
             spectrum = np.array(
-                spectrum[SPECTRUM_SHUFFLE_PERMUTATION],
+                spectrum[self._shuffle_permutation],
                 dtype=np.float32,
                 copy=True,
                 order="C",
@@ -849,6 +858,48 @@ def make_spectrum_probe_factory(
 
     def factory() -> gymnasium.Env:
         return _SpectrumProbeWrapper(environment_factory(), probe)
+
+    return factory
+
+
+def make_indexed_spectrum_probe_factory(
+    environment_factory: Callable[[], gymnasium.Env],
+    probe: str,
+    *,
+    shuffle_permutation: Sequence[int],
+) -> Callable[[], gymnasium.Env]:
+    """Build a probe wrapper with a caller-pinned complete spectrum permutation.
+
+    Schema v1 continues to use :func:`make_spectrum_probe_factory` and its historical
+    global permutation.  This explicit seam lets schema v2 supply its digest-derived
+    permutation without changing legacy behavior.
+    """
+
+    if not callable(environment_factory):
+        raise ValueError("environment_factory must be callable")
+    if probe not in _PROBES:
+        raise ValueError("probe must be zero_spectrum or shuffled_spectrum")
+    try:
+        raw_permutation = tuple(shuffle_permutation)
+        permutation = np.asarray(
+            tuple(_integer(index, "shuffle_permutation", minimum=0) for index in raw_permutation),
+            dtype=np.int64,
+        )
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("shuffle_permutation must contain every spectrum index once") from error
+    if permutation.shape != (1_961,) or not np.array_equal(
+        np.sort(permutation), np.arange(1_961, dtype=np.int64)
+    ):
+        raise ValueError("shuffle_permutation must contain every spectrum index once")
+    owned_permutation = np.array(permutation, dtype=np.int64, copy=True, order="C")
+    owned_permutation.setflags(write=False)
+
+    def factory() -> gymnasium.Env:
+        return _SpectrumProbeWrapper(
+            environment_factory(),
+            probe,
+            shuffle_permutation=owned_permutation,
+        )
 
     return factory
 
@@ -1256,5 +1307,6 @@ __all__ = [
     "evaluate_bc_criterion",
     "evaluate_learned_actor",
     "evaluate_ppo_criterion",
+    "make_indexed_spectrum_probe_factory",
     "make_spectrum_probe_factory",
 ]
