@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 from harpy.learning.models import (
     ARCHITECTURE_SCHEMA_ID,
@@ -40,6 +41,7 @@ from harpy.learning.models import (
 )
 
 ARTIFACT_SCHEMA_VERSION = 1
+PITCH_ARTIFACT_SCHEMA_VERSION = 2
 TRAIN_DISTRIBUTION_ID = "harpy-sine-policy-train-v1"
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -49,6 +51,31 @@ _REQUIRED_SOURCE_INPUTS = (
     "src/harpy/learning/models.py",
     "src/harpy/learning/suites.py",
     "uv.lock",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactSchemaRegistry:
+    """Immutable codec identities owned only by one artifact schema."""
+
+    schema_version: int
+    trainers: tuple[str, ...]
+    profiles: tuple[str, ...]
+    suites: tuple[str, ...]
+    architecture_ids: tuple[str, ...]
+    preprocessing_ids: tuple[str, ...]
+
+
+ARTIFACT_SCHEMA_V1_REGISTRY = ArtifactSchemaRegistry(
+    schema_version=ARTIFACT_SCHEMA_VERSION,
+    trainers=tuple(trainer.value for trainer in TrainerKind),
+    profiles=tuple(profile.value for profile in ProfileName),
+    suites=tuple(suite.value for suite in EvaluationSuiteId),
+    architecture_ids=(ARCHITECTURE_SCHEMA_ID,),
+    preprocessing_ids=(PREPROCESSING_SCHEMA_ID,),
+)
+ARTIFACT_SCHEMA_V1_REGISTRIES = MappingProxyType(
+    {ARTIFACT_SCHEMA_VERSION: ARTIFACT_SCHEMA_V1_REGISTRY}
 )
 
 
@@ -1693,17 +1720,39 @@ def _validate_summary_manifest(
 def read_training_config(
     artifact: LoadedArtifact | PendingArtifactView,
 ) -> TrainingConfigDocument:
-    config = TrainingConfigDocument.from_document(artifact.document("training-config.json"))
-    _validate_config_manifest(config, artifact.manifest)
-    return config
+    if isinstance(artifact, (LoadedArtifact, PendingArtifactView)):
+        config = TrainingConfigDocument.from_document(artifact.document("training-config.json"))
+        _validate_config_manifest(config, artifact.manifest)
+        return config
+
+    from harpy.learning.pitch_artifacts import (
+        LoadedPitchArtifact,
+        PendingPitchArtifactView,
+        read_pitch_training_config,
+    )
+
+    if isinstance(artifact, (LoadedPitchArtifact, PendingPitchArtifactView)):
+        return read_pitch_training_config(artifact)  # type: ignore[return-value]
+    raise ValueError("artifact must be a schema-v1 or schema-v2 artifact")
 
 
 def read_training_summary(
     artifact: LoadedArtifact | PendingArtifactView,
 ) -> TrainingSummaryDocument:
-    summary = TrainingSummaryDocument.from_document(artifact.document("training-summary.json"))
-    _validate_summary_manifest(summary, artifact.manifest)
-    return summary
+    if isinstance(artifact, (LoadedArtifact, PendingArtifactView)):
+        summary = TrainingSummaryDocument.from_document(artifact.document("training-summary.json"))
+        _validate_summary_manifest(summary, artifact.manifest)
+        return summary
+
+    from harpy.learning.pitch_artifacts import (
+        LoadedPitchArtifact,
+        PendingPitchArtifactView,
+        read_pitch_training_summary,
+    )
+
+    if isinstance(artifact, (LoadedPitchArtifact, PendingPitchArtifactView)):
+        return read_pitch_training_summary(artifact)  # type: ignore[return-value]
+    raise ValueError("artifact must be a schema-v1 or schema-v2 artifact")
 
 
 def _validate_disk_inventory(root: Path, expected_payloads: tuple[str, ...]) -> None:
@@ -1747,8 +1796,33 @@ def _read_regular_file_bytes(path: Path, field: str) -> bytes:
             os.close(descriptor)
 
 
-def load_artifact(root: Path) -> LoadedArtifact:
-    """Load a complete closed-inventory artifact after hashes and JSON validate."""
+def artifact_manifest_from_document(document: Mapping[str, JSONValue]) -> object:
+    """Dispatch a manifest only after reading its strict top-level schema ID."""
+    mapping = _mapping(document, "artifact manifest")
+    schema_version = _integer(mapping.get("schema_version"), "schema_version", minimum=1)
+    if schema_version == ARTIFACT_SCHEMA_VERSION:
+        return ArtifactManifest.from_document(document)
+    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+        from harpy.learning.pitch_artifacts import PitchArtifactManifest
+
+        return PitchArtifactManifest.from_document(document)
+    raise ValueError(f"unsupported artifact schema_version {schema_version}")
+
+
+def artifact_schema_registries() -> Mapping[int, object]:
+    """Return the immutable schema-first registry without merging schema ownership."""
+    from harpy.learning.pitch_artifacts import PITCH_ARTIFACT_SCHEMA_V2_REGISTRY
+
+    return MappingProxyType(
+        {
+            ARTIFACT_SCHEMA_VERSION: ARTIFACT_SCHEMA_V1_REGISTRY,
+            PITCH_ARTIFACT_SCHEMA_V2_REGISTRY.schema_version: (PITCH_ARTIFACT_SCHEMA_V2_REGISTRY),
+        }
+    )
+
+
+def load_artifact(root: Path) -> object:
+    """Schema-first load one complete, closed-inventory local artifact."""
 
     try:
         resolved = root.resolve(strict=True)
@@ -1767,9 +1841,21 @@ def load_artifact(root: Path) -> LoadedArtifact:
                 "artifact bootstrap did not publish a manifest; directory is safe to remove"
             )
         raise ValueError("artifact manifest.json is missing or unsafe")
-    manifest = ArtifactManifest.from_document(
-        decode_json_bytes(_read_regular_file_bytes(manifest_path, "artifact manifest.json"))
+    manifest_document = decode_json_bytes(
+        _read_regular_file_bytes(manifest_path, "artifact manifest.json")
     )
+    schema_version = _integer(
+        manifest_document.get("schema_version"),
+        "schema_version",
+        minimum=1,
+    )
+    if schema_version != ARTIFACT_SCHEMA_VERSION:
+        if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
+            from harpy.learning.pitch_artifacts import load_pitch_artifact
+
+            return load_pitch_artifact(resolved)
+        raise ValueError(f"unsupported artifact schema_version {schema_version}")
+    manifest = ArtifactManifest.from_document(manifest_document)
     if manifest.status is not ArtifactStatus.COMPLETE:
         raise ValueError("public artifact loader rejects an incomplete manifest")
     expected_payloads = required_payload_names(manifest.trainer, manifest.profile)
@@ -2100,9 +2186,13 @@ def capture_source_status(start: Path) -> SourceStatus:
 
 
 __all__ = [
+    "ARTIFACT_SCHEMA_V1_REGISTRIES",
+    "ARTIFACT_SCHEMA_V1_REGISTRY",
     "ARTIFACT_SCHEMA_VERSION",
+    "PITCH_ARTIFACT_SCHEMA_VERSION",
     "ArtifactCompletion",
     "ArtifactManifest",
+    "ArtifactSchemaRegistry",
     "ArtifactStatus",
     "ArtifactWriter",
     "BCTrainingCounts",
@@ -2115,6 +2205,8 @@ __all__ = [
     "SourceStatus",
     "TrainingConfigDocument",
     "TrainingSummaryDocument",
+    "artifact_manifest_from_document",
+    "artifact_schema_registries",
     "canonical_json_bytes",
     "capture_source_status",
     "decode_json_bytes",

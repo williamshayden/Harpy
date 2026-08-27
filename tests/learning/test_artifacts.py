@@ -4,6 +4,7 @@ import gc
 import hashlib
 import os
 import subprocess
+import sys
 import threading
 from contextlib import suppress
 from dataclasses import replace
@@ -1628,3 +1629,288 @@ def test_manifest_file_record_cannot_escape_root_even_with_valid_external_hash(
 
     with pytest.raises(ValueError, match="relative_path"):
         load_artifact(output)
+
+
+def test_unsupported_schema_rejects_without_importing_optional_v2_dependencies(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "unsupported-artifact"
+    artifact.mkdir()
+    (artifact / "manifest.json").write_bytes(b'{"schema_version":999}\n')
+    sentinel = tmp_path / "unsupported-schema.py"
+    sentinel.write_text(
+        """
+import importlib
+import sys
+from pathlib import Path
+
+from harpy.learning.artifacts import artifact_manifest_from_document, load_artifact
+
+real_import_module = importlib.import_module
+
+def blocked_import(name, package=None):
+    if name in {"torch", "stable_baselines3"}:
+        raise ModuleNotFoundError(name)
+    return real_import_module(name, package)
+
+importlib.import_module = blocked_import
+operations = (
+    lambda: artifact_manifest_from_document({"schema_version": 999}),
+    lambda: load_artifact(Path(sys.argv[1])),
+)
+for operation in operations:
+    try:
+        operation()
+    except ValueError as error:
+        assert "unsupported artifact schema_version 999" in str(error)
+    else:
+        raise AssertionError("unsupported schema was accepted")
+
+forbidden = ("harpy.learning.pitch_artifacts", "harpy.learning.pitch", "torch", "stable_baselines3")
+loaded = sorted(
+    name
+    for name in sys.modules
+    if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+)
+if loaded:
+    raise SystemExit(f"unsupported schema imported optional modules: {loaded}")
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(sentinel), str(artifact)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+_SCHEMA_V1_FIXTURE_ROOT = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "learning" / "schema-v1"
+)
+_SCHEMA_V1_FIXTURE_SHA256 = {
+    "bc-smoke/evaluation-smoke.json": (
+        "361221abbd975182264259cf8fab175494720c53715ba2a05604f14ec340dd8d"
+    ),
+    "bc-smoke/manifest.json": ("0f775d50663312d879209d7471f60feb3f5e167123430301bde5d22e6021c356"),
+    "bc-smoke/model.pt": ("615696641e2f1b82e3a8e996fe2f906eb2383d796ccbb51f688244d3a9b3dc47"),
+    "bc-smoke/training-config.json": (
+        "b906b2a41c0c04920152d8cff0550408319e3af1d4500a560cea420342f10a9a"
+    ),
+    "bc-smoke/training-summary.json": (
+        "00da99e1cc93f768cc4587633316f6abc6d6fc2da32d9167e96d05e51d1428e6"
+    ),
+    "episode-trace.json": ("ba713f0fb5e93013b5c6d1648c4eadf761650a1e7970d944a698be50b5b2cf15"),
+    "evaluation-report.json": ("b638edadedc8a088b4304f4d79bf13f5893ea87c68724a58e35e699cffa255b4"),
+    "ppo-smoke/evaluation-smoke.json": (
+        "c2bb46c0b4f83b28bbe501b0c3830589eee7acf5e490f9b8539438a67347fc4d"
+    ),
+    "ppo-smoke/manifest.json": ("5ba58331fc6c71fb4c6bab7f17c5b6a3fb8f4328963201a3cd730f4b77771bd3"),
+    "ppo-smoke/model.zip": ("0629ba00eb740234e60db80abbf5e04f4dfbaea1c2e09bbd33704fe53aa5f72c"),
+    "ppo-smoke/training-config.json": (
+        "db44753daf819b6dbc6d2e862d00f62f0718cebc6df972d403e5203345bc7564"
+    ),
+    "ppo-smoke/training-summary.json": (
+        "84327d2b7bcfea211f6c1e4962cab80134b91d20681105cbed6cdd3961ce04be"
+    ),
+}
+
+
+def _schema_v1_fixture_bytes(relative_path: str) -> bytes:
+    return (_SCHEMA_V1_FIXTURE_ROOT / relative_path).read_bytes()
+
+
+def test_frozen_schema_v1_fixture_file_set_and_bytes_are_pinned() -> None:
+    actual_paths = {
+        path.relative_to(_SCHEMA_V1_FIXTURE_ROOT).as_posix()
+        for path in _SCHEMA_V1_FIXTURE_ROOT.rglob("*")
+        if path.is_file()
+    }
+
+    assert actual_paths == set(_SCHEMA_V1_FIXTURE_SHA256)
+    assert {
+        relative_path: hashlib.sha256(_schema_v1_fixture_bytes(relative_path)).hexdigest()
+        for relative_path in sorted(actual_paths)
+    } == _SCHEMA_V1_FIXTURE_SHA256
+
+
+@pytest.mark.parametrize(
+    ("trainer", "fixture_directory", "model_name"),
+    [
+        (TrainerKind.BC, "bc-smoke", "model.pt"),
+        (TrainerKind.PPO, "ppo-smoke", "model.zip"),
+    ],
+)
+def test_frozen_schema_v1_complete_artifact_families_decode_and_reencode_exactly(
+    trainer: TrainerKind,
+    fixture_directory: str,
+    model_name: str,
+) -> None:
+    from harpy.learning.evaluation import EvaluationFile
+
+    root = _SCHEMA_V1_FIXTURE_ROOT / fixture_directory
+    loaded = load_artifact(root)
+
+    assert isinstance(loaded, LoadedArtifact)
+    assert loaded.manifest.trainer is trainer
+    assert loaded.manifest.schema_version == ARTIFACT_SCHEMA_VERSION
+    assert loaded.manifest.status is ArtifactStatus.COMPLETE
+    assert {path.name for path in root.iterdir()} == {
+        "manifest.json",
+        "training-config.json",
+        "training-summary.json",
+        model_name,
+        "evaluation-smoke.json",
+    }
+
+    manifest_bytes = _schema_v1_fixture_bytes(f"{fixture_directory}/manifest.json")
+    manifest = ArtifactManifest.from_document(decode_json_bytes(manifest_bytes))
+    assert manifest == loaded.manifest
+    assert canonical_json_bytes(manifest.to_document()) == manifest_bytes
+
+    config_bytes = _schema_v1_fixture_bytes(f"{fixture_directory}/training-config.json")
+    config = read_training_config(loaded)
+    assert isinstance(config, TrainingConfigDocument)
+    assert canonical_json_bytes(config.to_document()) == config_bytes
+
+    summary_bytes = _schema_v1_fixture_bytes(f"{fixture_directory}/training-summary.json")
+    summary = read_training_summary(loaded)
+    assert isinstance(summary, TrainingSummaryDocument)
+    assert canonical_json_bytes(summary.to_document()) == summary_bytes
+
+    evaluation_bytes = _schema_v1_fixture_bytes(f"{fixture_directory}/evaluation-smoke.json")
+    evaluation = EvaluationFile.from_document(decode_json_bytes(evaluation_bytes))
+    assert evaluation.rows[0].trainer is trainer
+    assert canonical_json_bytes(evaluation.to_document()) == evaluation_bytes
+
+
+def test_frozen_schema_v1_models_strict_load_and_repeat_seeded_actions() -> None:
+    from harpy.envs.models import PitchAction
+    from harpy.envs.sine_pitch import SinePitchEnv
+    from harpy.learning.bc import load_bc_actor, validate_bc_artifact
+    from harpy.learning.ppo import load_ppo_actor, validate_ppo_artifact
+
+    bc_artifact = load_artifact(_SCHEMA_V1_FIXTURE_ROOT / "bc-smoke")
+    ppo_artifact = load_artifact(_SCHEMA_V1_FIXTURE_ROOT / "ppo-smoke")
+    assert isinstance(bc_artifact, LoadedArtifact)
+    assert isinstance(ppo_artifact, LoadedArtifact)
+    validate_bc_artifact(bc_artifact)
+    validate_ppo_artifact(ppo_artifact)
+    actors = (
+        (load_bc_actor(bc_artifact), PitchAction.CENT_DOWN),
+        (load_ppo_actor(ppo_artifact), PitchAction.SUBMIT),
+    )
+
+    for actor, expected in actors:
+        actions = []
+        for _ in range(3):
+            environment = SinePitchEnv()
+            try:
+                observation, _info = environment.reset(seed=123)
+                actions.append(actor.act(observation))
+            finally:
+                environment.close()
+        assert tuple(actions) == (expected, expected, expected)
+
+    assert int(PitchAction.CENT_DOWN) == 2
+    assert int(PitchAction.SUBMIT) == 3
+
+
+def test_frozen_schema_v1_aggregate_report_decodes_and_reencodes_exactly() -> None:
+    from harpy.learning.workflows import (
+        evaluation_report_bytes,
+        evaluation_report_from_bytes,
+    )
+
+    content = _schema_v1_fixture_bytes("evaluation-report.json")
+    report = evaluation_report_from_bytes(content)
+
+    assert {row.trainer for row in report.rows if row.trainer is not None} == {
+        TrainerKind.BC,
+        TrainerKind.PPO,
+    }
+    assert report.bc_criterion is not None
+    assert report.ppo_criterion is not None
+    assert evaluation_report_bytes(report) == content
+
+
+def test_frozen_schema_v1_trace_decodes_and_reencodes_exactly() -> None:
+    from harpy.envs.models import PitchAction, TerminalReason
+    from harpy.learning.trace import EpisodeTrace, TraceStep, trace_json_bytes
+
+    content = _schema_v1_fixture_bytes("episode-trace.json")
+    document = decode_json_bytes(content)
+    steps = document["steps"]
+    assert isinstance(steps, list)
+    episode = EpisodeTrace(
+        environment_id=document["environment_id"],  # type: ignore[arg-type]
+        distribution_id=document["distribution_id"],  # type: ignore[arg-type]
+        seed=document["seed"],  # type: ignore[arg-type]
+        target_note_index=document["target_note_index"],  # type: ignore[arg-type]
+        target_note=document["target_note"],  # type: ignore[arg-type]
+        steps=tuple(
+            TraceStep(
+                step=step["step"],
+                action=PitchAction(step["action"]),
+                reward=step["reward"],
+            )
+            for step in steps
+            if isinstance(step, dict)
+        ),  # type: ignore[arg-type]
+        terminal_reason=TerminalReason(document["terminal_reason"]),  # type: ignore[arg-type]
+        final_absolute_error_cents=document["final_absolute_error_cents"],  # type: ignore[arg-type]
+        submitted_success=document["submitted_success"],  # type: ignore[arg-type]
+        action_count=document["action_count"],  # type: ignore[arg-type]
+        excess_actions=document["excess_actions"],  # type: ignore[arg-type]
+        total_return=document["total_return"],  # type: ignore[arg-type]
+    )
+
+    assert trace_json_bytes(episode) == content
+
+
+def test_schema_v1_loader_stays_dependency_free_after_schema_v2(
+    tmp_path: Path,
+) -> None:
+    import sys
+
+    sentinel = tmp_path / "v1-loader-regression.py"
+    code = """
+from pathlib import Path
+import sys
+
+from harpy.learning.artifacts import (
+    LoadedArtifact,
+    load_artifact,
+    read_training_config,
+    read_training_summary,
+)
+
+root = Path(sys.argv[1])
+for directory in ("bc-smoke", "ppo-smoke"):
+    artifact = load_artifact(root / directory)
+    assert isinstance(artifact, LoadedArtifact)
+    assert read_training_config(artifact).schema_version == 1
+    assert read_training_summary(artifact).schema_version == 1
+
+forbidden = ("harpy.learning.pitch_artifacts", "harpy.learning.pitch", "torch", "stable_baselines3")
+loaded = sorted(
+    name
+    for name in sys.modules
+    if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+)
+if loaded:
+    raise SystemExit(f"schema-v1 path imported optional modules: {loaded}")
+"""
+    sentinel.write_text(code, encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(sentinel), str(_SCHEMA_V1_FIXTURE_ROOT)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
