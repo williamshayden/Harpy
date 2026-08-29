@@ -108,10 +108,18 @@ uv run harpy-sine-learn diagnose \
   --suite iid --output runs/milestone-e-pitch-iid-diagnostics.json --device cpu
 ```
 
-CPU is the authoritative Milestone E device. `--device cuda` is always explicit,
-fails when CUDA is unavailable, and cannot produce scientific-criterion evidence.
-Only the compatible, committed, CPU checkpoint triple for seeds 0, 1, and 2 may
-access the final Milestone E suites.
+CPU remains the authoritative device for the frozen Milestone E result. Milestone
+E.1 additionally admits one fresh, clean, homogeneous CUDA checkpoint trio with the
+same exact seeds `0`, `1`, and `2`. CUDA training is explicit and fails when CUDA is
+unavailable; internal smoke evaluation and final evaluation/diagnostics remain on
+CPU. `evaluate` automatically emits the historical schema-v2 report for an eligible
+CPU trio or the additive schema-v3 cohort report for a qualifying CUDA trio.
+
+Each CUDA artifact remains individually ineligible under the immutable schema-v2
+manifest contract; only the complete source-bound E.1 cohort can own scientific
+eligibility. Existing exploratory CUDA artifacts are never promoted or mixed into a
+new cohort. The E.1 design is documented in
+`docs/superpowers/specs/2026-08-28-harpy-milestone-e1-cuda-device-cohort-design.md`.
 
 The learned estimator sees only the actor-visible candidate spectrum and predicts a
 location on Harpy's fixed five-cent grid. A stateless symbolic planner then uses the

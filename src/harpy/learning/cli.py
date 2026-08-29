@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from harpy.learning.artifacts import write_new_bytes
-from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.dependencies import (
+    configure_deterministic_cuda_environment,
+    require_training_dependencies,
+)
 from harpy.learning.errors import DependencyUnavailableError, LearningContractError
 from harpy.learning.models import DeviceName, ProfileName
 from harpy.learning.trace import format_human_trace, trace_json_bytes
@@ -276,6 +279,8 @@ def _create_parent(path: Path) -> None:
 
 
 def _require_requested_device(device: DeviceName) -> None:
+    if device is DeviceName.CUDA:
+        configure_deterministic_cuda_environment()
     stack = require_training_dependencies()
     if device is DeviceName.CUDA and not stack.torch.cuda.is_available():
         raise DependencyUnavailableError("CUDA was requested but is unavailable")

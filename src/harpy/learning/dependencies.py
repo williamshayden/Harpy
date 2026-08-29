@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import ModuleType
@@ -10,6 +11,18 @@ from types import ModuleType
 from harpy.learning.errors import DependencyUnavailableError
 
 TRAIN_INSTALL_INSTRUCTION = "uv sync --group train"
+CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG = ":4096:8"
+
+
+def configure_deterministic_cuda_environment() -> None:
+    """Pin the cuBLAS workspace before any CUDA runtime interaction.
+
+    NVIDIA requires this process environment setting for deterministic cuBLAS on
+    CUDA 10.2 and newer.  The E.1 protocol owns one exact setting rather than
+    inheriting a caller's potentially different workspace choice.
+    """
+
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG
 
 
 @dataclass(frozen=True, slots=True)

@@ -295,7 +295,7 @@ class EvaluationReport:
 
 
 def evaluation_report_bytes(report: object) -> bytes:
-    """Schema-first encode one v1 or v2 evaluation report."""
+    """Schema-first encode one v1, v2, or E.1 evaluation report."""
 
     if isinstance(report, EvaluationReport):
         return canonical_json_bytes(report.to_document())
@@ -303,7 +303,13 @@ def evaluation_report_bytes(report: object) -> bytes:
 
     if isinstance(report, PitchEvaluationReport):
         return canonical_json_bytes(report.to_document())
-    raise ValueError("report must be an EvaluationReport or PitchEvaluationReport")
+    from harpy.learning.pitch_e1 import PitchE1EvaluationReport
+
+    if isinstance(report, PitchE1EvaluationReport):
+        return canonical_json_bytes(report.to_document())
+    raise ValueError(
+        "report must be an EvaluationReport, PitchEvaluationReport, or PitchE1EvaluationReport"
+    )
 
 
 def evaluation_report_from_bytes(content: bytes) -> object:
@@ -321,6 +327,13 @@ def evaluation_report_from_bytes(content: bytes) -> object:
         from harpy.learning.pitch_reports import PitchEvaluationReport
 
         return PitchEvaluationReport.from_document(document)
+    from harpy.learning.pitch_e1 import (
+        PITCH_E1_REPORT_SCHEMA_VERSION,
+        PitchE1EvaluationReport,
+    )
+
+    if schema_version == PITCH_E1_REPORT_SCHEMA_VERSION:
+        return PitchE1EvaluationReport.from_document(document)
     raise ValueError(f"unsupported evaluation report schema_version {schema_version}")
 
 
@@ -465,7 +478,20 @@ def _peek_artifact_seed(path: Path) -> int:
         raise ArtifactError(f"invalid artifact manifest seed at {path}: {error}") from error
 
 
-def _peek_pitch_aggregate_identity(path: Path) -> tuple[str, str, bool, str]:
+def _peek_pitch_training_device(path: Path) -> DeviceName:
+    """Read only the schema-v2 training device needed for protocol routing."""
+
+    try:
+        document = decode_json_bytes(
+            _read_regular_file_bytes(path / "manifest.json", "artifact manifest.json")
+        )
+        runtime = _mapping(document.get("runtime"), "runtime")
+        return _enum(DeviceName, runtime.get("device"), "runtime.device")
+    except Exception as error:
+        raise ArtifactError(f"invalid pitch training-device dispatch at {path}: {error}") from error
+
+
+def _peek_pitch_aggregate_identity(path: Path) -> tuple[str, str, bool, str, DeviceName]:
     """Read the manifest-only eligibility and compatibility fields for final diagnostics."""
 
     try:
@@ -514,19 +540,27 @@ def _peek_pitch_aggregate_identity(path: Path) -> tuple[str, str, bool, str]:
         ) from error
     if status is not ArtifactStatus.COMPLETE:
         raise ArtifactError(f"pitch aggregate artifact is incomplete: {path}")
+    cpu_protocol = (
+        training_device is DeviceName.CPU
+        and eligible
+        and criterion_status is CriterionStatus.ELIGIBLE_FOR_AGGREGATE
+    )
+    cuda_protocol = (
+        training_device is DeviceName.CUDA
+        and not eligible
+        and criterion_status is CriterionStatus.INELIGIBLE
+    )
     if (
-        not eligible
-        or criterion_status is not CriterionStatus.ELIGIBLE_FOR_AGGREGATE
-        or training_device is not DeviceName.CPU
+        not (cpu_protocol or cuda_protocol)
         or evaluation_device is not DeviceName.CPU
         or dirty_tree
         or not required_inputs_committed
     ):
         raise LearningContractError(
             "invalid pitch checkpoint set: pitch aggregate artifacts must each be "
-            "eligible CPU checkpoints"
+            "valid CPU checkpoints or prospective E.1 CUDA checkpoints"
         )
-    return commit, dependency_lock, required_inputs_committed, compatibility
+    return commit, dependency_lock, required_inputs_committed, compatibility, training_device
 
 
 def _preflight_pitch_artifacts(
@@ -537,6 +571,20 @@ def _preflight_pitch_artifacts(
     from harpy.learning.pitch_artifacts import preflight_pitch_artifacts
 
     return preflight_pitch_artifacts(paths)
+
+
+def _preflight_pitch_e1_artifacts(paths: Sequence[Path]) -> object:
+    """Lazy bridge to the prospective homogeneous-CUDA cohort gate."""
+
+    from harpy.learning.pitch_artifacts import (
+        capture_pitch_source_status,
+        preflight_pitch_e1_artifacts,
+    )
+
+    return preflight_pitch_e1_artifacts(
+        paths,
+        evaluator_source=capture_pitch_source_status(Path(__file__)),
+    )
 
 
 def _evaluate_pitch_artifacts(
@@ -573,8 +621,16 @@ def _evaluate_pitch_artifacts(
         raise LearningContractError(
             "pitch evaluation requires one smoke artifact or exactly three checkpoints"
         )
+    training_devices = tuple(_peek_pitch_training_device(path) for path in paths)
+    e1_requested = any(item is DeviceName.CUDA for item in training_devices)
+    if e1_requested and device is not DeviceName.CPU:
+        raise LearningContractError("E.1 final evaluation must use CPU")
     try:
-        artifacts = _preflight_pitch_artifacts(paths)
+        admitted = (
+            _preflight_pitch_e1_artifacts(paths)
+            if e1_requested
+            else _preflight_pitch_artifacts(paths)
+        )
     except PitchArtifactSetError as error:
         raise LearningContractError(f"invalid pitch checkpoint set: {error}") from error
     except LearningContractError as error:
@@ -583,13 +639,46 @@ def _evaluate_pitch_artifacts(
         raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
     _require_evaluation_device(device)
     try:
-        return _evaluate_pitch_checkpoint(artifacts, device=device)
+        if e1_requested:
+            return _evaluate_pitch_e1_checkpoint(admitted)
+        return _evaluate_pitch_checkpoint(admitted, device=device)
     except DependencyUnavailableError:
         raise
     except (ArtifactError, LearningContractError, LearningExecutionError):
         raise
     except Exception as error:
         raise LearningExecutionError(f"pitch checkpoint evaluation failed: {error}") from error
+
+
+def _evaluate_pitch_e1_checkpoint(cohort: object) -> object:
+    """Evaluate one prospective CUDA cohort on CPU and bind complete provenance."""
+
+    from harpy.learning.pitch_artifacts import PitchE1ArtifactCohort
+    from harpy.learning.pitch_e1 import (
+        PitchE1ArtifactProvenance,
+        PitchE1EvaluationReport,
+        PitchE1RawEvidence,
+    )
+
+    if not isinstance(cohort, PitchE1ArtifactCohort):
+        raise LearningContractError("E.1 evaluation requires an admitted CUDA cohort")
+    evaluator_source = cohort.evaluator_source
+    provenance = tuple(
+        PitchE1ArtifactProvenance(
+            seed=artifact.manifest.seed,
+            artifact_manifest_sha256=_artifact_manifest_sha256(artifact.root),
+            source=artifact.manifest.source,
+            runtime=artifact.manifest.runtime,
+            compatibility_sha256=artifact.manifest.compatibility_sha256,
+        )
+        for artifact in cohort.artifacts
+    )
+    pitch_report = _evaluate_pitch_checkpoint(cohort.artifacts, device=DeviceName.CPU)
+    return PitchE1EvaluationReport.create(
+        artifacts=provenance,
+        evaluator_source=evaluator_source,
+        evidence=PitchE1RawEvidence.from_pitch_report(pitch_report),
+    )
 
 
 def _evaluate_pitch_smoke(artifact: object, *, device: DeviceName) -> object:
@@ -910,8 +999,16 @@ def diagnose_artifacts(
                 )
             _require_evaluation_device(device)
             return _diagnose_pitch_artifacts((artifact,), suite=suite, device=device)
+        training_devices = tuple(_peek_pitch_training_device(path) for path in paths)
+        e1_requested = any(item is DeviceName.CUDA for item in training_devices)
+        if e1_requested and device is not DeviceName.CPU:
+            raise LearningContractError("E.1 final diagnostics must use CPU")
         try:
-            artifacts = _preflight_pitch_artifacts(paths)
+            admitted = (
+                _preflight_pitch_e1_artifacts(paths)
+                if e1_requested
+                else _preflight_pitch_artifacts(paths)
+            )
         except PitchArtifactSetError as error:
             raise LearningContractError(f"invalid pitch checkpoint set: {error}") from error
         except LearningContractError as error:
@@ -919,6 +1016,7 @@ def diagnose_artifacts(
         except ValueError as error:
             raise ArtifactError(f"invalid pitch checkpoint artifact: {error}") from error
         _require_evaluation_device(device)
+        artifacts = admitted.artifacts if e1_requested else admitted
         return _diagnose_pitch_artifacts(artifacts, suite=suite, device=device)
     raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
 
@@ -999,12 +1097,23 @@ def _diagnostic_request_context(
         seeds = tuple(_peek_artifact_seed(path) for path in paths)
         if tuple(sorted(seeds)) != (0, 1, 2):
             raise LearningContractError("final pitch diagnostics require exact seeds 0, 1, and 2")
+        training_devices = tuple(_peek_pitch_training_device(path) for path in paths)
+        if len(set(training_devices)) != 1:
+            raise LearningContractError(
+                "invalid pitch checkpoint set: E.1 artifacts must share one "
+                "homogeneous training device"
+            )
         aggregate_identities = tuple(_peek_pitch_aggregate_identity(path) for path in paths)
         if len(set(aggregate_identities)) != 1:
             raise LearningContractError(
                 "invalid pitch checkpoint set: pitch aggregate artifacts must share source, "
                 "lock, and compatibility"
             )
+        if (
+            any(item is DeviceName.CUDA for item in training_devices)
+            and device is not DeviceName.CPU
+        ):
+            raise LearningContractError("E.1 final diagnostics must use CPU")
         return paths, identities
     raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
 

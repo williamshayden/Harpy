@@ -12,6 +12,7 @@ import operator
 import os
 import platform as platform_module
 import re
+import shutil
 import subprocess
 import weakref
 from collections.abc import Mapping, Sequence
@@ -65,7 +66,10 @@ from harpy.learning.artifacts import (
     read_json_document,
 )
 from harpy.learning.cache import SpectrumEvidenceCache
-from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.dependencies import (
+    configure_deterministic_cuda_environment,
+    require_training_dependencies,
+)
 from harpy.learning.envs import make_cached_sine_pitch_env
 from harpy.learning.errors import PitchArtifactSetError
 from harpy.learning.evaluation import make_indexed_spectrum_probe_factory
@@ -182,7 +186,10 @@ _PITCH_REQUIRED_SOURCE_INPUTS = (
     "src/harpy/learning/pitch.py",
     "src/harpy/learning/pitch_artifacts.py",
     "src/harpy/learning/pitch_evaluation.py",
+    "src/harpy/learning/pitch_e1.py",
+    "src/harpy/learning/pitch_reports.py",
     "src/harpy/learning/suites.py",
+    "src/harpy/learning/workflows.py",
     "src/harpy/synth/__init__.py",
     "src/harpy/synth/curves.py",
     "src/harpy/synth/engine.py",
@@ -1894,10 +1901,22 @@ def _validate_pitch_aggregate_identities(
         )
 
 
-def preflight_pitch_artifacts(
+def _pitch_checkpoint_metadata(
     artifact_paths: Sequence[Path],
-) -> tuple[LoadedPitchArtifact, LoadedPitchArtifact, LoadedPitchArtifact]:
-    """Validate the canonical checkpoint triple before suite or model construction."""
+) -> tuple[
+    tuple[
+        tuple[
+            LoadedPitchArtifact,
+            PitchTrainingSummaryDocument,
+            dict[str, JSONValue],
+            dict[str, JSONValue],
+        ],
+        ...,
+    ],
+    tuple[LoadedPitchArtifact, LoadedPitchArtifact, LoadedPitchArtifact],
+]:
+    """Load and order the exact checkpoint triple without applying a protocol."""
+
     if isinstance(artifact_paths, (str, bytes)):
         raise PitchArtifactSetError("artifact_paths must contain exactly three Paths")
     try:
@@ -1918,6 +1937,36 @@ def preflight_pitch_artifacts(
     ordered = tuple(item[0] for item in ordered_pairs)
     if tuple(item.manifest.seed for item in ordered) != (0, 1, 2):
         raise PitchArtifactSetError("pitch aggregate seeds must be exactly 0, 1, and 2")
+    return metadata, ordered  # type: ignore[return-value]
+
+
+def _finish_pitch_checkpoint_preflight(
+    metadata: Sequence[
+        tuple[
+            LoadedPitchArtifact,
+            PitchTrainingSummaryDocument,
+            dict[str, JSONValue],
+            dict[str, JSONValue],
+        ]
+    ],
+    ordered: Sequence[LoadedPitchArtifact],
+) -> None:
+    """Re-derive smoke evidence and validate trusted model payloads once admitted."""
+
+    metadata_by_root = {entry[0].root: entry for entry in metadata}
+    for item in ordered:
+        entry = metadata_by_root[item.root]
+        _semantic_evaluation_documents(item, entry[1], entry[2], entry[3])
+    for item in ordered:
+        load_pitch_estimator_model(item.file("model.pt"))
+
+
+def preflight_pitch_artifacts(
+    artifact_paths: Sequence[Path],
+) -> tuple[LoadedPitchArtifact, LoadedPitchArtifact, LoadedPitchArtifact]:
+    """Validate the frozen schema-v2 CPU checkpoint triple."""
+
+    metadata, ordered = _pitch_checkpoint_metadata(artifact_paths)
     if any(
         item.manifest.profile is not ProfileName.CHECKPOINT
         or not item.manifest.eligible_for_aggregate
@@ -1941,16 +1990,116 @@ def preflight_pitch_artifacts(
         for item in ordered
     )
     _validate_pitch_aggregate_identities(identities)
+    _finish_pitch_checkpoint_preflight(metadata, ordered)
+    return ordered
 
-    # Only a compatible exact triple may instantiate suite-backed evaluation rows.
-    # Re-derive every smoke-row semantic before loading any trusted model bytes.
-    metadata_by_root = {entry[0].root: entry for entry in metadata}
-    for item in ordered:
-        entry = metadata_by_root[item.root]
-        _semantic_evaluation_documents(item, entry[1], entry[2], entry[3])
-    for item in ordered:
-        load_pitch_estimator_model(item.file("model.pt"))
-    return ordered  # type: ignore[return-value]
+
+@dataclass(frozen=True, slots=True)
+class PitchE1ArtifactCohort:
+    """A schema-v2 artifact trio admitted by the prospective E.1 protocol."""
+
+    artifacts: tuple[LoadedPitchArtifact, LoadedPitchArtifact, LoadedPitchArtifact]
+    training_device: DeviceName
+    evaluator_source: SourceStatus
+
+    def __post_init__(self) -> None:
+        if tuple(item.manifest.seed for item in self.artifacts) != (0, 1, 2):
+            raise ValueError("E.1 artifacts must be ordered seeds 0, 1, and 2")
+        if not isinstance(self.training_device, DeviceName) or any(
+            item.manifest.runtime.device is not self.training_device for item in self.artifacts
+        ):
+            raise ValueError("E.1 artifacts must share the declared training device")
+        if not isinstance(self.evaluator_source, SourceStatus):
+            raise ValueError("evaluator_source must be a SourceStatus")
+        if (
+            self.evaluator_source.dirty_tree
+            or not self.evaluator_source.required_inputs_committed
+            or any(item.manifest.source != self.evaluator_source for item in self.artifacts)
+        ):
+            raise ValueError("E.1 evaluator source must exactly match the clean artifact source")
+
+
+def _pitch_runtime_cohort_identity(runtime: RuntimeStatus) -> tuple[object, ...]:
+    return (
+        runtime.python_version,
+        runtime.platform,
+        runtime.processor,
+        runtime.numpy_version,
+        runtime.gymnasium_version,
+        runtime.torch_version,
+        runtime.stable_baselines3_version,
+        runtime.device,
+        runtime.device_description,
+        runtime.cuda_runtime_version,
+        runtime.cuda_driver_version,
+    )
+
+
+def preflight_pitch_e1_artifacts(
+    artifact_paths: Sequence[Path],
+    *,
+    evaluator_source: SourceStatus | None = None,
+) -> PitchE1ArtifactCohort:
+    """Admit one homogeneous clean CUDA trio under the E.1 protocol.
+
+    CUDA manifests remain correctly ineligible under schema v2.  E.1 admission is a
+    separate cohort claim and never mutates or reinterprets that manifest field.
+    """
+
+    if evaluator_source is None:
+        evaluator_source = capture_pitch_source_status(Path(__file__))
+    if not isinstance(evaluator_source, SourceStatus):
+        raise PitchArtifactSetError("evaluator_source must be a SourceStatus")
+    metadata, ordered = _pitch_checkpoint_metadata(artifact_paths)
+    devices = {item.manifest.runtime.device for item in ordered}
+    if len(devices) != 1:
+        raise PitchArtifactSetError("E.1 artifacts must share one homogeneous training device")
+    training_device = next(iter(devices))
+    if any(
+        item.manifest.profile is not ProfileName.CHECKPOINT
+        or item.manifest.evaluation_device is not DeviceName.CPU
+        or item.manifest.source.dirty_tree
+        or not item.manifest.source.required_inputs_committed
+        for item in ordered
+    ):
+        raise PitchArtifactSetError(
+            "E.1 artifacts must be clean committed checkpoints with CPU internal evaluation"
+        )
+    if training_device is not DeviceName.CUDA:
+        raise PitchArtifactSetError("E.1 requires a homogeneous CUDA training cohort")
+    if any(
+        item.manifest.eligible_for_aggregate
+        or item.manifest.criterion_status is not CriterionStatus.INELIGIBLE
+        for item in ordered
+    ):
+        raise PitchArtifactSetError("E.1 CUDA artifacts must remain schema-v2 ineligible")
+    identities = tuple(
+        (
+            item.manifest.source.commit,
+            item.manifest.source.dependency_lock_sha256,
+            item.manifest.source.required_inputs_committed,
+            item.manifest.compatibility_sha256,
+        )
+        for item in ordered
+    )
+    _validate_pitch_aggregate_identities(identities)
+    if (
+        evaluator_source.dirty_tree
+        or not evaluator_source.required_inputs_committed
+        or any(item.manifest.source != evaluator_source for item in ordered)
+    ):
+        raise PitchArtifactSetError(
+            "E.1 evaluator source must exactly match the clean artifact source"
+        )
+    runtime_identities = {_pitch_runtime_cohort_identity(item.manifest.runtime) for item in ordered}
+    if len(runtime_identities) != 1:
+        raise PitchArtifactSetError("E.1 artifacts must share one homogeneous runtime cohort")
+    _finish_pitch_checkpoint_preflight(metadata, ordered)
+    return PitchE1ArtifactCohort(
+        artifacts=ordered,
+        training_device=training_device,
+        evaluator_source=evaluator_source,
+    )
 
 
 def capture_pitch_source_status(start: Path) -> SourceStatus:
@@ -2022,6 +2171,8 @@ def _validate_pitch_artifact_training_inputs(
         raise ValueError("output must be a pathlib.Path")
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
+    if device is DeviceName.CUDA:
+        configure_deterministic_cuda_environment()
     training_stack = require_training_dependencies()
     if device is DeviceName.CUDA and not training_stack.torch.cuda.is_available():
         raise ValueError("CUDA training requested but CUDA is unavailable")
@@ -2036,9 +2187,17 @@ def _capture_pitch_runtime_status(device: DeviceName) -> RuntimeStatus:
     if device is DeviceName.CPU:
         device_description = platform_module.processor() or "CPU"
         cuda_runtime_version = None
+        cuda_driver_version = None
     else:
-        device_description = torch.cuda.get_device_name(torch.cuda.current_device())
+        configure_deterministic_cuda_environment()
+        device_index = torch.cuda.current_device()
+        properties = torch.cuda.get_device_properties(device_index)
+        device_description = (
+            f"{properties.name}; compute capability {properties.major}.{properties.minor}; "
+            f"{properties.multi_processor_count} SMs"
+        )
         cuda_runtime_version = torch.version.cuda
+        cuda_driver_version = _cuda_driver_version()
     return RuntimeStatus(
         python_version=platform_module.python_version(),
         platform=platform_module.platform(),
@@ -2050,8 +2209,33 @@ def _capture_pitch_runtime_status(device: DeviceName) -> RuntimeStatus:
         device=device,
         device_description=device_description,
         cuda_runtime_version=cuda_runtime_version,
-        cuda_driver_version=None,
+        cuda_driver_version=cuda_driver_version,
     )
+
+
+def _cuda_driver_version() -> str | None:
+    """Best-effort capture of the host driver without making it an artifact gate."""
+
+    executable = shutil.which("nvidia-smi")
+    if executable is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                executable,
+                "--query-gpu=driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        versions = tuple(
+            line.strip() for line in completed.stdout.decode("ascii").splitlines() if line.strip()
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+    return versions[0] if versions and len(set(versions)) == 1 else None
 
 
 def _utc_now() -> str:
@@ -2314,6 +2498,7 @@ __all__ = [
     "PitchArtifactManifest",
     "PitchArtifactSchemaRegistry",
     "PitchArtifactWriter",
+    "PitchE1ArtifactCohort",
     "PitchSmokeEvaluationDocument",
     "PitchSmokePayloadKind",
     "PitchTrainingConfigDocument",
@@ -2323,6 +2508,7 @@ __all__ = [
     "load_pitch_artifact",
     "pitch_compatibility_sha256",
     "preflight_pitch_artifacts",
+    "preflight_pitch_e1_artifacts",
     "read_pitch_training_config",
     "read_pitch_training_summary",
     "train_pitch_artifact",

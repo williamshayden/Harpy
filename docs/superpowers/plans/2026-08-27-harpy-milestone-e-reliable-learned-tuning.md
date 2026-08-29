@@ -358,4 +358,3 @@ Release hardening is deliberately separate from Milestone E science. After E clo
 - complete the declared native GUI/audio support checks;
 - finalize metadata, compatibility statement, changelog, release notes, and hashes;
 - cut an RC, verify it from a clean clone/machine, then tag `v1.0.0`.
-

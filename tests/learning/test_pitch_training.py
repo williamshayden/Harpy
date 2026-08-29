@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -14,6 +15,10 @@ import torch
 
 from harpy.envs.spectrum import LOG_SPECTRUM_SIZE
 from harpy.learning import pitch
+from harpy.learning.dependencies import (
+    CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG,
+    configure_deterministic_cuda_environment,
+)
 from harpy.learning.errors import LearningContractError
 from harpy.learning.models import ProfileName
 from harpy.learning.pitch import (
@@ -258,6 +263,28 @@ def test_training_uses_seeded_cpu_shuffle_and_ordered_validation(
     assert all(call["shuffle"] is False for call in calls[1:])
     assert all(call["num_workers"] == 0 for call in calls)
     assert torch.are_deterministic_algorithms_enabled()
+
+
+def test_cuda_training_protocol_pins_workspace_and_disables_tf32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+    cuda_seeds: list[int] = []
+    monkeypatch.setattr(pitch.torch.cuda, "manual_seed_all", cuda_seeds.append)
+    monkeypatch.setattr(pitch.torch.backends.cuda.matmul, "allow_tf32", True)
+    monkeypatch.setattr(pitch.torch.backends.cudnn, "allow_tf32", True)
+
+    configure_deterministic_cuda_environment()
+    pitch._seed_training(17, torch.device("cuda"))
+
+    assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG
+    assert torch.are_deterministic_algorithms_enabled()
+    assert pitch.torch.backends.cudnn.benchmark is False
+    assert pitch.torch.backends.cudnn.deterministic is True
+    assert pitch.torch.backends.cuda.matmul.allow_tf32 is False
+    assert pitch.torch.backends.cudnn.allow_tf32 is False
+    assert pitch.PITCH_AMP_ENABLED is False
+    assert cuda_seeds and set(cuda_seeds) == {17}
     assert torch.backends.cudnn.benchmark is False
     assert torch.backends.cudnn.deterministic is True
 

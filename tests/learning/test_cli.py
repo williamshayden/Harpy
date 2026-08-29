@@ -726,11 +726,11 @@ def test_diagnose_wrong_pitch_seed_set_precedes_cuda_and_output_creation(
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [
-        ("ineligible", "eligible CPU checkpoints"),
-        ("cuda-training", "eligible CPU checkpoints"),
-        ("cuda-evaluation", "eligible CPU checkpoints"),
-        ("dirty", "eligible CPU checkpoints"),
-        ("uncommitted", "eligible CPU checkpoints"),
+        ("ineligible", "valid CPU checkpoints or prospective E.1 CUDA checkpoints"),
+        ("cuda-training", "homogeneous training device"),
+        ("cuda-evaluation", "valid CPU checkpoints or prospective E.1 CUDA checkpoints"),
+        ("dirty", "valid CPU checkpoints or prospective E.1 CUDA checkpoints"),
+        ("uncommitted", "valid CPU checkpoints or prospective E.1 CUDA checkpoints"),
         ("commit", "share source"),
         ("lock", "share source"),
         ("compatibility", "share source"),
@@ -798,6 +798,62 @@ def test_diagnose_ineligible_or_incompatible_pitch_triple_precedes_cuda_and_outp
     assert not output.parent.exists()
     assert captured.out == ""
     assert expected in captured.err
+
+
+def test_diagnose_exact_e1_cuda_triple_reaches_cpu_workflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifacts = []
+    for seed in (2, 0, 1):
+        artifact = tmp_path / f"pitch-{seed}"
+        _write_pitch_preflight_manifest(
+            artifact,
+            seed=seed,
+            eligible=False,
+            training_device="cuda",
+        )
+        artifacts.append(artifact)
+    output = tmp_path / "missing" / "diagnostics.json"
+    bundle = object()
+    content = b'{"schema_id":"harpy-sine-diagnostic-bundle-v1"}\n'
+    calls: list[tuple[tuple[Path, ...], str, DeviceName, bool]] = []
+    monkeypatch.setattr(cli, "_require_requested_device", lambda device: None)
+    monkeypatch.setattr(
+        cli,
+        "_diagnose_artifacts",
+        lambda paths, *, suite, device, bound_mask: (
+            calls.append((tuple(paths), suite, device, bound_mask)) or bundle
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_diagnostic_bundle_bytes",
+        lambda value: content if value is bundle else pytest.fail("wrong diagnostic bundle"),
+    )
+
+    assert (
+        cli.main(
+            [
+                "diagnose",
+                *(str(item) for item in artifacts),
+                "--suite",
+                "iid",
+                "--output",
+                str(output),
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+
+    assert calls == [((tuple(item.resolve() for item in artifacts)), "iid", DeviceName.CPU, False)]
+    assert output.read_bytes() == content
+    captured = capsys.readouterr()
+    assert captured.out.encode() == content
+    assert captured.err == f"{cli.TRUSTED_LOCAL_MODEL_WARNING}\n"
 
 
 def test_diagnose_multi_v1_bound_mask_precedes_device_and_output_creation(

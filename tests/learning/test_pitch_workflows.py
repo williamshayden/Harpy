@@ -19,6 +19,8 @@ from harpy.envs.models import ObservationMode, TerminalReason
 from harpy.learning.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     PITCH_ARTIFACT_SCHEMA_VERSION,
+    RuntimeStatus,
+    SourceStatus,
     canonical_json_bytes,
 )
 from harpy.learning.errors import (
@@ -50,6 +52,13 @@ from harpy.learning.pitch_data import (
     PitchTrainerKind,
     fixed_pitch_evaluation_suite,
     pitch_coordinate_split,
+)
+from harpy.learning.pitch_e1 import (
+    PITCH_E1_PROTOCOL_ID,
+    PITCH_E1_REPORT_SCHEMA_VERSION,
+    PitchE1ArtifactProvenance,
+    PitchE1EvaluationReport,
+    PitchE1RawEvidence,
 )
 from harpy.learning.pitch_evaluation import (
     PITCH_SHUFFLED_SPECTRUM_PROBE,
@@ -418,12 +427,137 @@ def test_pitch_checkpoint_report_pins_complete_order_and_cuda_ineligibility() ->
     assert cuda.criterion.status == "ineligible"
 
 
+def _e1_source() -> SourceStatus:
+    return SourceStatus(
+        commit="1" * 40,
+        dirty_tree=False,
+        tracked_diff_sha256=hashlib.sha256(b"").hexdigest(),
+        dependency_lock_sha256="2" * 64,
+        required_inputs_committed=True,
+    )
+
+
+def _e1_runtime() -> RuntimeStatus:
+    return RuntimeStatus(
+        python_version="3.12.3",
+        platform="Linux-test",
+        processor="x86_64",
+        numpy_version="2.5.1",
+        gymnasium_version="1.3.0",
+        torch_version="2.13.0+cu130",
+        stable_baselines3_version="2.9.0",
+        device=DeviceName.CUDA,
+        device_description="Test CUDA; compute capability 8.9; 16 SMs",
+        cuda_runtime_version="13.0",
+        cuda_driver_version="596.08",
+    )
+
+
+def _e1_report() -> PitchE1EvaluationReport:
+    source = _e1_source()
+    runtime = _e1_runtime()
+    provenance = tuple(
+        PitchE1ArtifactProvenance(
+            seed=seed,
+            artifact_manifest_sha256=str(seed + 3) * 64,
+            source=source,
+            runtime=runtime,
+            compatibility_sha256=pitch_compatibility_sha256(ProfileName.CHECKPOINT),
+        )
+        for seed in (0, 1, 2)
+    )
+    return PitchE1EvaluationReport.create(
+        artifacts=provenance,
+        evaluator_source=source,
+        evidence=PitchE1RawEvidence.from_pitch_report(_checkpoint_report(DeviceName.CPU)),
+    )
+
+
+def test_e1_cuda_report_is_strict_versioned_cpu_evidence() -> None:
+    report = _e1_report()
+    content = workflows.evaluation_report_bytes(report)
+
+    assert report.schema_version == PITCH_E1_REPORT_SCHEMA_VERSION == 3
+    assert report.protocol_id == PITCH_E1_PROTOCOL_ID
+    assert report.training_device is DeviceName.CUDA
+    assert report.evaluation_device is DeviceName.CPU
+    assert report.criterion.eligible is True
+    assert workflows.evaluation_report_from_bytes(content) == report
+    assert content == canonical_json_bytes(report.to_document())
+    with pytest.raises(ValueError, match="schema_version"):
+        workflows.evaluation_report_from_bytes(canonical_json_bytes(report.evidence.to_document()))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["training_device", "manifest", "source", "evidence", "criterion"],
+)
+def test_e1_report_decoder_rederives_cohort_identity(mutation: str) -> None:
+    document = copy.deepcopy(_e1_report().to_document())
+    if mutation == "training_device":
+        document["training_device"] = "cpu"
+    elif mutation == "manifest":
+        document["artifacts"][0]["artifact_manifest_sha256"] = "f" * 64
+    elif mutation == "source":
+        document["evaluator_source"]["commit"] = "9" * 40
+    elif mutation == "evidence":
+        document["evidence"]["terminal_rows"][0]["metrics"]["mean_return"] = 0.5
+    else:
+        document["criterion"]["status"] = "criterion_met"
+
+    with pytest.raises(ValueError):
+        workflows.evaluation_report_from_bytes(canonical_json_bytes(document))
+
+
+@pytest.mark.parametrize("mutation", ["reorder", "duplicate", "wrong", "compatibility", "digest"])
+def test_e1_report_rejects_cohort_identity_mutations(mutation: str) -> None:
+    document = copy.deepcopy(_e1_report().to_document())
+    if mutation == "reorder":
+        document["artifacts"][0], document["artifacts"][1] = (
+            document["artifacts"][1],
+            document["artifacts"][0],
+        )
+    elif mutation == "duplicate":
+        document["artifacts"][2]["seed"] = 1
+    elif mutation == "wrong":
+        document["artifacts"][2]["seed"] = 3
+    elif mutation == "compatibility":
+        document["artifacts"][2]["compatibility_sha256"] = "f" * 64
+    else:
+        document["cohort_digest_sha256"] = "f" * 64
+
+    with pytest.raises(ValueError):
+        workflows.evaluation_report_from_bytes(canonical_json_bytes(document))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("eligible", 0),
+        ("eligible", 1),
+        ("criterion_met", 0),
+        ("criterion_met", 1),
+        ("criterion_met", None),
+    ],
+)
+def test_e1_report_rejects_nonboolean_or_null_criterion_fields(
+    field: str,
+    value: object,
+) -> None:
+    document = copy.deepcopy(_e1_report().to_document())
+    document["criterion"][field] = value
+
+    with pytest.raises(ValueError, match="criterion"):
+        workflows.evaluation_report_from_bytes(canonical_json_bytes(document))
+
+
 def _write_peek_manifest(
     root: Path,
     *,
     schema_version: int,
     profile: ProfileName = ProfileName.SMOKE,
     seed: int = 0,
+    training_device: DeviceName = DeviceName.CPU,
 ) -> None:
     root.mkdir()
     document: dict[str, object] = {
@@ -433,7 +567,7 @@ def _write_peek_manifest(
         "trainer": "pitch" if schema_version == 2 else "bc",
     }
     if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
-        eligible = profile is ProfileName.CHECKPOINT
+        eligible = profile is ProfileName.CHECKPOINT and training_device is DeviceName.CPU
         document.update(
             {
                 "status": "complete",
@@ -443,7 +577,7 @@ def _write_peek_manifest(
                     "dependency_lock_sha256": "a" * 64,
                     "required_inputs_committed": True,
                 },
-                "runtime": {"device": "cpu"},
+                "runtime": {"device": training_device.value},
                 "evaluation_device": "cpu",
                 "eligible_for_aggregate": eligible,
                 "criterion_status": ("eligible_for_aggregate" if eligible else "ineligible"),
@@ -526,6 +660,80 @@ def test_checkpoint_calls_exact_preflight_once_before_final_evaluation(
 
     assert report is _checkpoint_report()
     assert tuple(event[0] for event in events) == ("preflight", "evaluate")
+
+
+def test_cuda_checkpoint_routes_through_e1_and_requires_cpu_final_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = tuple(tmp_path / f"seed-{seed}" for seed in (2, 0, 1))
+    for path, seed in zip(paths, (2, 0, 1), strict=True):
+        _write_peek_manifest(
+            path,
+            schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+            profile=ProfileName.CHECKPOINT,
+            seed=seed,
+            training_device=DeviceName.CUDA,
+        )
+    cohort = SimpleNamespace(training_device=DeviceName.CUDA, artifacts=(object(),) * 3)
+    expected = _e1_report()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        workflows,
+        "_preflight_pitch_e1_artifacts",
+        lambda supplied: calls.append(("preflight", tuple(supplied))) or cohort,
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_evaluate_pitch_e1_checkpoint",
+        lambda supplied: calls.append(("evaluate", supplied)) or expected,
+    )
+
+    assert workflows.evaluate_artifacts(paths, device=DeviceName.CPU) is expected
+    assert calls == [("preflight", paths), ("evaluate", cohort)]
+    with pytest.raises(LearningContractError, match=r"E\.1 final evaluation must use CPU"):
+        workflows.evaluate_artifacts(paths, device=DeviceName.CUDA)
+
+
+def test_stale_e1_source_blocks_evaluation_and_diagnostics_before_evidence_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = tuple(tmp_path / f"stale-seed-{seed}" for seed in (0, 1, 2))
+    for path, seed in zip(paths, (0, 1, 2), strict=True):
+        _write_peek_manifest(
+            path,
+            schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+            profile=ProfileName.CHECKPOINT,
+            seed=seed,
+            training_device=DeviceName.CUDA,
+        )
+
+    def stale_preflight(_paths: object) -> object:
+        raise PitchArtifactSetError("evaluator source is stale")
+
+    monkeypatch.setattr(workflows, "_preflight_pitch_e1_artifacts", stale_preflight)
+    monkeypatch.setattr(
+        workflows,
+        "_evaluate_pitch_e1_checkpoint",
+        lambda cohort: pytest.fail(f"stale source reached final evidence: {cohort}"),
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_diagnose_pitch_artifacts",
+        lambda *args, **kwargs: pytest.fail("stale source reached diagnostics evidence"),
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_require_evaluation_device",
+        lambda device: pytest.fail(f"stale source reached dependency/device access: {device}"),
+    )
+
+    with pytest.raises(LearningContractError, match="evaluator source is stale"):
+        workflows.evaluate_artifacts(paths)
+    with pytest.raises(LearningContractError, match="evaluator source is stale"):
+        workflows.diagnose_artifacts(paths, suite="iid")
 
 
 def test_pitch_checkpoint_reuses_each_reloaded_model_and_one_evidence_cache(
@@ -947,6 +1155,44 @@ def test_final_pitch_diagnostics_preflight_once_and_consume_seed_order(
 
     assert workflows.diagnose_artifacts(paths, suite="iid") is sentinel
     assert tuple(event[0] for event in events) == ("preflight", "diagnose")
+
+
+def test_final_cuda_pitch_diagnostics_use_e1_preflight_and_cpu_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = tuple(tmp_path / f"cuda-input-{seed}" for seed in (2, 0, 1))
+    for path, seed in zip(paths, (2, 0, 1), strict=True):
+        _write_peek_manifest(
+            path,
+            schema_version=PITCH_ARTIFACT_SCHEMA_VERSION,
+            profile=ProfileName.CHECKPOINT,
+            seed=seed,
+            training_device=DeviceName.CUDA,
+        )
+    artifacts = tuple(object.__new__(LoadedPitchArtifact) for _ in range(3))
+    cohort = SimpleNamespace(training_device=DeviceName.CUDA, artifacts=artifacts)
+    events: list[tuple[str, object]] = []
+    sentinel = object()
+
+    monkeypatch.setattr(
+        workflows,
+        "_preflight_pitch_e1_artifacts",
+        lambda supplied: events.append(("preflight", tuple(supplied))) or cohort,
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_diagnose_pitch_artifacts",
+        lambda supplied, *, suite, device: (
+            events.append(("diagnose", (tuple(supplied), suite, device))) or sentinel
+        ),
+    )
+    monkeypatch.setattr(workflows, "_require_evaluation_device", lambda device: None)
+
+    assert workflows.diagnose_artifacts(paths, suite="iid") is sentinel
+    assert tuple(event[0] for event in events) == ("preflight", "diagnose")
+    with pytest.raises(LearningContractError, match=r"E\.1 final diagnostics must use CPU"):
+        workflows.diagnose_artifacts(paths, suite="iid", device=DeviceName.CUDA)
 
 
 @pytest.mark.parametrize("suite", ["ood-lower", "ood-upper"])

@@ -77,6 +77,7 @@ from harpy.learning.pitch_artifacts import (
     load_pitch_artifact,
     pitch_compatibility_sha256,
     preflight_pitch_artifacts,
+    preflight_pitch_e1_artifacts,
     read_pitch_training_config,
     read_pitch_training_summary,
 )
@@ -130,7 +131,10 @@ _REQUIRED_PITCH_SOURCE_INPUTS = (
     "src/harpy/learning/pitch.py",
     "src/harpy/learning/pitch_artifacts.py",
     "src/harpy/learning/pitch_evaluation.py",
+    "src/harpy/learning/pitch_e1.py",
+    "src/harpy/learning/pitch_reports.py",
     "src/harpy/learning/suites.py",
+    "src/harpy/learning/workflows.py",
     "src/harpy/synth/__init__.py",
     "src/harpy/synth/curves.py",
     "src/harpy/synth/engine.py",
@@ -190,9 +194,11 @@ def _runtime(device: DeviceName = DeviceName.CPU) -> RuntimeStatus:
         torch_version=torch.__version__,
         stable_baselines3_version="2.9.0",
         device=device,
-        device_description="CPU" if device is DeviceName.CPU else "Test CUDA",
+        device_description=(
+            "CPU" if device is DeviceName.CPU else "Test CUDA; compute capability 8.9; 16 SMs"
+        ),
         cuda_runtime_version=None if device is DeviceName.CPU else "13.0",
-        cuda_driver_version=None,
+        cuda_driver_version=None if device is DeviceName.CPU else "596.08",
     )
 
 
@@ -508,6 +514,208 @@ def test_pitch_inventory_is_exactly_six_files_including_manifest() -> None:
 
 def test_pitch_provenance_requires_the_exact_schema_v2_source_inputs() -> None:
     assert pitch_artifacts._PITCH_REQUIRED_SOURCE_INPUTS == _REQUIRED_PITCH_SOURCE_INPUTS
+
+
+def test_e1_preflight_admits_only_homogeneous_cuda_checkpoint_cohort(tmp_path: Path) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"cuda-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA,
+        )
+        for seed in (2, 0, 1)
+    )
+
+    with pytest.raises(PitchArtifactSetError, match="eligible CPU"):
+        preflight_pitch_artifacts(tuple(item.root for item in artifacts))
+
+    cohort = preflight_pitch_e1_artifacts(
+        tuple(item.root for item in artifacts),
+        evaluator_source=_source(),
+    )
+
+    assert cohort.training_device is DeviceName.CUDA
+    assert tuple(item.manifest.seed for item in cohort.artifacts) == (0, 1, 2)
+    assert all(not item.manifest.eligible_for_aggregate for item in cohort.artifacts)
+
+
+def test_e1_preflight_rejects_mixed_training_devices(tmp_path: Path) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"mixed-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA if seed != 1 else DeviceName.CPU,
+        )
+        for seed in (0, 1, 2)
+    )
+
+    with pytest.raises(PitchArtifactSetError, match="homogeneous training device"):
+        preflight_pitch_e1_artifacts(
+            tuple(item.root for item in artifacts),
+            evaluator_source=_source(),
+        )
+
+
+def test_e1_stale_evaluator_source_fails_before_semantic_or_model_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"stale-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA,
+        )
+        for seed in (0, 1, 2)
+    )
+    monkeypatch.setattr(
+        pitch_artifacts,
+        "_semantic_evaluation_documents",
+        lambda *args, **kwargs: pytest.fail("stale source reached semantic evidence"),
+    )
+    monkeypatch.setattr(
+        pitch_artifacts,
+        "load_pitch_estimator_model",
+        lambda *args, **kwargs: pytest.fail("stale source reached model load"),
+    )
+
+    with pytest.raises(PitchArtifactSetError, match="evaluator source"):
+        preflight_pitch_e1_artifacts(
+            tuple(item.root for item in artifacts),
+            evaluator_source=_source(commit="2" * 40),
+        )
+
+
+def test_e1_preflight_rejects_runtime_field_disagreement(tmp_path: Path) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"runtime-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA,
+        )
+        for seed in (0, 1, 2)
+    )
+    manifest_path = artifacts[2].root / "manifest.json"
+    document = decode_json_bytes(manifest_path.read_bytes())
+    document["runtime"]["cuda_driver_version"] = "596.09"  # type: ignore[index]
+    manifest_path.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(PitchArtifactSetError, match="runtime cohort"):
+        preflight_pitch_e1_artifacts(
+            tuple(item.root for item in artifacts),
+            evaluator_source=_source(),
+        )
+
+
+@pytest.mark.parametrize("seeds", [(0, 1, 1), (0, 1, 3)])
+def test_e1_preflight_rejects_duplicate_or_wrong_seed_set(
+    tmp_path: Path,
+    seeds: tuple[int, int, int],
+) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"seed-{index}-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA,
+        )
+        for index, seed in enumerate(seeds)
+    )
+
+    with pytest.raises(PitchArtifactSetError, match="seeds must be exactly"):
+        preflight_pitch_e1_artifacts(
+            tuple(item.root for item in artifacts),
+            evaluator_source=_source(),
+        )
+
+
+def test_e1_preflight_rejects_compatibility_disagreement(tmp_path: Path) -> None:
+    artifacts = tuple(
+        _complete(
+            tmp_path / f"compatibility-{seed}",
+            ProfileName.CHECKPOINT,
+            seed,
+            training_device=DeviceName.CUDA,
+        )
+        for seed in (0, 1, 2)
+    )
+    manifest_path = artifacts[2].root / "manifest.json"
+    document = decode_json_bytes(manifest_path.read_bytes())
+    document["compatibility_sha256"] = _DIGEST_A
+    manifest_path.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(ValueError, match="compatibility"):
+        preflight_pitch_e1_artifacts(
+            tuple(item.root for item in artifacts),
+            evaluator_source=_source(),
+        )
+
+
+def test_cuda_runtime_capture_records_hardware_and_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    properties = SimpleNamespace(
+        name="Test GPU",
+        major=8,
+        minor=9,
+        multi_processor_count=16,
+    )
+    fake_torch = SimpleNamespace(
+        __version__="2.13.0+cu130",
+        version=SimpleNamespace(cuda="13.0"),
+        cuda=SimpleNamespace(
+            current_device=lambda: 0,
+            get_device_properties=lambda index: properties,
+        ),
+    )
+    monkeypatch.setattr(
+        pitch_artifacts,
+        "require_training_dependencies",
+        lambda: SimpleNamespace(
+            torch=fake_torch,
+            torch_version="2.13.0+cu130",
+            stable_baselines3_version="2.9.0",
+        ),
+    )
+    monkeypatch.setattr(pitch_artifacts, "_cuda_driver_version", lambda: "596.08")
+
+    runtime = pitch_artifacts._capture_pitch_runtime_status(DeviceName.CUDA)
+
+    assert runtime.device_description == "Test GPU; compute capability 8.9; 16 SMs"
+    assert runtime.cuda_runtime_version == "13.0"
+    assert runtime.cuda_driver_version == "596.08"
+
+
+def test_cuda_availability_probe_observes_workspace_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
+
+    def is_available() -> bool:
+        assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+        return True
+
+    monkeypatch.setattr(
+        pitch_artifacts,
+        "require_training_dependencies",
+        lambda: SimpleNamespace(
+            torch=SimpleNamespace(cuda=SimpleNamespace(is_available=is_available))
+        ),
+    )
+
+    seed, _stack = pitch_artifacts._validate_pitch_artifact_training_inputs(
+        ProfileName.CHECKPOINT,
+        0,
+        DeviceName.CUDA,
+        tmp_path / "new-artifact",
+    )
+
+    assert seed == 0
 
 
 @pytest.mark.parametrize(

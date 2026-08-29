@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import operator
+import os
 import random
 import time
 from collections.abc import Mapping, Sequence
@@ -21,7 +22,11 @@ import numpy as np
 
 from harpy.envs.spectrum import LOG_SPECTRUM_SIZE
 from harpy.learning.cache import SpectrumEvidenceCache
-from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.dependencies import (
+    CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG,
+    configure_deterministic_cuda_environment,
+    require_training_dependencies,
+)
 from harpy.learning.envs import SpectrumEvidenceProvider
 from harpy.learning.errors import LearningContractError, LearningExecutionError
 from harpy.learning.models import ProfileName
@@ -41,6 +46,7 @@ torch = _training_stack.torch
 
 PITCH_TRAINING_NUM_WORKERS: Final = 0
 PITCH_SHUFFLE_GENERATOR_DEVICE: Final = "cpu"
+PITCH_AMP_ENABLED: Final = False
 _MAX_TRAINING_COORDINATES: Final = 1_400
 _MAX_VALIDATION_COORDINATES: Final = 200
 _STATE_SHAPES: Final = {
@@ -806,6 +812,10 @@ def _validated_logits(value: object, batch_size: int) -> torch.Tensor:
 
 
 def _seed_training(seed: int, device: torch.device) -> None:
+    if device.type == "cuda":
+        configure_deterministic_cuda_environment()
+        if os.environ.get("CUBLAS_WORKSPACE_CONFIG") != CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG:
+            raise LearningExecutionError("deterministic CUDA workspace configuration is missing")
     random.seed(seed)
     np.random.seed(seed % 2**32)
     torch.manual_seed(seed % (2**63 - 1))
@@ -814,6 +824,8 @@ def _seed_training(seed: int, device: torch.device) -> None:
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 def _cpu_state_dict(model: PitchEstimatorNetwork) -> dict[str, torch.Tensor]:
@@ -848,8 +860,10 @@ def _validated_state_copy(value: object) -> dict[str, torch.Tensor]:
 def _torch_device(value: object) -> torch.device:
     if not isinstance(value, torch.device) or value.type not in {"cpu", "cuda"}:
         raise ValueError("device must be a CPU or CUDA torch.device")
-    if value.type == "cuda" and not torch.cuda.is_available():
-        raise ValueError("CUDA training requested but CUDA is unavailable")
+    if value.type == "cuda":
+        configure_deterministic_cuda_environment()
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA training requested but CUDA is unavailable")
     return value
 
 
@@ -900,6 +914,7 @@ def _dataset_index(value: object, length: int) -> int:
 
 
 __all__ = [
+    "PITCH_AMP_ENABLED",
     "PITCH_PROFILE_CONFIGS",
     "PITCH_SHUFFLE_GENERATOR_DEVICE",
     "PITCH_TRAINING_NUM_WORKERS",

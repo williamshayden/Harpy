@@ -5,6 +5,11 @@ Date: 2026-08-22
 Status: Approved by the user on 2026-08-27. This document is the locked scientific
 and product contract for implementation and acceptance.
 
+Amendment notice (2026-08-28): this preregistration and its CPU outcome remain
+unchanged. The approved additive CUDA-cohort protocol is specified separately in
+`2026-08-28-harpy-milestone-e1-cuda-device-cohort-design.md`; it does not
+retroactively alter any schema-v2 artifact, report, criterion, or conclusion here.
+
 ## Outcome
 
 Milestone E turns the first learned-policy checkpoint into a reliable learned
