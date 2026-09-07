@@ -125,6 +125,80 @@ def test_trace_maps_target_index_through_existing_tuning_helpers(
     assert result.target_note == expected
 
 
+def test_provenance_run_keeps_legacy_trace_bytes_and_distinguishes_training_and_episode_seeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    from harpy.learning.artifacts import FileRecord, SourceStatus, canonical_json_bytes
+    from harpy.learning.experiment_results import readout_bytes, readout_from_bytes
+
+    _install_env(monkeypatch, FastDirectEnv())
+    episode = trace.trace_episode(SequenceActor(PitchAction.SUBMIT), seed=417)
+    legacy_bytes = trace.trace_json_bytes(episode)
+    manifest_document = {"schema_version": 2, "trainer": "pitch", "seed": 17}
+    manifest_bytes = canonical_json_bytes(manifest_document)
+    (tmp_path / "manifest.json").write_bytes(manifest_bytes)
+    source = SourceStatus("a" * 40, True, "b" * 64, "c" * 64, True)
+    artifact = SimpleNamespace(
+        root=tmp_path,
+        manifest=SimpleNamespace(
+            schema_version=2,
+            trainer=PitchTrainerKind.PITCH,
+            seed=17,
+            profile=ProfileName.CHECKPOINT,
+            runtime=SimpleNamespace(device=DeviceName.CUDA),
+            source=source,
+            files=(FileRecord("model.pt", 123, "d" * 64),),
+            to_document=lambda: manifest_document,
+        ),
+    )
+    executions = []
+
+    def execute(path, *, seed, device):
+        executions.append((path, seed, device))
+        return episode, artifact
+
+    monkeypatch.setattr(workflows, "_run_artifact_with_context", execute)
+    result = workflows.run_artifact_result(tmp_path, seed=417)
+    document = result.to_document()
+
+    assert executions == [(tmp_path, 417, DeviceName.CPU)]
+    assert canonical_json_bytes(document["trace"]) == legacy_bytes
+    assert document["provenance"]["training_seed"] == 17
+    assert document["trace"]["seed"] == 417
+    assert document["provenance"]["training_device"] == "cuda"
+    assert document["provenance"]["evaluation_device"] == "cpu"
+    assert document["provenance"]["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert document["provenance"]["model_sha256"] == "d" * 64
+    assert result.provenance.source == source
+    assert readout_from_bytes(readout_bytes(result)) == result
+    assert trace.trace_json_bytes(episode) == legacy_bytes
+
+    document["criterion"]["criterion_met"] = True
+    with pytest.raises(ValueError, match="ineligible"):
+        readout_from_bytes(canonical_json_bytes(document))
+
+
+def test_provenance_export_rejects_a_manifest_changed_during_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harpy.learning.artifacts import canonical_json_bytes
+
+    _install_env(monkeypatch, FastDirectEnv())
+    episode = trace.trace_episode(SequenceActor(PitchAction.SUBMIT), seed=0)
+    (tmp_path / "manifest.json").write_bytes(canonical_json_bytes({"seed": 99}))
+    artifact = SimpleNamespace(
+        root=tmp_path, manifest=SimpleNamespace(to_document=lambda: {"seed": 17})
+    )
+    monkeypatch.setattr(
+        workflows, "_run_artifact_with_context", lambda *args, **kwargs: (episode, artifact)
+    )
+
+    with pytest.raises(ArtifactError, match="manifest changed"):
+        workflows.run_artifact_result(tmp_path, seed=0)
+
+
 def test_trace_rejects_non_pitch_action_before_step_and_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

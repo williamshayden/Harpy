@@ -34,7 +34,6 @@ def test_default_patch_is_the_approved_curve_enabled_sine_patch() -> None:
 def test_default_render_config_is_authoritative_mono_float32() -> None:
     assert RenderConfig() == RenderConfig(
         sample_rate_hz=48_000,
-        block_frames=256,
         channels=1,
         internal_dtype="float32",
     )
@@ -131,8 +130,6 @@ def test_output_gain_dbfs_must_be_finite_and_no_greater_than_zero(value: object)
     [
         ({"sample_rate_hz": 0}, "sample_rate_hz"),
         ({"sample_rate_hz": True}, "sample_rate_hz"),
-        ({"block_frames": 0}, "block_frames"),
-        ({"block_frames": False}, "block_frames"),
         ({"channels": 2}, "channels"),
         ({"channels": True}, "channels"),
         ({"internal_dtype": "float64"}, "internal_dtype"),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -154,10 +153,9 @@ def test_checkpoint_is_not_a_harpy_envs_compatibility_export() -> None:
 
 
 @pytest.mark.parametrize("entry_point", ["module", "console"])
-def test_entry_points_run_without_qt_stderr_or_files(entry_point: str, tmp_path: Path) -> None:
+def test_entry_points_run_without_stderr_or_files(entry_point: str, tmp_path: Path) -> None:
     run_directory = tmp_path / "empty-cwd"
     run_directory.mkdir()
-    environment = _qt_poisoned_environment(tmp_path)
     if entry_point == "module":
         command = [sys.executable, "-m", "harpy.envs.checkpoint"]
     else:
@@ -168,7 +166,6 @@ def test_entry_points_run_without_qt_stderr_or_files(entry_point: str, tmp_path:
     completed = subprocess.run(
         [*command, "--episodes", "1", "--seed", "0"],
         cwd=run_directory,
-        env=environment,
         capture_output=True,
         text=True,
         check=False,
@@ -204,33 +201,6 @@ def _expected_document(*, episodes: int, seed: int) -> str:
         "results": [summary.to_dict() for summary in _SUMMARIES],
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
-
-
-def _qt_poisoned_environment(tmp_path: Path) -> dict[str, str]:
-    poison_directory = tmp_path / "qt-poison"
-    poison_directory.mkdir()
-    (poison_directory / "sitecustomize.py").write_text(
-        """
-import builtins
-
-_original_import = builtins.__import__
-
-def _guarded_import(name, *args, **kwargs):
-    if name == "PySide6" or name.startswith("PySide6."):
-        raise RuntimeError("checkpoint command imported Qt")
-    return _original_import(name, *args, **kwargs)
-
-builtins.__import__ = _guarded_import
-""".lstrip(),
-        encoding="utf-8",
-    )
-    environment = os.environ.copy()
-    python_path = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [str(poison_directory), *(item for item in [python_path] if item)]
-    )
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    return environment
 
 
 _SUMMARY_FIELDS = {

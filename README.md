@@ -1,293 +1,158 @@
 # Harpy
 
-Harpy is a deterministic audio-control research workbench. Milestones A and B provide
-one monophonic NumPy sine engine, a PySide6/Qt Multimedia desktop workbench, strict
-versioned patch files, pure waveform/spectrum analysis, and graph-native envelope
-authoring. Milestone C adds a frozen, sine-only Gymnasium pitch-control environment and
-deterministic evaluation matrix. Milestone D adds Harpy's first learned policies on
-that unchanged environment: a behavior-cloning diagnostic followed by freshly
-initialized PPO. Milestone E adds a spectrum-only neural pitch estimator that replans
-on the same task through Harpy's existing symbolic planner and bounded controls.
+Harpy is a headless toolkit for reproducible audio-control research. It gives researchers a deterministic sine renderer, a small Gymnasium tuning task, classical baselines, and optional learned models whose results can be inspected and reproduced.
 
-The project notebook records the broader research hypotheses, references, decisions,
-and open questions:
+The task is deliberately narrow: tune one clean, procedurally generated sine through bounded musical controls, then explicitly submit. Harpy makes it possible to separate perception, planning, and learning failures. It does not yet establish reliable tuning of recorded, noisy, or polyphonic audio.
 
-- [Project notebook](docs/project-notebook.md)
-- [Milestone A design](docs/superpowers/specs/2026-08-07-harpy-milestone-a-foundation-workbench-design.md)
-- [Milestone A acceptance evidence](docs/verification/2026-08-07-milestone-a-acceptance.md)
-- [Milestone B approved design](docs/superpowers/specs/2026-08-08-harpy-milestone-b-envelope-authoring-design.md)
-- [Milestone B graph-native implementation plan](docs/superpowers/plans/2026-08-08-harpy-milestone-b-graph-native-envelope-controls.md)
-- [Milestone B acceptance evidence](docs/verification/2026-08-08-milestone-b-acceptance.md)
-- [Milestone C approved design](docs/superpowers/specs/2026-08-09-harpy-milestone-c-sine-pitch-gym-design.md)
-- [Milestone C implementation plan](docs/superpowers/plans/2026-08-09-harpy-milestone-c-sine-pitch-gym.md)
-- [Milestone C acceptance evidence](docs/verification/2026-08-09-milestone-c-sine-pitch-gym-acceptance.md)
-- [Milestone D approved design](docs/superpowers/specs/2026-08-10-harpy-milestone-d-learned-sine-policy-design.md)
-- [Milestone D implementation plan](docs/superpowers/plans/2026-08-10-harpy-milestone-d-learned-sine-policy.md)
-- [Milestone D acceptance evidence](docs/verification/2026-08-10-milestone-d-learned-sine-policy-acceptance.md)
-- [Milestone E approved design](docs/superpowers/specs/2026-08-22-harpy-milestone-e-reliable-learned-tuning-design.md)
-- [Milestone E implementation plan](docs/superpowers/plans/2026-08-27-harpy-milestone-e-reliable-learned-tuning.md)
+The [1.0.0 release notes](https://github.com/williamshayden/Harpy/blob/v1.0.0/CHANGELOG.md) describe the supported scope and migration from the retired development workbench.
 
-## Install, run, and verify
+## First experiment
 
-Harpy requires Python 3.12 and uses `uv` for its environment and lockfile.
+Use Python 3.12. Install a downloaded release wheel and run the baseline comparison:
 
 ```bash
-uv sync
-uv run harpy
+python -m pip install ./harpy_audio-1.0.0-py3-none-any.whl
+harpy-sine-gym --episodes 10 --seed 0 > baseline.json
+python -m json.tool baseline.json
 ```
 
-Run the headless Milestone C checkpoint and write one JSON document to standard output:
+After a package-index release, use `python -m pip install harpy-audio` instead. An installed package does not require `uv` or a Git checkout.
+
+The baseline command writes deterministic JSON with separate results for Random, Spectrum Peak, Oracle, and Reward Search. Read `submitted_success_rate`, final error, action count, and truncation together. Reaching the right pitch without submitting is not success. Oracle and Reward Search use different observation tracks; their results must not be pooled with spectrum-based actors.
+
+## Train, inspect, and understand a result
+
+The optional training stack contains PyTorch and Stable-Baselines3:
 
 ```bash
-uv run harpy-sine-gym --episodes 10 --seed 0
+python -m pip install './harpy_audio-1.0.0-py3-none-any.whl[train]'
+# After a package-index release: python -m pip install 'harpy-audio[train]'
+
+harpy-sine-learn train-pitch \
+  --profile smoke --seed 0 --output runs/pitch-smoke --device cpu
+
+harpy-sine-learn evaluate runs/pitch-smoke \
+  --output runs/pitch-smoke-report.json > /dev/null
+harpy-sine-learn summarize runs/pitch-smoke-report.json
+
+harpy-sine-learn diagnose runs/pitch-smoke \
+  --suite smoke --output runs/pitch-smoke-diagnostics.json > /dev/null
+harpy-sine-learn summarize runs/pitch-smoke-diagnostics.json --format markdown \
+  > runs/pitch-smoke-findings.md
+
+harpy-sine-learn run runs/pitch-smoke --seed 123
+harpy-sine-learn run runs/pitch-smoke --seed 123 --with-provenance \
+  > runs/pitch-smoke-trace.json
 ```
 
-Under WSLg, use the compositor's runtime directory if the inherited directory does not
-contain its Wayland socket. Preserve the existing `PULSE_SERVER` value:
+These shell examples use POSIX redirection. Progress and completion messages go to stderr. Evaluation and diagnosis write canonical JSON to stdout and, when requested, the same bytes to a file. `summarize` reads saved evidence without loading a model or requiring the training stack. It can produce a compact text readout or Markdown for a research notebook or README.
+
+Artifact directories and evaluation/diagnostic output files are create-only: choose a new path for every run. Keep reports outside their input artifact directories. Shell redirection itself follows your shell's overwrite rules. If training is interrupted, retain the incomplete artifact for inspection and retry at a fresh path.
+
+The smoke profile checks that the engineering workflow works; low model accuracy is expected and is not a scientific result. CPU is the default. CUDA training must be explicitly requested and fails when unavailable. A smoke model's `run` output demonstrates its behavior, not checkpoint-quality tuning.
+
+Model `.pt` and `.zip` files are trusted-local artifacts. The CLI warns before loading them. Only load your own artifacts or models from sources you trust.
+
+## Everyday research versus scientific checkpoints
+
+Inspect one pitch checkpoint without assembling a formal three-seed cohort:
 
 ```bash
-XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir uv run harpy
+harpy-sine-learn train-pitch \
+  --profile checkpoint --seed 7 --output runs/pitch-experiment --device cpu
+harpy-sine-learn evaluate runs/pitch-experiment --exploratory \
+  --output runs/pitch-experiment-report.json > /dev/null
+harpy-sine-learn diagnose runs/pitch-experiment --exploratory --suite iid \
+  --output runs/pitch-experiment-diagnostics.json > /dev/null
+harpy-sine-learn summarize runs/pitch-experiment-report.json --format markdown
 ```
 
-Run the complete automated checks with:
+Exploratory evaluation and diagnosis accept one complete pitch artifact, including arbitrary training seeds and artifacts from installed packages or modified source. Their results are explicitly ineligible for the frozen scientific criterion. The model and evaluation are real; the distinction concerns the strength of the claim.
 
-```bash
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-```
+Installed-package artifacts record a `package_snapshot` source identity: a digest of package contents and the distribution version when available. They do not claim a Git commit or a clean checkout. Historical source-checkout artifacts retain their original Git provenance and serialization. Older Harpy readers cannot read the new package-source variant; use this release to inspect it.
 
-## Learned tuning and policy workflow
+Formal evaluation retains the declared CPU cohort with exact seeds 0, 1, and 2, clean committed source and locked dependencies. E.1's separate homogeneous CUDA cohort additionally requires matching evaluator source and CPU evaluation. See the [research workflow and protocol guide](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/research-workflow.md) for complete commands, eligibility, and historical protocol links.
 
-Install the optional learned-policy stack with this single step:
+`run --json` retains the original canonical episode format. `run --with-provenance` writes a versioned JSON envelope with the manifest/model digests, trainer, training seed, source identity, and execution device. Prefer the latter when saving or sharing traces.
 
-```bash
-uv sync --group train
-```
+## What the current results show
 
-Run the complete Milestone E smoke workflow with four commands:
+The learned pitch estimator is a small spectrum-only network followed by the exact symbolic planner. It is a learned-perception experiment, not an end-to-end reinforcement-learning result. It has no hidden-pitch access, Spectrum Peak fallback, or evaluator rescue.
 
-```bash
-uv run harpy-sine-learn train-pitch \
-  --profile smoke --seed 0 --output runs/milestone-e-pitch-smoke --device cpu
+The recorded E.1 IID results are:
 
-uv run harpy-sine-learn diagnose runs/milestone-e-pitch-smoke \
-  --suite smoke --output runs/milestone-e-pitch-smoke-diagnostics.json --device cpu
+| Actor | Submitted within 5 cents | Truncated episodes | Mean final error |
+| --- | ---: | ---: | ---: |
+| Learned pitch, seed 0 | 94.0% | 15 / 250 | 47.556 cents |
+| Learned pitch, seed 1 | 96.8% | 8 / 250 | 21.388 cents |
+| Learned pitch, seed 2 | 100% | 0 / 250 | 1.980 cents |
+| Spectrum Peak | 100% | 0 / 250 | 1.252 cents |
 
-uv run harpy-sine-learn evaluate runs/milestone-e-pitch-smoke \
-  --output runs/milestone-e-pitch-smoke-report.json --device cpu
+The declared reliability criterion was **not met**. Rare pitch aliases can cause repeated-state loops and large final errors. The successful seed is not selected as a substitute for the complete cohort. Even that seed's submitted accuracy within one cent is 2%, versus Spectrum Peak's 58.4%; its mean action count is lower, 27.324 versus 29.492.
 
-uv run harpy-sine-learn run runs/milestone-e-pitch-smoke \
-  --seed 123 --device cpu
-```
+These are preserved historical results, not a newly trained release cohort. The [E.1 acceptance record](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/verification/2026-08-28-milestone-e1-cuda-device-cohort-acceptance.md) contains full metrics, provenance, probes, and failure analysis. BC and PPO remain reproducible Milestone D controls; their declared scientific criteria also missed. Negative outcomes are useful research evidence, not claims of dependable tuning performance.
 
-Artifact directories and diagnostic/evaluation files are create-only. Every path
-above must therefore be new, and diagnostic or report files must remain outside all
-input artifact directories. `diagnose` and `evaluate` write the same canonical JSON
-bytes to the requested file and standard output. `run` prints one complete
-human-readable action trace. Add `--json` to capture the same run as deterministic
-canonical JSON on standard output.
+## Use the Python API
 
-The eligible checkpoint uses three fresh, clean CPU artifacts with the exact seeds
-0, 1, and 2:
-
-```bash
-uv run harpy-sine-learn train-pitch \
-  --profile checkpoint --seed 0 --output runs/milestone-e-pitch-0 --device cpu
-uv run harpy-sine-learn train-pitch \
-  --profile checkpoint --seed 1 --output runs/milestone-e-pitch-1 --device cpu
-uv run harpy-sine-learn train-pitch \
-  --profile checkpoint --seed 2 --output runs/milestone-e-pitch-2 --device cpu
-
-uv run harpy-sine-learn evaluate \
-  runs/milestone-e-pitch-0 runs/milestone-e-pitch-1 runs/milestone-e-pitch-2 \
-  --output runs/milestone-e-pitch-report.json --device cpu
-
-uv run harpy-sine-learn diagnose \
-  runs/milestone-e-pitch-0 runs/milestone-e-pitch-1 runs/milestone-e-pitch-2 \
-  --suite iid --output runs/milestone-e-pitch-iid-diagnostics.json --device cpu
-```
-
-CPU remains the authoritative device for the frozen Milestone E result. Milestone
-E.1 additionally admits one fresh, clean, homogeneous CUDA checkpoint trio with the
-same exact seeds `0`, `1`, and `2`. CUDA training is explicit and fails when CUDA is
-unavailable; internal smoke evaluation and final evaluation/diagnostics remain on
-CPU. `evaluate` automatically emits the historical schema-v2 report for an eligible
-CPU trio or the additive schema-v3 cohort report for a qualifying CUDA trio.
-
-Each CUDA artifact remains individually ineligible under the immutable schema-v2
-manifest contract; only the complete source-bound E.1 cohort can own scientific
-eligibility. Existing exploratory CUDA artifacts are never promoted or mixed into a
-new cohort. The E.1 design is documented in
-`docs/superpowers/specs/2026-08-28-harpy-milestone-e1-cuda-device-cohort-design.md`.
-
-The learned estimator sees only the actor-visible candidate spectrum and predicts a
-location on Harpy's fixed five-cent grid. A stateless symbolic planner then uses the
-public target and Octave, Semitone, and Cent controls, replans after every observation,
-and executes the existing seven actions. There is no hidden pitch, target/reference
-spectrum, Spectrum Peak fallback, or evaluator rescue in this actor.
-
-This lane tests a narrow learned-perception claim on the clean procedural single-sine
-task, not end-to-end learned-policy or reinforcement-learning mastery. It cannot
-establish performance on recorded, noisy, polyphonic, chordal, or pitch-shifted audio.
-The smoke profile proves only that training, persistence, reload, diagnostics,
-evaluation, and tracing work; it is never scientific evidence. Checkpoint reports
-remain valid when they honestly conclude `criterion_not_met`.
-
-The Milestone D learned-policy controls remain available with their original syntax
-and semantics:
-
-```bash
-uv run harpy-sine-learn train-bc \
-  --profile smoke --seed 0 --output runs/bc-smoke
-
-uv run harpy-sine-learn train-ppo \
-  --profile smoke --seed 0 --output runs/ppo-smoke
-
-uv run harpy-sine-learn evaluate runs/ppo-smoke
-
-uv run harpy-sine-learn run runs/ppo-smoke --seed 123
-```
-
-CPU remains Milestone D's default and authoritative checkpoint device. Adding
-`--device cuda` is an explicit exploratory choice: it fails if CUDA is unavailable,
-records CUDA provenance, and produces criterion-ineligible artifacts. Evaluation and
-hands-on runs also default to CPU.
-
-Behavior cloning is a supervised representation-and-control diagnostic trained from
-oracle action labels. PPO starts from a fresh random initialization and never reuses
-BC weights. Spectrum Peak is a separately labeled classical control for the clean
-procedural sine, not a learned-policy result. The candidate spectrum is already
-continuously visible in `Harpy/SinePitch-v0`; Milestone D does not add analysis tools
-or model-selected tool calls.
-
-The smoke profile establishes an engineering result: real training, persistence,
-reload, evaluation, and trace paths execute on the optional stack. It is deliberately
-ineligible for scientific criteria. Scientific outcomes come only from the declared
-clean CPU checkpoint runs and are reported honestly as `criterion_met` or
-`criterion_not_met`; PPO is not required to beat Spectrum Peak.
-
-Pitch and BC `.pt` files and PPO `.zip` files are trusted-local model artifacts. The
-CLI warns before loading them; do not load model files from untrusted sources.
-
-## Sine-pitch Gymnasium checkpoint
-
-Importing `harpy.envs` registers three versioned environments:
-
-| Environment ID | Observation track |
-| --- | --- |
-| `Harpy/SinePitch-v0` | Headline normalized log-frequency spectrum |
-| `Harpy/SinePitchOracle-v0` | Exact current-pitch coordinate control |
-| `Harpy/SinePitchRewardOnly-v0` | Controls, target, budget, and scalar feedback only |
-
-The default spectrum observation contains a normalized `float32` log-frequency magnitude
-array with shape `(1961,)`, the symbolic target note, the three control values, and the
-remaining action budget. Oracle replaces the spectrum with one exact current-pitch
-coordinate. Reward-only contains neither. These tracks answer different questions and
-their results must never be pooled.
-
-The stable discrete action IDs are:
-
-| ID | Action |
-| ---: | --- |
-| 0 | Octave Down |
-| 1 | Semitone Down |
-| 2 | Cent Down |
-| 3 | Submit |
-| 4 | Cent Up |
-| 5 | Semitone Up |
-| 6 | Octave Up |
-
-Octave, Semitone, and Cent are independent bounded controls with ranges `-2..2`,
-`-12..12`, and `-100..100`; they never carry into one another. An episode succeeds only
-when the actor explicitly submits at an inclusive absolute error of at most 5 cents.
-Accuracy within 1 cent is reported separately, and merely passing through either region
-does not terminate the episode.
-
-The public environment surface is:
+Render and analyze a sine without any UI or training dependency:
 
 ```python
-from harpy.envs import (
-    ControlState,
-    EpisodeResult,
-    ObservationMode,
-    PitchAction,
-    SinePitchEnv,
-    register_envs,
-)
+from harpy.analysis import analyze
+from harpy.synth import SynthEngine, SynthPatch
+from harpy.synth.models import RenderConfig
+
+render = RenderConfig(sample_rate_hz=48_000)
+engine = SynthEngine(render, SynthPatch())
+engine.note_on(440.0)
+samples = engine.render(48_000)  # mono float32; choose each block's length explicitly
+observation = analyze(samples, render.sample_rate_hz)
+print(observation.peak_frequency_hz)
 ```
 
-Actor-facing observations and `info` omit source pitch, exact error, optimal actions,
-and other evaluator truth. A harness may read immutable `EpisodeResult` only after the
-episode is done. This is an honest capability boundary for supported actors, not a
-security sandbox against Python code deliberately reaching into private state or
-`env.unwrapped`.
+`analyze` uses the most recent complete FFT capture and rejects non-finite samples in that capture. The synth accepts finite positive frequencies strictly below Nyquist. Patch JSON describes sound parameters, not performance state or an application session. `harpy.synth.patch_json` reads strict schema-v1/v2 patches and writes canonical v2; `harpy.tuning.Tuning` handles frequency/note conversions.
 
-The checkpoint command evaluates Random and Spectrum Peak on the spectrum track, Oracle
-on the oracle track, and Reward Search on the reward-only track. It emits separate rows
-under schema version 1 with checkpoint ID `harpy-milestone-c-sine-pitch-v0` and config ID
-`fixed-default-sine-v0`. Rows report submitted and positional accuracy separately,
-absolute final error, action and excess-action means, return, truncation, and invalid
-actions. The four baselines are deterministic, frozen, untrained reference policies;
-their output is not evidence of learned listening or model quality.
+Run the spectrum baseline through the public environment:
 
-For this procedural checkpoint, every applied pitch action directly re-synthesizes a
-fresh sine from immutable source truth plus cumulative controls. That is an ideal
-sine-only transformation backend, not recorded-audio pitch shifting.
+```python
+import gymnasium as gym
+import harpy.envs  # registers Harpy's environment IDs
+from harpy.envs.baselines import spectrum_peak_plan
 
-## Native workbench
+with gym.make("Harpy/SinePitch-v0") as env:
+    observation, _ = env.reset(seed=0)
+    for action in spectrum_peak_plan(observation):
+        observation, reward, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    print(env.unwrapped.episode_result)  # evaluator truth is available only after done
+```
 
-The GUI selects a continuous frequency from C2 through C4 (approximately
-130.812783–523.251131 Hz at A4 = 440 Hz), starts at C3, and exposes hold-to-play by
-mouse or Space. It shows a fixed-range 0–50 ms, ±1 FS waveform and a logarithmic
-20 Hz–20 kHz, -120–0 dBFS spectrum based on measured audio. The current patch is a
-sine oscillator with a 1 ms attack, 600 ms decay, -6 dB sustain, 600 ms release, and
--12 dBFS output gain.
+| Environment | Observation track |
+| --- | --- |
+| `Harpy/SinePitch-v0` | Normalized log-frequency spectrum with shape `(1961,)` |
+| `Harpy/SinePitchOracle-v0` | Exact current-pitch coordinate |
+| `Harpy/SinePitchRewardOnly-v0` | Controls, target, budget, and scalar feedback |
 
-The C2–C4 limit belongs only to the GUI. `SynthEngine` accepts every finite positive
-frequency strictly below half the configured sample rate (Nyquist).
+All tracks expose target, bounded controls, and remaining budget. Action IDs remain `0` Octave Down, `1` Semitone Down, `2` Cent Down, `3` Submit, `4` Cent Up, `5` Semitone Up, `6` Octave Up. Controls are independently bounded to octaves `-2..2`, semitones `-12..12`, and cents `-100..100`; they never carry into each other. Success requires an explicit submission within an inclusive five-cent tolerance and the 64-action budget. One-cent accuracy is reported separately.
 
-Milestone B adds graph-native A/D/S/R vertical scrubbing, transient exact editing,
-constrained Attack/Decay/Release curve handles, and a contextual envelope-only Reset.
-The frequency selector is a continuous logarithmic pro-audio dial with vertical drag,
-dynamic Shift fine mode, wheel and keyboard steps, a C3 reset, landmarks, and native
-accessible Dial semantics. Envelope edits made during a held note or its release are
-deferred and coalesced; the current voice finishes unchanged and the final admitted
-patch is rendered on the next Play.
+Actor observations omit source pitch and exact error. This is a supported API boundary, not a security sandbox against Python code deliberately accessing private state. Every applied action resynthesizes a fresh sine from immutable source truth and controls; it is not recorded-audio pitch shifting.
 
-## Public non-Qt API
+## Develop and verify
 
-The reusable research surface does not require a Qt application:
+Contributors use Python 3.12 and the committed `uv.lock`:
 
-- `harpy.synth.SynthPatch` is an immutable validated sound description; its nested
-  oscillator and envelope values live in `harpy.synth.models`.
-- `harpy.synth.patch_json` supplies `dumps_patch`, `loads_patch`, `save_patch`, and
-  `load_patch`. Harpy strictly reads schema-v1 linear patches and schema-v2
-  curve-enabled patches, rejecting missing, extra, duplicate, non-finite, and
-  incorrectly typed fields instead of accepting a partial document. It writes only
-  canonical schema v2.
-- `harpy.synth.SynthEngine` renders deterministic mono `float32` blocks and exposes
-  `note_on`, `retune`, `note_off`, `replace_patch`, `render`, and `reset`.
-- `harpy.tuning.Tuning` converts between hertz and MIDI coordinates and derives
-  note-name/cents readings. MIDI coordinates are conversion values, not engine state
-  or GUI controls.
-- `harpy.analysis.analyze` maps a one-dimensional sample array and sample rate to an
-  immutable `AudioObservation`, using an optional validated `AnalysisConfig`.
+```bash
+uv sync --locked --extra train
+uv run --locked --extra train pytest
+uv run --locked --extra train ruff check .
+uv run --locked --extra train ruff format --check .
+uv build
+```
 
-A patch JSON document contains only `schema_version`, oscillator configuration,
-envelope values and curves, and `output_gain_dbfs`. Selected or played frequency is
-performance state outside patch JSON. The document also contains no render/sample-rate
-setting, file history, path, identifier, or other application-owned storage metadata.
-A patch describes a sound, not a performance or a saved workbench session.
+Use `uv sync` without the extra for the base package. Real training smoke tests require the extra; a skipped training test is not proof that learning works. The pitch smoke test builds and installs the wheel outside Git, then exercises training, reload, diagnosis, evaluation, and tracing. Verification is currently exercised on Linux/WSL; native Windows and macOS have not been qualified.
 
-## Roadmap, not current capability
+Harpy ships no desktop or browser UI. The retired Sine Lab design documents remain historical evidence. A future visualization on the author's personal website is separate from this package. Recorded audio, additional waveforms, chords, polyphony, and generalized experiment storage require new experiments and contracts.
 
-Explicit analysis tools, recorded assets and real audio pitch shifting, raw-waveform
-observations and waveform generalization, additional oscillators, chords and
-polyphony, hosted actors, telemetry, durable experiment storage, and Gym episode replay
-in the GUI remain later work. Browser UI, MIDI input, imported-audio editing, a
-database, and third-party synth engines are likewise outside the current
-implementation. Milestone D's learned result applies only to the current clean,
-procedural single-sine spectrum task; it is not evidence for recorded audio, chords,
-or other waveforms. Milestone E adds learned spectral localization on that same narrow
-task; it does not broaden the audio domain.
+The [project notebook](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/project-notebook.md) preserves motivation, references, and decisions. The [workflow guide](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/research-workflow.md) indexes historical protocols. Before v1, unused GUI-only envelope preview helpers and the ineffective `RenderConfig.block_frames` field were removed; external callers of those helpers must update.
+
+Harpy is released under the [MIT License](https://github.com/williamshayden/Harpy/blob/v1.0.0/LICENSE), included in the wheel and source distribution.

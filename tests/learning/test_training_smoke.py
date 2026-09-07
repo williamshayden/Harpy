@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -195,10 +197,68 @@ def _run_learning_cli(*arguments: str, timeout: int = 600) -> subprocess.Complet
 def _assert_one_trusted_local_warning(result: subprocess.CompletedProcess[bytes]) -> None:
     from harpy.learning.cli import TRUSTED_LOCAL_MODEL_WARNING
 
-    assert result.stderr.decode("utf-8").splitlines() == [TRUSTED_LOCAL_MODEL_WARNING]
+    lines = result.stderr.decode("utf-8").splitlines()
+    assert lines.count(TRUSTED_LOCAL_MODEL_WARNING) == 1
+    assert lines[0] == TRUSTED_LOCAL_MODEL_WARNING
 
 
-def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Path) -> None:
+@pytest.fixture(scope="module")
+def installed_wheel_cli() -> Iterator[Callable[..., subprocess.CompletedProcess[bytes]]]:
+    """Exercise installed code outside Git with the current optional dependencies."""
+    with tempfile.TemporaryDirectory(prefix="harpy-installed-smoke-") as temporary:
+        root = Path(temporary)
+        built = root / "dist"
+        subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(built)],
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            timeout=180,
+        )
+        (wheel,) = built.glob("*.whl")
+        target = root / "site-packages"
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                sys.executable,
+                "--target",
+                str(target),
+                "--no-deps",
+                str(wheel),
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            timeout=180,
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(target)
+        probe = subprocess.run(
+            [sys.executable, "-c", "import harpy; print(harpy.__file__)"],
+            cwd=root,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        assert Path(probe.stdout.decode().strip()) == target / "harpy" / "__init__.py"
+
+        def run(*arguments: str, timeout: int = 600) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [sys.executable, "-m", "harpy.learning.cli", *arguments],
+                cwd=root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                timeout=timeout,
+            )
+
+        yield run
+
+
+def test_isolated_no_train_command_fails_before_output(tmp_path: Path) -> None:
     """A default install must fail with one actionable dependency diagnostic."""
 
     poison_directory = tmp_path / "poison"
@@ -214,7 +274,7 @@ def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Pa
                 "class _PoisonFinder(importlib.abc.MetaPathFinder):",
                 "    def find_spec(self, fullname, path=None, target=None):",
                 "        del path, target",
-                "        blocked = ('torch', 'stable_baselines3', 'PySide6')",
+                "        blocked = ('torch', 'stable_baselines3')",
                 "        if any(",
                 "            fullname == name or fullname.startswith(name + '.')",
                 "            for name in blocked",
@@ -238,8 +298,6 @@ def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Pa
             "uv",
             "run",
             "--isolated",
-            "--no-group",
-            "train",
             "--locked",
             "harpy-sine-learn",
             "train-bc",
@@ -264,16 +322,16 @@ def test_isolated_no_train_command_fails_before_output_or_qt_import(tmp_path: Pa
     assert result.stdout == b""
     assert result.stderr.decode("utf-8").splitlines()[-1] == (
         "error: The optional training stack is unavailable. Install it with "
-        "`uv sync --group train`."
+        "`python -m pip install 'harpy-audio[train]'`."
     )
-    assert result.stderr.count(b"uv sync --group train") == 1
-    assert b"PySide6" not in result.stderr
+    assert result.stderr.count(b"harpy-audio[train]") == 1
     assert not output.exists()
 
 
 @_REQUIRES_TRAIN_STACK
 def test_real_pitch_smoke_cli_trains_reloads_diagnoses_evaluates_and_traces(
     tmp_path: Path,
+    installed_wheel_cli: Callable[..., subprocess.CompletedProcess[bytes]],
 ) -> None:
     """The public pitch CLI must cross every persisted Milestone E smoke boundary."""
 
@@ -281,6 +339,7 @@ def test_real_pitch_smoke_cli_trains_reloads_diagnoses_evaluates_and_traces(
         PITCH_ARTIFACT_SCHEMA_VERSION,
         ArtifactStatus,
         CriterionStatus,
+        PackageSourceStatus,
     )
     from harpy.learning.diagnostic_codecs import (
         diagnostic_bundle_bytes,
@@ -296,6 +355,7 @@ def test_real_pitch_smoke_cli_trains_reloads_diagnoses_evaluates_and_traces(
     )
 
     artifact_path = tmp_path / "pitch-smoke"
+    _run_learning_cli = installed_wheel_cli
     diagnostic_path = tmp_path / "pitch-smoke-diagnostics.json"
     report_path = tmp_path / "pitch-smoke-report.json"
     artifact_resolved = artifact_path.resolve(strict=False)
@@ -322,6 +382,8 @@ def test_real_pitch_smoke_cli_trains_reloads_diagnoses_evaluates_and_traces(
     artifact = load_pitch_artifact(artifact_path)
     assert artifact.manifest.schema_version == PITCH_ARTIFACT_SCHEMA_VERSION
     assert artifact.manifest.status is ArtifactStatus.COMPLETE
+    assert isinstance(artifact.manifest.source, PackageSourceStatus)
+    assert artifact.manifest.source.distribution_version is not None
     assert artifact.manifest.trainer is PitchTrainerKind.PITCH
     assert artifact.manifest.profile is ProfileName.SMOKE
     assert artifact.manifest.seed == 0

@@ -10,7 +10,7 @@ from types import ModuleType
 
 from harpy.learning.errors import DependencyUnavailableError
 
-TRAIN_INSTALL_INSTRUCTION = "uv sync --group train"
+TRAIN_INSTALL_INSTRUCTION = "python -m pip install 'harpy-audio[train]'"
 CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG = ":4096:8"
 
 

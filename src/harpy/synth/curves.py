@@ -1,29 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
 import numpy as np
-
-from harpy.synth.models import (
-    EnvelopeConfig,
-    RenderConfig,
-    SynthPatch,
-    seconds_to_frames,
-    validate_renderable_patch,
-)
-
-
-@dataclass(frozen=True, slots=True)
-class EnvelopePreview:
-    position: np.ndarray
-    attack_level: np.ndarray
-    decay_level: np.ndarray
-    release_level: np.ndarray
-    sustain_level: float
-    attack_frames: int
-    decay_frames: int
-    release_frames: int
 
 
 def _finite_scalar(name: str, value: object) -> float:
@@ -53,27 +32,6 @@ def quadratic_control_level(
     scaled_control = start_weight * scaled_start + end_weight * scaled_end
     low, high = sorted((scaled_start, scaled_end))
     return min(max(scaled_control, low), high) * scale
-
-
-def curvature_from_control_level(
-    start_level: float,
-    end_level: float,
-    control_level: float,
-) -> float:
-    start = _finite_scalar("start_level", start_level)
-    end = _finite_scalar("end_level", end_level)
-    control = _finite_scalar("control_level", control_level)
-    if start == end:
-        raise ValueError("start_level and end_level must differ")
-    low, high = sorted((start, end))
-    if not low <= control <= high:
-        raise ValueError("control_level must be between start_level and end_level")
-    scale = max(abs(start), abs(end), abs(control), 1.0)
-    scaled_start = start / scale
-    scaled_end = end / scale
-    scaled_control = control / scale
-    endpoint_fraction = (scaled_control - scaled_start) / (scaled_end - scaled_start)
-    return min(max(2.0 * endpoint_fraction - 1.0, -1.0), 1.0)
 
 
 def _evaluate_scaled_quadratic(
@@ -131,55 +89,3 @@ def evaluate_quadratic_segment(
     elif positions == 1.0:
         values = np.float64(end)
     return float(values)
-
-
-def sample_envelope_preview(
-    envelope: EnvelopeConfig,
-    render: RenderConfig,
-    samples_per_stage: int = 129,
-) -> EnvelopePreview:
-    if not isinstance(envelope, EnvelopeConfig):
-        raise ValueError("envelope must be an EnvelopeConfig")
-    if not isinstance(render, RenderConfig):
-        raise ValueError("render must be a RenderConfig")
-    if (
-        isinstance(samples_per_stage, bool)
-        or not isinstance(samples_per_stage, int)
-        or samples_per_stage < 2
-    ):
-        raise ValueError("samples_per_stage must be an integer of at least 2")
-    validate_renderable_patch(SynthPatch(envelope=envelope), render)
-
-    position = np.array(
-        np.linspace(0.0, 1.0, samples_per_stage, dtype=np.float64),
-        dtype=np.float64,
-        copy=True,
-        order="C",
-    )
-    position.flags.writeable = False
-    sustain_level = envelope.sustain_amplitude
-    return EnvelopePreview(
-        position=position,
-        attack_level=evaluate_quadratic_segment(
-            0.0,
-            1.0,
-            envelope.attack_curve,
-            position,
-        ),
-        decay_level=evaluate_quadratic_segment(
-            1.0,
-            sustain_level,
-            envelope.decay_curve,
-            position,
-        ),
-        release_level=evaluate_quadratic_segment(
-            sustain_level,
-            0.0,
-            envelope.release_curve,
-            position,
-        ),
-        sustain_level=sustain_level,
-        attack_frames=seconds_to_frames(envelope.attack_seconds, render.sample_rate_hz),
-        decay_frames=seconds_to_frames(envelope.decay_seconds, render.sample_rate_hz),
-        release_frames=seconds_to_frames(envelope.release_seconds, render.sample_rate_hz),
-    )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ import pytest
 import harpy.learning.workflows as workflows
 from harpy.envs.baselines import BaselineKind
 from harpy.envs.models import ObservationMode, TerminalReason
+from harpy.learning.artifacts import SourceStatus
 from harpy.learning.errors import LearningContractError
 from harpy.learning.evaluation import (
     SHUFFLED_SPECTRUM_PROBE,
@@ -253,8 +255,11 @@ def _manifest(
         spectrum_grid_id=SPECTRUM_GRID_ID,
         preprocessing_schema_id=PREPROCESSING_SCHEMA_ID,
         architecture_schema_id=ARCHITECTURE_SCHEMA_ID,
-        source=SimpleNamespace(
+        source=SourceStatus(
+            commit="a" * 40,
             dirty_tree=dirty_tree,
+            tracked_diff_sha256="b" * 64 if dirty_tree else hashlib.sha256(b"").hexdigest(),
+            dependency_lock_sha256="c" * 64,
             required_inputs_committed=required_inputs_committed,
         ),
         runtime=SimpleNamespace(device=training_device),

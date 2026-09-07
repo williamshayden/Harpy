@@ -588,6 +588,242 @@ def _write_peek_manifest(
     (root / "manifest.json").write_bytes(canonical_json_bytes(document))
 
 
+def _exploratory_artifact(root: Path, profile: ProfileName) -> LoadedPitchArtifact:
+    """A strict-loader test double with deliberately non-cohort source/seed/device."""
+    from harpy.learning.artifacts import FileRecord, _source_to_document
+
+    _write_peek_manifest(
+        root, schema_version=2, profile=profile, seed=17, training_device=DeviceName.CUDA
+    )
+    source = SourceStatus("a" * 40, True, "b" * 64, "c" * 64, True)
+    document = workflows.decode_json_bytes((root / "manifest.json").read_bytes())
+    document["source"] = _source_to_document(source)
+    document["files"] = [{"relative_path": "model.pt", "size_bytes": 1, "sha256": "d" * 64}]
+    (root / "manifest.json").write_bytes(canonical_json_bytes(document))
+    artifact = object.__new__(LoadedPitchArtifact)
+    object.__setattr__(artifact, "root", root.resolve())
+    object.__setattr__(
+        artifact,
+        "manifest",
+        SimpleNamespace(
+            schema_version=2,
+            profile=profile,
+            trainer=PitchTrainerKind.PITCH,
+            seed=17,
+            runtime=SimpleNamespace(device=DeviceName.CUDA),
+            source=source,
+            files=(FileRecord("model.pt", 1, "d" * 64),),
+            environment_id=ENVIRONMENT_ID,
+            parameter_count=PITCH_ESTIMATOR_PARAMETER_COUNT,
+            policy_semantics_id=PITCH_POLICY_SEMANTICS_ID,
+            to_document=lambda: copy.deepcopy(document),
+        ),
+    )
+    return artifact
+
+
+@pytest.mark.parametrize("profile", [ProfileName.SMOKE, ProfileName.CHECKPOINT])
+def test_single_pitch_exploration_keeps_raw_metrics_and_provenance_but_never_eligibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: ProfileName
+) -> None:
+    from harpy.learning import pitch_artifacts, pitch_evaluation
+    from harpy.learning.experiment_results import readout_from_bytes
+
+    root = tmp_path / "single"
+    artifact = _exploratory_artifact(root, profile)
+    loaded = []
+    monkeypatch.setattr(workflows, "load_artifact", lambda path: loaded.append(path) or artifact)
+    monkeypatch.setattr(workflows, "_require_evaluation_device", lambda device: None)
+    monkeypatch.setattr(workflows, "_load_pitch_artifact_actor", lambda *args, **kwargs: object())
+    for name in ("_preflight_pitch_artifacts", "_preflight_pitch_e1_artifacts"):
+        monkeypatch.setattr(workflows, name, lambda *args: pytest.fail("exploration used a cohort"))
+    monkeypatch.setattr(
+        pitch_artifacts,
+        "read_pitch_training_summary",
+        lambda artifact: SimpleNamespace(
+            summary=SimpleNamespace(
+                training_examples=256 if profile is ProfileName.SMOKE else 1_400,
+                training_wall_time_seconds=1.5,
+            )
+        ),
+    )
+    evaluated_suites = []
+
+    def evaluate_actor(actor, suite, **kwargs):
+        evaluated_suites.append(suite.suite_id)
+        return _terminal_records(suite.suite_id)
+
+    monkeypatch.setattr(pitch_evaluation, "evaluate_pitch_learned_actor", evaluate_actor)
+    monkeypatch.setattr(
+        pitch_evaluation,
+        "evaluate_pitch_baseline_suite",
+        lambda kind, suite, **kwargs: _terminal_records(suite.suite_id),
+    )
+
+    result = workflows.evaluate_artifacts((root,), exploratory=True)
+    content = workflows.evaluation_report_bytes(result)
+    restored = readout_from_bytes(content)
+
+    assert restored == result
+    assert workflows.evaluation_report_from_bytes(content) == result
+    assert loaded == [root.resolve()]
+    assert evaluated_suites == (
+        [PitchEvaluationSuiteId.SMOKE]
+        if profile is ProfileName.SMOKE
+        else [
+            PitchEvaluationSuiteId.IID,
+            PitchEvaluationSuiteId.OOD_LOWER,
+            PitchEvaluationSuiteId.OOD_UPPER,
+        ]
+    )
+    assert len(result.terminal_rows) == 5 * len(evaluated_suites)
+    assert result.provenance.training_seed == 17
+    assert result.provenance.training_device is DeviceName.CUDA
+    assert result.provenance.evaluation_device is DeviceName.CPU
+    assert result.provenance.source.dirty_tree is True
+    assert (
+        result.provenance.manifest_sha256
+        == hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest()
+    )
+    assert result.provenance.model_sha256 == "d" * 64
+    assert result.to_document()["criterion"] == {
+        "eligible": False,
+        "criterion_met": None,
+        "status": "ineligible",
+        "reason": "exploratory_single_artifact",
+    }
+    for mutation in (
+        "eligibility",
+        "seed",
+        "metrics",
+        "missing_baseline",
+        "parameter_count",
+        "training_examples",
+        "baseline_trainer",
+    ):
+        document = result.to_document()
+        if mutation == "eligibility":
+            document["criterion"]["eligible"] = True
+        elif mutation == "seed":
+            document["provenance"]["training_seed"] = 99
+        elif mutation == "metrics":
+            document["terminal_rows"][0]["metrics"]["submitted_success_rate"] = 1.0
+        elif mutation in {"parameter_count", "training_examples"}:
+            document["terminal_rows"][0][mutation] = 123
+        elif mutation == "baseline_trainer":
+            spoofed_baseline = copy.deepcopy(document["terminal_rows"][0])
+            spoofed_baseline["actor_id"] = "random"
+            document["terminal_rows"][len(evaluated_suites)] = spoofed_baseline
+        else:
+            document["terminal_rows"].pop()
+        with pytest.raises(ValueError):
+            readout_from_bytes(canonical_json_bytes(document))
+    if profile is ProfileName.CHECKPOINT:
+        with pytest.raises(LearningContractError, match="exactly three"):
+            workflows.evaluate_artifacts((root,))
+
+
+@pytest.mark.parametrize("suite", ["smoke", "iid", "ood-lower", "ood-upper"])
+def test_exploratory_diagnostic_preflight_admits_one_arbitrary_checkpoint_only_explicitly(
+    tmp_path: Path, suite: str
+) -> None:
+    root = tmp_path / "single"
+    _exploratory_artifact(root, ProfileName.CHECKPOINT)
+
+    workflows.preflight_diagnostic_request((root,), suite=suite, exploratory=True)
+
+    with pytest.raises(LearningContractError):
+        workflows.preflight_diagnostic_request((root,), suite=suite)
+    with pytest.raises(LearningContractError, match="bound_mask"):
+        workflows.preflight_diagnostic_request(
+            (root,), suite=suite, exploratory=True, bound_mask=True
+        )
+
+
+def test_exploration_does_not_bypass_a_corrupt_artifact_or_accept_legacy_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "single"
+    _write_peek_manifest(root, schema_version=2, profile=ProfileName.CHECKPOINT, seed=17)
+
+    def corrupt(path):
+        raise ValueError("model payload hash mismatch")
+
+    monkeypatch.setattr(workflows, "load_artifact", corrupt)
+    with pytest.raises(ArtifactError, match="hash mismatch"):
+        workflows.evaluate_artifacts((root,), exploratory=True)
+    with pytest.raises(ArtifactError, match="hash mismatch"):
+        workflows.diagnose_artifacts((root,), suite="iid", exploratory=True)
+    legacy = tmp_path / "legacy"
+    _write_peek_manifest(legacy, schema_version=1)
+    with pytest.raises(LearningContractError, match="exactly one pitch"):
+        workflows.evaluate_artifacts((legacy,), exploratory=True)
+
+
+@pytest.mark.parametrize("suite", ["smoke", "iid"])
+def test_exploratory_diagnostics_execute_single_checkpoint_and_bind_exact_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suite: str
+) -> None:
+    from harpy.envs.models import PitchAction
+    from harpy.learning import evaluation
+    from harpy.learning.diagnostics import DiagnosticDecisionInput, diagnose_episode
+    from harpy.learning.experiment_results import readout_bytes, readout_from_bytes
+
+    root = tmp_path / "single"
+    artifact = _exploratory_artifact(root, ProfileName.CHECKPOINT)
+    monkeypatch.setattr(workflows, "load_artifact", lambda path: artifact)
+    monkeypatch.setattr(workflows, "_require_evaluation_device", lambda device: None)
+    monkeypatch.setattr(
+        workflows,
+        "_load_pitch_artifact_actor",
+        lambda *args, **kwargs: SimpleNamespace(decide=lambda observation: None),
+    )
+
+    def episodes(*, decide, suite, environment_factory):
+        return tuple(
+            diagnose_episode(
+                episode_index=index,
+                source_pitch_cents=episode.source_pitch_cents,
+                target_note_index=episode.target_note_index,
+                decisions=(
+                    DiagnosticDecisionInput(
+                        PitchAction.SUBMIT,
+                        pitch_cents_from_index(pitch_class_index(episode.source_pitch_cents)),
+                    ),
+                ),
+            )
+            for index, episode in enumerate(suite.episodes)
+        )
+
+    monkeypatch.setattr(evaluation, "diagnose_actor_suite", episodes)
+    result = workflows.diagnose_artifacts((root,), suite=suite, exploratory=True)
+    assert readout_from_bytes(readout_bytes(result)) == result
+    assert result.diagnostics.seed == 17
+    assert len(result.diagnostics.episodes) == (50 if suite == "smoke" else 250)
+    assert result.to_document()["criterion"]["eligible"] is False
+    document = result.to_document()
+    document["provenance"]["manifest_sha256"] = "e" * 64
+    with pytest.raises(ValueError, match="provenance"):
+        readout_from_bytes(canonical_json_bytes(document))
+
+
+def test_experiment_readouts_import_without_the_training_stack() -> None:
+    script = """
+import importlib.abc
+import sys
+
+class BlockTraining(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'torch', 'stable_baselines3'}:
+            raise AssertionError(f'readout imported optional training package: {fullname}')
+
+sys.meta_path.insert(0, BlockTraining())
+import harpy.learning.experiment_results
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_evaluate_rejects_mixed_or_unknown_schema_before_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

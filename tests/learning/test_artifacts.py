@@ -23,6 +23,7 @@ from harpy.learning.artifacts import (
     CriterionStatus,
     FileRecord,
     LoadedArtifact,
+    PackageSourceStatus,
     PendingArtifactView,
     PPOTrainingCounts,
     RuntimeStatus,
@@ -1914,3 +1915,89 @@ if loaded:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _package_source(tmp_path: Path) -> tuple[Path, PackageSourceStatus]:
+    package = tmp_path / "site-packages" / "harpy"
+    (package / "learning").mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    anchor = package / "learning" / "artifacts.py"
+    anchor.write_text("VALUE = 1\n", encoding="utf-8")
+    source = capture_source_status(anchor)
+    assert isinstance(source, PackageSourceStatus)
+    return anchor, source
+
+
+def test_package_provenance_is_content_bound_and_cache_independent(tmp_path: Path) -> None:
+    anchor, source = _package_source(tmp_path)
+    cached = anchor.parent / "__pycache__"
+    cached.mkdir()
+    (cached / "artifacts.cpython-312.pyc").write_bytes(b"runtime cache")
+    assert capture_source_status(anchor) == source
+    anchor.write_text("VALUE = 2\n", encoding="utf-8")
+    assert capture_source_status(anchor).package_sha256 != source.package_sha256
+    document = artifacts._source_to_document(source)
+    assert artifacts._source_from_document(document) == source
+    assert document["source_kind"] == "package_snapshot"
+    assert not {"commit", "dirty_tree", "dependency_lock_sha256"} & document.keys()
+
+
+def test_installed_package_does_not_inherit_enclosing_checkout_provenance(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path / "checkout")
+    anchor, source = _package_source(repo / ".venv")
+    assert isinstance(source, PackageSourceStatus)
+    assert capture_source_status(anchor) == source
+
+
+def test_package_provenance_works_without_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    anchor, source = _package_source(tmp_path)
+
+    def unavailable(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(artifacts, "_git", unavailable)
+    assert capture_source_status(anchor) == source
+
+
+@pytest.mark.parametrize("trainer", tuple(TrainerKind))
+def test_package_checkpoint_remains_ineligible_after_strict_reload(
+    tmp_path: Path, trainer: TrainerKind
+) -> None:
+    _, source = _package_source(tmp_path)
+    artifact = _complete_artifact(
+        tmp_path / "artifact", trainer, ProfileName.CHECKPOINT, source=source
+    )
+    loaded = load_artifact(artifact.root)
+    assert loaded.manifest.source == source
+    assert loaded.manifest.criterion_eligible is False
+    assert loaded.manifest.criterion_status is CriterionStatus.INELIGIBLE
+    forged = loaded.manifest.to_document()
+    forged["criterion_eligible"] = True
+    with pytest.raises(ValueError):
+        ArtifactManifest.from_document(forged)
+
+
+@pytest.mark.parametrize("extra", ["commit", "dirty_tree", "unknown"])
+def test_package_provenance_rejects_extra_fields(tmp_path: Path, extra: str) -> None:
+    _, source = _package_source(tmp_path)
+    document = artifacts._source_to_document(source)
+    document[extra] = True
+    with pytest.raises(ValueError, match="fields"):
+        artifacts._source_from_document(document)
+
+
+@pytest.mark.parametrize("matching", [True, False])
+def test_package_version_belongs_to_the_captured_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matching: bool
+) -> None:
+    from types import SimpleNamespace
+
+    anchor, _ = _package_source(tmp_path)
+    package = anchor.parent.parent
+    metadata_root = package.parent if matching else tmp_path / "unrelated"
+    distribution = SimpleNamespace(version="1.2.3", locate_file=lambda path: metadata_root / path)
+    monkeypatch.setattr(artifacts.importlib.metadata, "distribution", lambda _: distribution)
+    source = capture_source_status(anchor)
+    assert source.distribution_version == ("1.2.3" if matching else None)

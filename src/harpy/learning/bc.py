@@ -36,6 +36,7 @@ from harpy.learning.artifacts import (
     LoadedArtifact,
     PendingArtifactView,
     RuntimeStatus,
+    SourceProvenance,
     SourceStatus,
     TrainingConfigDocument,
     TrainingSummaryDocument,
@@ -838,13 +839,14 @@ def _bc_workflow_eligible(
     *,
     profile: ProfileName,
     seed: int,
-    source: SourceStatus,
+    source: SourceProvenance,
     training_device: DeviceName,
     evaluation_device: DeviceName,
 ) -> bool:
     return (
         profile is ProfileName.CHECKPOINT
         and seed == 0
+        and isinstance(source, SourceStatus)
         and not source.dirty_tree
         and source.required_inputs_committed
         and training_device is DeviceName.CPU

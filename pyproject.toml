@@ -1,43 +1,54 @@
 [project]
 name = "harpy-audio"
-version = "0.1.0"
-description = "A constrained audio-control benchmark and native demonstration lab"
+version = "1.0.0"
+description = "A constrained audio-control benchmark and learning toolkit"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "gymnasium>=1.3,<2",
   "numpy>=2.0,<3",
-  "pyqtgraph>=0.13.7,<1",
-  "pyside6>=6.8,<7",
+]
+
+[project.urls]
+Repository = "https://github.com/williamshayden/Harpy"
+Issues = "https://github.com/williamshayden/Harpy/issues"
+
+[project.optional-dependencies]
+train = [
+  "stable-baselines3==2.9.0",
+  "torch>=2.8,<3",
 ]
 
 [project.scripts]
-harpy = "harpy.gui.app:main"
 harpy-sine-gym = "harpy.envs.checkpoint:main"
 harpy-sine-learn = "harpy.learning.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harpy"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/**",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE*",
+]
+
 [dependency-groups]
 dev = [
   "pytest>=8,<9",
-  "pytest-qt>=4.4,<5",
   "ruff>=0.9,<1",
-]
-train = [
-    "stable-baselines3==2.9.0",
-    "torch>=2.8,<3",
 ]
 
 [tool.pytest.ini_options]
 addopts = "-ra --basetemp=.pytest-tmp --capture=sys"
 testpaths = ["tests"]
-qt_api = "pyside6"
 markers = [
   "integration: exhaustive contracts that exercise the real renderer",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import operator
@@ -242,6 +243,29 @@ class SourceStatus:
         )
         if not self.dirty_tree and self.tracked_diff_sha256 != _EMPTY_SHA256:
             raise ValueError("a clean source must have the empty tracked diff SHA-256")
+
+
+@dataclass(frozen=True, slots=True)
+class PackageSourceStatus:
+    """Content identity for installed or archived code without checkout provenance.
+
+    This source variant never qualifies for a frozen scientific criterion.  It
+    deliberately makes no claim about a Git commit, clean tree, or lockfile.
+    """
+
+    distribution_name: str
+    distribution_version: str | None
+    package_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.distribution_name != "harpy-audio":
+            raise ValueError("distribution_name must be 'harpy-audio'")
+        if self.distribution_version is not None:
+            _string(self.distribution_version, "distribution_version")
+        _digest(self.package_sha256, "package_sha256")
+
+
+type SourceProvenance = SourceStatus | PackageSourceStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -620,7 +644,7 @@ class ArtifactManifest:
     seed: int
     created_at_utc: str
     completed_at_utc: str | None
-    source: SourceStatus
+    source: SourceProvenance
     runtime: RuntimeStatus
     environment_id: str
     environment_contract_id: str
@@ -658,8 +682,8 @@ class ArtifactManifest:
                 "completed_at_utc",
                 _timestamp(self.completed_at_utc, "completed_at_utc"),
             )
-        if not isinstance(self.source, SourceStatus):
-            raise ValueError("source must be a SourceStatus")
+        if not isinstance(self.source, SourceStatus | PackageSourceStatus):
+            raise ValueError("source must be a SourceStatus or PackageSourceStatus")
         if not isinstance(self.runtime, RuntimeStatus):
             raise ValueError("runtime must be a RuntimeStatus")
         _require_identity(self.environment_id, ENVIRONMENT_ID, "environment_id")
@@ -1090,7 +1114,14 @@ def _manifest_suite_from_document(value: object) -> tuple[str, str]:
     return suite_id.value, digest
 
 
-def _source_to_document(source: SourceStatus) -> dict[str, JSONValue]:
+def _source_to_document(source: SourceProvenance) -> dict[str, JSONValue]:
+    if isinstance(source, PackageSourceStatus):
+        return {
+            "source_kind": "package_snapshot",
+            "distribution_name": source.distribution_name,
+            "distribution_version": source.distribution_version,
+            "package_sha256": source.package_sha256,
+        }
     return {
         "commit": source.commit,
         "dirty_tree": source.dirty_tree,
@@ -1100,8 +1131,23 @@ def _source_to_document(source: SourceStatus) -> dict[str, JSONValue]:
     }
 
 
-def _source_from_document(value: object) -> SourceStatus:
+def _source_from_document(value: object) -> SourceProvenance:
     mapping = _mapping(value, "source")
+    if mapping.get("source_kind") == "package_snapshot":
+        _exact_fields(
+            mapping,
+            {"source_kind", "distribution_name", "distribution_version", "package_sha256"},
+            "package source",
+        )
+        return PackageSourceStatus(
+            distribution_name=_string(mapping["distribution_name"], "distribution_name"),
+            distribution_version=(
+                None
+                if mapping["distribution_version"] is None
+                else _string(mapping["distribution_version"], "distribution_version")
+            ),
+            package_sha256=_digest(mapping["package_sha256"], "package_sha256"),
+        )
     _exact_fields(
         mapping,
         {
@@ -1299,6 +1345,7 @@ def _criterion_eligibility(manifest: ArtifactManifest) -> bool:
     return (
         manifest.profile is ProfileName.CHECKPOINT
         and declared_seed
+        and isinstance(manifest.source, SourceStatus)
         and not manifest.source.dirty_tree
         and manifest.source.required_inputs_committed
         and manifest.runtime.device is DeviceName.CPU
@@ -2074,6 +2121,7 @@ def _completion_is_eligible(bootstrap: ArtifactManifest, evaluation_device: Devi
     return (
         bootstrap.profile is ProfileName.CHECKPOINT
         and declared_seed
+        and isinstance(bootstrap.source, SourceStatus)
         and not bootstrap.source.dirty_tree
         and bootstrap.source.required_inputs_committed
         and bootstrap.runtime.device is DeviceName.CPU
@@ -2160,21 +2208,34 @@ def _git(anchor: Path, *arguments: str, check: bool = True) -> subprocess.Comple
     )
 
 
-def capture_source_status(start: Path) -> SourceStatus:
-    """Capture provenance from the Git worktree containing the explicit source anchor."""
+def capture_source_status(start: Path) -> SourceProvenance:
+    """Capture actual checkout or package provenance, independently of the cwd."""
+    return _capture_source_status(start, required_inputs=_REQUIRED_SOURCE_INPUTS)
 
+
+def _capture_source_status(start: Path, *, required_inputs: tuple[str, ...]) -> SourceProvenance:
     resolved = start.resolve(strict=True)
     anchor = resolved if resolved.is_dir() else resolved.parent
-    root = Path(
-        _git(anchor, "rev-parse", "--show-toplevel").stdout.decode("utf-8").strip()
-    ).resolve(strict=True)
+    try:
+        discovery = _git(anchor, "rev-parse", "--show-toplevel", check=False)
+    except FileNotFoundError:
+        discovery = None
+    root = (
+        Path(discovery.stdout.decode("utf-8").strip()).resolve(strict=True)
+        if discovery is not None and discovery.returncode == 0
+        else None
+    )
+    # A wheel installed in a checkout's .venv must not inherit that checkout's
+    # identity.  Only the actual src/harpy tree (or explicit root anchor) owns it.
+    if root is None or not (anchor == root or resolved.is_relative_to(root / "src" / "harpy")):
+        return _capture_package_source(resolved)
     commit = _git(root, "rev-parse", "HEAD").stdout.decode("ascii").strip()
     status = _git(root, "status", "--porcelain=v1", "--untracked-files=normal").stdout
     tracked_diff = _git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--").stdout
     lock_content = (root / "uv.lock").read_bytes()
     required_inputs_committed = all(
         _git(root, "cat-file", "-e", f"HEAD:{relative_path}", check=False).returncode == 0
-        for relative_path in _REQUIRED_SOURCE_INPUTS
+        for relative_path in required_inputs
     )
     return SourceStatus(
         commit=commit,
@@ -2182,6 +2243,40 @@ def capture_source_status(start: Path) -> SourceStatus:
         tracked_diff_sha256=hashlib.sha256(tracked_diff).hexdigest(),
         dependency_lock_sha256=hashlib.sha256(lock_content).hexdigest(),
         required_inputs_committed=required_inputs_committed,
+    )
+
+
+def _capture_package_source(start: Path) -> PackageSourceStatus:
+    candidates = (start, *start.parents)
+    package = next(
+        (path for path in candidates if path.name == "harpy" and (path / "__init__.py").is_file()),
+        None,
+    )
+    if package is None:
+        raise ValueError("source anchor must belong to a Harpy checkout or Python package")
+    inventory = []
+    for path in sorted(package.rglob("*")):
+        relative = path.relative_to(package)
+        if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"}:
+            continue
+        if path.is_symlink():
+            raise ValueError("package source must not contain symbolic links")
+        if path.is_file():
+            inventory.append((relative.as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()))
+    version = None
+    try:
+        distribution = importlib.metadata.distribution("harpy-audio")
+        installed_init = Path(distribution.locate_file("harpy/__init__.py")).resolve()
+        if installed_init == package / "__init__.py":
+            version = distribution.version
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    return PackageSourceStatus(
+        distribution_name="harpy-audio",
+        distribution_version=version,
+        package_sha256=hashlib.sha256(
+            json.dumps(inventory, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
     )
 
 
@@ -2200,8 +2295,10 @@ __all__ = [
     "FileRecord",
     "LoadedArtifact",
     "PPOTrainingCounts",
+    "PackageSourceStatus",
     "PendingArtifactView",
     "RuntimeStatus",
+    "SourceProvenance",
     "SourceStatus",
     "TrainingConfigDocument",
     "TrainingSummaryDocument",

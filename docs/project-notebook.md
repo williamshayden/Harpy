@@ -1,8 +1,14 @@
 # Harpy project notebook
 
-Last updated: 2026-08-09
+Last updated: 2026-08-31
 
 Status: exploratory project-level notes. Milestone specifications and their review status live under `docs/superpowers/specs/`.
+
+> **Current distribution boundary (2026-08-31):** The Python Sine Lab is retired and
+> Harpy now ships only its headless benchmark, learning, and supporting research code.
+> A planned browser experiment is an external teaser for the author's personal site;
+> no browser or other UI code is shipped in this repository yet. Historical UI
+> decisions below remain unchanged as a record of the completed early milestones.
 
 This is the living record for the project: what we think Harpy is, what prior work exists, what decisions have been made, what remains uncertain, and what would make the work scientifically honest and useful.
 

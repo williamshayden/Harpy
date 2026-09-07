@@ -79,13 +79,11 @@ class SynthPatch:
 @dataclass(frozen=True, slots=True)
 class RenderConfig:
     sample_rate_hz: int = 48_000
-    block_frames: int = 256
     channels: int = 1
     internal_dtype: str = "float32"
 
     def __post_init__(self) -> None:
         _positive_integer(self.sample_rate_hz, "sample_rate_hz")
-        _positive_integer(self.block_frames, "block_frames")
         if (
             isinstance(self.channels, bool)
             or not isinstance(self.channels, int)

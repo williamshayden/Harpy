@@ -383,12 +383,12 @@ def test_iid_shuffle_is_the_single_pinned_v2_permutation() -> None:
     assert iid_shuffled_spectrum_permutation() is permutation
 
 
-def test_pitch_data_import_stays_free_of_training_and_gui_dependencies() -> None:
+def test_pitch_data_import_stays_free_of_training_dependencies() -> None:
     source = """
 import sys
 import harpy.learning.pitch_data
 import harpy.learning.action_masks
-for forbidden in ('torch', 'stable_baselines3', 'PySide6', 'pyqtgraph'):
+for forbidden in ('torch', 'stable_baselines3'):
     assert forbidden not in sys.modules, forbidden
 """
 

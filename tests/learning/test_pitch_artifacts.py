@@ -29,6 +29,7 @@ from harpy.learning.artifacts import (
     ArtifactManifest,
     ArtifactStatus,
     CriterionStatus,
+    PackageSourceStatus,
     RuntimeStatus,
     SourceStatus,
     artifact_manifest_from_document,
@@ -1833,6 +1834,7 @@ def _install_fast_pitch_artifact_workflow(
         return real_publish_json(self, filename, document)  # type: ignore[arg-type]
 
     monkeypatch.setattr(pitch_artifacts, "capture_pitch_source_status", capture_source)
+    monkeypatch.setattr(pitch_artifacts, "_utc_now", lambda: "2026-08-27T12:00:00Z")
     monkeypatch.setattr(pitch_artifacts, "_capture_pitch_runtime_status", capture_runtime)
     monkeypatch.setattr(pitch_artifacts, "build_pitch_coordinate_datasets", build_datasets)
     monkeypatch.setattr(pitch_artifacts, "train_pitch_estimator", train)
@@ -2139,3 +2141,18 @@ def test_train_pitch_artifact_returns_completion_immediately_as_last_operation(
 
     assert result is sentinel
     assert events[-1] == "complete"
+
+
+def test_package_pitch_checkpoint_round_trips_without_scientific_eligibility(
+    tmp_path: Path,
+) -> None:
+    source = PackageSourceStatus("harpy-audio", "0.1.0", "a" * 64)
+    artifact = _complete(tmp_path / "package-pitch", ProfileName.CHECKPOINT, 0, source=source)
+    loaded = load_pitch_artifact(artifact.root)
+    assert loaded.manifest.source == source
+    assert loaded.manifest.eligible_for_aggregate is False
+    assert loaded.manifest.criterion_status is CriterionStatus.INELIGIBLE
+    forged = loaded.manifest.to_document()
+    forged["eligible_for_aggregate"] = True
+    with pytest.raises(ValueError):
+        PitchArtifactManifest.from_document(forged)

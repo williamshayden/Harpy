@@ -20,6 +20,7 @@ from harpy.learning.artifacts import (
     ArtifactStatus,
     CriterionStatus,
     LoadedArtifact,
+    SourceStatus,
     _read_regular_file_bytes,
     canonical_json_bytes,
     decode_json_bytes,
@@ -307,6 +308,10 @@ def evaluation_report_bytes(report: object) -> bytes:
 
     if isinstance(report, PitchE1EvaluationReport):
         return canonical_json_bytes(report.to_document())
+    from harpy.learning.experiment_results import ExploratoryPitchEvaluation, readout_bytes
+
+    if isinstance(report, ExploratoryPitchEvaluation):
+        return readout_bytes(report)
     raise ValueError(
         "report must be an EvaluationReport, PitchEvaluationReport, or PitchE1EvaluationReport"
     )
@@ -316,6 +321,10 @@ def evaluation_report_from_bytes(content: bytes) -> object:
     """Strictly peek schema before dispatching to the frozen v1 or pitch codec."""
 
     document = decode_json_bytes(content)
+    if document.get("schema_id") == "harpy-pitch-exploration-evaluation-v1":
+        from harpy.learning.experiment_results import readout_from_bytes
+
+        return readout_from_bytes(content)
     schema_version = _integer(
         document.get("schema_version"),
         "schema_version",
@@ -341,13 +350,21 @@ def evaluate_artifacts(
     artifact_paths: Sequence[Path],
     *,
     device: DeviceName = DeviceName.CPU,
+    exploratory: bool = False,
 ) -> object:
     """Schema-peek a homogeneous set before any full artifact or actor load."""
 
     if not isinstance(device, DeviceName):
         raise LearningContractError("device must be a DeviceName")
+    if not isinstance(exploratory, bool):
+        raise LearningContractError("exploratory must be a bool")
     paths = _canonical_artifact_paths(artifact_paths)
     identities = tuple(_peek_artifact_identity(path) for path in paths)
+    if exploratory:
+        _validate_exploratory_pitch_request(paths, identities)
+        artifact = _load_exploratory_pitch_artifact(paths[0], identities[0])
+        _require_evaluation_device(device)
+        return _evaluate_exploratory_pitch_artifact(artifact, device=device)
     schemas = {identity[0] for identity in identities}
     if len(schemas) != 1:
         raise LearningContractError("mixed artifact schemas are not supported")
@@ -357,6 +374,112 @@ def evaluate_artifacts(
     if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
         return _evaluate_pitch_artifacts(paths, identities, device=device)
     raise LearningContractError(f"unsupported artifact schema_version {schema_version}")
+
+
+def _validate_exploratory_pitch_request(
+    paths: Sequence[Path],
+    identities: Sequence[tuple[int, ProfileName, str]],
+) -> None:
+    if len(paths) != 1 or identities[0][0] != PITCH_ARTIFACT_SCHEMA_VERSION:
+        raise LearningContractError("exploratory evaluation requires exactly one pitch artifact")
+
+
+def _load_exploratory_pitch_artifact(path: Path, identity: tuple[int, ProfileName, str]) -> object:
+    """Relax cohort admission only; retain full artifact inventory and semantic validation."""
+    from harpy.learning.pitch_artifacts import LoadedPitchArtifact
+
+    artifact = _load_complete_artifact(path)
+    if not isinstance(artifact, LoadedPitchArtifact):
+        raise LearningContractError("schema-v2 dispatch did not load a pitch artifact")
+    if (artifact.manifest.profile, artifact.manifest.trainer.value) != identity[1:]:
+        raise LearningContractError("loaded pitch artifact does not match manifest dispatch")
+    return artifact
+
+
+def _artifact_readout_provenance(artifact: object, *, device: DeviceName) -> object:
+    """Bind exported results to the exact validated manifest and model payload."""
+    from harpy.learning.experiment_results import ArtifactProvenance
+
+    manifest = artifact.manifest
+    content = _read_regular_file_bytes(artifact.root / "manifest.json", "artifact manifest.json")
+    if decode_json_bytes(content) != manifest.to_document():
+        raise ArtifactError("artifact manifest changed while producing its readout")
+    model_name = "model.zip" if manifest.trainer.value == "ppo" else "model.pt"
+    model_record = next(item for item in manifest.files if item.relative_path == model_name)
+    return ArtifactProvenance(
+        artifact_schema_version=manifest.schema_version,
+        manifest_sha256=hashlib.sha256(content).hexdigest(),
+        model_sha256=model_record.sha256,
+        trainer=manifest.trainer.value,
+        training_seed=manifest.seed,
+        profile=manifest.profile,
+        training_device=manifest.runtime.device,
+        evaluation_device=device,
+        source=manifest.source,
+    )
+
+
+def _evaluate_exploratory_pitch_artifact(artifact: object, *, device: DeviceName) -> object:
+    """Measure one model and matched baselines without invoking a scientific criterion."""
+    from harpy.learning.experiment_results import ExploratoryPitchEvaluation
+    from harpy.learning.pitch_artifacts import read_pitch_training_summary
+    from harpy.learning.pitch_data import (
+        PitchEvaluationSuiteId,
+        PitchTrainerKind,
+        fixed_pitch_evaluation_suite,
+    )
+    from harpy.learning.pitch_evaluation import (
+        build_pitch_evaluation_row,
+        evaluate_pitch_baseline_suite,
+        evaluate_pitch_learned_actor,
+    )
+
+    provenance = _artifact_readout_provenance(artifact, device=device)
+    manifest = artifact.manifest
+    summary = read_pitch_training_summary(artifact).summary
+    actor = _load_pitch_artifact_actor(artifact, device=device)
+    suite_ids = (
+        (PitchEvaluationSuiteId.SMOKE,)
+        if manifest.profile is ProfileName.SMOKE
+        else (
+            PitchEvaluationSuiteId.IID,
+            PitchEvaluationSuiteId.OOD_LOWER,
+            PitchEvaluationSuiteId.OOD_UPPER,
+        )
+    )
+    suites = tuple(fixed_pitch_evaluation_suite(suite_id) for suite_id in suite_ids)
+    cache = SpectrumEvidenceCache()
+    rows = [
+        build_pitch_evaluation_row(
+            actor_id=f"pitch-{manifest.seed}",
+            trainer=PitchTrainerKind.PITCH,
+            seed=manifest.seed,
+            environment_id=manifest.environment_id,
+            observation_mode=ObservationMode.SPECTRUM,
+            suite=suite,
+            records=evaluate_pitch_learned_actor(
+                actor, suite, environment_factory=lambda: make_cached_sine_pitch_env(cache)
+            ),
+            parameter_count=manifest.parameter_count,
+            training_examples=summary.training_examples,
+            training_wall_time_seconds=summary.training_wall_time_seconds,
+        )
+        for suite in suites
+    ]
+    for kind in BaselineKind:
+        for suite in suites:
+            rows.append(
+                build_pitch_evaluation_row(
+                    actor_id=kind.value,
+                    trainer=None,
+                    seed=None,
+                    environment_id=kind.environment_id,
+                    observation_mode=kind.observation_mode,
+                    suite=suite,
+                    records=evaluate_pitch_baseline_suite(kind, suite, cache=cache),
+                )
+            )
+    return ExploratoryPitchEvaluation(provenance, tuple(rows))
 
 
 def _evaluate_v1_artifacts(
@@ -518,6 +641,10 @@ def _peek_pitch_aggregate_identity(path: Path) -> tuple[str, str, bool, str, Dev
             "evaluation_device",
         )
         source = _mapping(document.get("source"), "source")
+        if source.get("source_kind") == "package_snapshot":
+            raise LearningContractError(
+                "package snapshots are ineligible for scientific cohorts; use --exploratory"
+            )
         commit = _string(source.get("commit"), "source.commit")
         dirty_tree = _boolean(source.get("dirty_tree"), "source.dirty_tree")
         dependency_lock = _sha256_digest(
@@ -906,6 +1033,31 @@ def run_artifact(
 ) -> EpisodeTrace:
     """Validate one complete artifact, load its actor, and capture one trace."""
 
+    episode, _artifact = _run_artifact_with_context(artifact_path, seed=seed, device=device)
+    return episode
+
+
+def run_artifact_result(
+    artifact_path: Path,
+    *,
+    seed: int,
+    device: DeviceName = DeviceName.CPU,
+) -> object:
+    """Capture a run with portable model/source provenance and explicit non-eligibility."""
+    from harpy.learning.experiment_results import ArtifactRunResult
+
+    episode, artifact = _run_artifact_with_context(artifact_path, seed=seed, device=device)
+    return ArtifactRunResult(_artifact_readout_provenance(artifact, device=device), episode)
+
+
+def _run_artifact_with_context(
+    artifact_path: Path,
+    *,
+    seed: int,
+    device: DeviceName,
+) -> tuple[EpisodeTrace, object]:
+    """Share one strict artifact load and execution between legacy and portable outputs."""
+
     try:
         normalized_seed = _integer(seed, "seed")
     except ValueError as error:
@@ -952,7 +1104,8 @@ def run_artifact(
     try:
         from harpy.learning import trace as trace_module
 
-        return trace_module.trace_episode(actor, seed=normalized_seed)  # type: ignore[arg-type]
+        episode = trace_module.trace_episode(actor, seed=normalized_seed)  # type: ignore[arg-type]
+        return episode, artifact
     except Exception as error:
         if isinstance(error, LearningExecutionError):
             raise
@@ -965,6 +1118,7 @@ def diagnose_artifacts(
     suite: str,
     device: DeviceName = DeviceName.CPU,
     bound_mask: bool = False,
+    exploratory: bool = False,
 ) -> object:
     """Run one historical or pitch diagnostic lane after schema-local preflight."""
 
@@ -973,7 +1127,19 @@ def diagnose_artifacts(
         suite=suite,
         device=device,
         bound_mask=bound_mask,
+        exploratory=exploratory,
     )
+    if exploratory:
+        from harpy.learning.experiment_results import ExploratoryPitchDiagnostics
+
+        artifact = _load_exploratory_pitch_artifact(paths[0], identities[0])
+        _require_evaluation_device(device)
+        bundle = _diagnose_pitch_artifacts(
+            (artifact,), suite=suite, device=device, exploratory=True
+        )
+        return ExploratoryPitchDiagnostics(
+            _artifact_readout_provenance(artifact, device=device), bundle
+        )
     schema_version = identities[0][0]
     if schema_version == ARTIFACT_SCHEMA_VERSION:
         return _diagnose_v1_artifact(
@@ -1027,6 +1193,7 @@ def preflight_diagnostic_request(
     suite: str,
     device: DeviceName = DeviceName.CPU,
     bound_mask: bool = False,
+    exploratory: bool = False,
 ) -> None:
     """Validate diagnostic paths and closed-contract routing without loading a model."""
 
@@ -1035,6 +1202,7 @@ def preflight_diagnostic_request(
         suite=suite,
         device=device,
         bound_mask=bound_mask,
+        exploratory=exploratory,
     )
 
 
@@ -1044,6 +1212,7 @@ def _diagnostic_request_context(
     suite: str,
     device: DeviceName,
     bound_mask: bool,
+    exploratory: bool = False,
 ) -> tuple[tuple[Path, ...], tuple[tuple[int, ProfileName, str], ...]]:
     """Return one dependency-light, schema-local diagnostic dispatch context."""
 
@@ -1058,8 +1227,15 @@ def _diagnostic_request_context(
         raise LearningContractError("device must be a DeviceName")
     if not isinstance(bound_mask, bool):
         raise LearningContractError("bound_mask must be a bool")
+    if not isinstance(exploratory, bool):
+        raise LearningContractError("exploratory must be a bool")
     paths = _canonical_artifact_paths(artifact_paths)
     identities = tuple(_peek_artifact_identity(path) for path in paths)
+    if exploratory:
+        _validate_exploratory_pitch_request(paths, identities)
+        if bound_mask:
+            raise LearningContractError("bound_mask requires exactly one schema-v1 BC artifact")
+        return paths, identities
     schemas = {identity[0] for identity in identities}
     if len(schemas) != 1:
         raise LearningContractError("mixed artifact schemas are not supported")
@@ -1199,6 +1375,7 @@ def _diagnose_pitch_artifacts(
     *,
     suite: str,
     device: DeviceName,
+    exploratory: bool = False,
 ) -> object:
     """Diagnose one smoke artifact or the already-preflighted final triple."""
 
@@ -1224,7 +1401,10 @@ def _diagnose_pitch_artifacts(
         "ood-lower": PitchEvaluationSuiteId.OOD_LOWER,
         "ood-upper": PitchEvaluationSuiteId.OOD_UPPER,
     }[suite]
-    if suite_id is PitchEvaluationSuiteId.SMOKE:
+    if exploratory:
+        if len(normalized) != 1:
+            raise LearningContractError("exploratory diagnostics require one pitch artifact")
+    elif suite_id is PitchEvaluationSuiteId.SMOKE:
         if len(normalized) != 1 or normalized[0].manifest.profile is not ProfileName.SMOKE:
             raise LearningContractError("pitch smoke diagnostics require one smoke artifact")
     elif (
@@ -1254,6 +1434,8 @@ def _diagnose_pitch_artifacts(
                 episodes=episodes,
             )
         )
+    if exploratory:
+        return reports[0]
     return build_diagnostic_bundle(
         device=device.value,
         bound_mask=False,
@@ -1515,6 +1697,7 @@ def _manifest_is_scientifically_eligible(
         raise LearningContractError("schema-v1 artifact has an unsupported trainer")
     return (
         manifest.criterion_eligible
+        and isinstance(manifest.source, SourceStatus)
         and manifest.profile is ProfileName.CHECKPOINT
         and declared_seed
         and manifest.runtime.device is DeviceName.CPU
@@ -1988,4 +2171,5 @@ __all__ = [
     "evaluation_report_from_bytes",
     "preflight_diagnostic_request",
     "run_artifact",
+    "run_artifact_result",
 ]

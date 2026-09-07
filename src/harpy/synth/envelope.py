@@ -82,11 +82,11 @@ class AdsrEnvelope:
         output = np.empty(frame_count, dtype=np.float64)
         for index in range(frame_count):
             if self._stage is EnvelopeStage.IDLE:
-                output[index] = 0.0
-                continue
+                output[index:] = 0.0
+                break
             if self._stage is EnvelopeStage.SUSTAIN:
-                output[index] = self._level
-                continue
+                output[index:] = self._level
+                break
             self._emitted += 1
             if self._curvature == 0.0:
                 self._level += self._linear_step

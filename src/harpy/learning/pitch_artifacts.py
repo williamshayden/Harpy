@@ -35,11 +35,14 @@ from harpy.learning.artifacts import (
     ArtifactStatus,
     CriterionStatus,
     FileRecord,
+    PackageSourceStatus,
     RuntimeStatus,
+    SourceProvenance,
     SourceStatus,
     _atomic_publish_bytes,
     _atomic_replace_bytes,
     _boolean,
+    _capture_source_status,
     _contained_file,
     _deferred_sigint,
     _digest,
@@ -841,7 +844,7 @@ class PitchArtifactManifest:
     seed: int
     created_at_utc: str
     completed_at_utc: str | None
-    source: SourceStatus
+    source: SourceProvenance
     runtime: RuntimeStatus
     environment_id: str
     environment_contract_id: str
@@ -882,7 +885,9 @@ class PitchArtifactManifest:
                 "completed_at_utc",
                 _timestamp(self.completed_at_utc, "completed_at_utc"),
             )
-        if not isinstance(self.source, SourceStatus) or not isinstance(self.runtime, RuntimeStatus):
+        if not isinstance(self.source, SourceStatus | PackageSourceStatus) or not isinstance(
+            self.runtime, RuntimeStatus
+        ):
             raise ValueError("source and runtime must use the shared strict provenance models")
         expected_identities = (
             (self.environment_id, ENVIRONMENT_ID, "environment_id"),
@@ -1106,6 +1111,7 @@ def _pitch_artifact_eligible(
     return (
         manifest.profile is ProfileName.CHECKPOINT
         and manifest.seed in {0, 1, 2}
+        and isinstance(manifest.source, SourceStatus)
         and not manifest.source.dirty_tree
         and manifest.source.required_inputs_committed
         and manifest.runtime.device is DeviceName.CPU
@@ -1973,6 +1979,7 @@ def preflight_pitch_artifacts(
         or item.manifest.criterion_status is not CriterionStatus.ELIGIBLE_FOR_AGGREGATE
         or item.manifest.runtime.device is not DeviceName.CPU
         or item.manifest.evaluation_device is not DeviceName.CPU
+        or not isinstance(item.manifest.source, SourceStatus)
         or item.manifest.source.dirty_tree
         or not item.manifest.source.required_inputs_committed
         for item in ordered
@@ -2058,6 +2065,7 @@ def preflight_pitch_e1_artifacts(
     if any(
         item.manifest.profile is not ProfileName.CHECKPOINT
         or item.manifest.evaluation_device is not DeviceName.CPU
+        or not isinstance(item.manifest.source, SourceStatus)
         or item.manifest.source.dirty_tree
         or not item.manifest.source.required_inputs_committed
         for item in ordered
@@ -2102,56 +2110,9 @@ def preflight_pitch_e1_artifacts(
     )
 
 
-def capture_pitch_source_status(start: Path) -> SourceStatus:
-    """Capture source provenance against the complete schema-v2 input inventory."""
-    resolved = start.resolve(strict=True)
-    anchor = resolved if resolved.is_dir() else resolved.parent
-
-    def git(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(
-            ["git", "-C", str(anchor), *arguments],
-            check=check,
-            capture_output=True,
-        )
-
-    root = Path(git("rev-parse", "--show-toplevel").stdout.decode("utf-8").strip()).resolve(
-        strict=True
-    )
-    commit = (
-        subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-        )
-        .stdout.decode("ascii")
-        .strip()
-    )
-    status = subprocess.run(
-        ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=normal"],
-        check=True,
-        capture_output=True,
-    ).stdout
-    tracked_diff = subprocess.run(
-        ["git", "-C", str(root), "diff", "--binary", "--no-ext-diff", "HEAD", "--"],
-        check=True,
-        capture_output=True,
-    ).stdout
-    required_inputs_committed = all(
-        subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"HEAD:{relative_path}"],
-            check=False,
-            capture_output=True,
-        ).returncode
-        == 0
-        for relative_path in _PITCH_REQUIRED_SOURCE_INPUTS
-    )
-    return SourceStatus(
-        commit=commit,
-        dirty_tree=bool(status),
-        tracked_diff_sha256=hashlib.sha256(tracked_diff).hexdigest(),
-        dependency_lock_sha256=hashlib.sha256((root / "uv.lock").read_bytes()).hexdigest(),
-        required_inputs_committed=required_inputs_committed,
-    )
+def capture_pitch_source_status(start: Path) -> SourceProvenance:
+    """Capture package identity or checkout provenance using the pitch inventory."""
+    return _capture_source_status(start, required_inputs=_PITCH_REQUIRED_SOURCE_INPUTS)
 
 
 def _validate_pitch_artifact_training_inputs(

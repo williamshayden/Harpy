@@ -319,6 +319,27 @@ def trace_json_bytes(episode: EpisodeTrace) -> bytes:
     )
 
 
+def trace_from_document(value: object) -> EpisodeTrace:
+    """Validate a saved legacy trace for use inside a provenance envelope."""
+    if not isinstance(value, Mapping) or set(value) != set(EpisodeTrace.__dataclass_fields__):
+        raise ValueError("trace fields must match the complete EpisodeTrace document")
+    if not isinstance(value["steps"], list):
+        raise ValueError("trace steps must be a list")
+    steps = []
+    for item in value["steps"]:
+        if not isinstance(item, Mapping) or set(item) != {"step", "action", "reward"}:
+            raise ValueError("trace step fields must be exactly step, action, and reward")
+        if type(item["action"]) is not int:
+            raise ValueError("trace action must be an integer")
+        steps.append(
+            TraceStep(step=item["step"], action=PitchAction(item["action"]), reward=item["reward"])
+        )
+    fields = dict(value)
+    fields["steps"] = tuple(steps)
+    fields["terminal_reason"] = TerminalReason(value["terminal_reason"])
+    return EpisodeTrace(**fields)
+
+
 def _target_note_label(target_note_index: int) -> str:
     coordinate = TARGET_MIN_COORDINATE + target_note_index
     tuning = Tuning()
@@ -339,5 +360,6 @@ __all__ = [
     "TraceStep",
     "format_human_trace",
     "trace_episode",
+    "trace_from_document",
     "trace_json_bytes",
 ]

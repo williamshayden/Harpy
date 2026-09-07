@@ -13,7 +13,7 @@ from harpy.learning.dependencies import require_training_dependencies
 from harpy.learning.errors import DependencyUnavailableError
 
 
-def test_learning_import_loads_no_training_or_qt_modules() -> None:
+def test_learning_import_loads_no_training_modules() -> None:
     """The public learning package stays importable without optional dependencies."""
     result = subprocess.run(
         [
@@ -22,34 +22,12 @@ def test_learning_import_loads_no_training_or_qt_modules() -> None:
             (
                 "import sys, harpy.learning; "
                 "assert 'torch' not in sys.modules; "
-                "assert 'stable_baselines3' not in sys.modules; "
-                "assert not any(n == 'PySide6' or n.startswith('PySide6.') "
-                "for n in sys.modules)"
+                "assert 'stable_baselines3' not in sys.modules"
             ),
         ],
         capture_output=True,
         check=False,
         timeout=10,
-    )
-
-    assert result.returncode == 0, result.stderr.decode()
-
-
-def test_pitch_training_import_loads_no_qt_modules() -> None:
-    """The explicit optional trainer import remains independent of the GUI stack."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys, harpy.learning.pitch; "
-                "assert not any(n == 'PySide6' or n.startswith('PySide6.') "
-                "for n in sys.modules)"
-            ),
-        ],
-        capture_output=True,
-        check=False,
-        timeout=30,
     )
 
     assert result.returncode == 0, result.stderr.decode()
@@ -64,7 +42,7 @@ def test_training_dependency_failure_has_install_instruction(missing_name: str) 
             raise ModuleNotFoundError(name)
         return importlib.import_module(name)
 
-    with pytest.raises(DependencyUnavailableError, match="uv sync --group train"):
+    with pytest.raises(DependencyUnavailableError, match=r"harpy-audio\[train\]"):
         require_training_dependencies(import_module=unavailable_import)
 
 

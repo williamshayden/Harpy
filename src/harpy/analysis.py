@@ -175,6 +175,8 @@ def analyze(
 
     waveform_frames = _waveform_frames(config, float(sample_rate_hz))
     capture = sample_array[-config.fft_frames :]
+    if not np.all(np.isfinite(capture)):
+        raise ValueError("analysis capture must contain only finite samples")
     trailing_waveform = np.asarray(capture[-waveform_frames:], dtype=np.float64)
     trailing_peak_amplitude = float(np.max(np.abs(trailing_waveform)))
     if trailing_peak_amplitude <= 1e-6:

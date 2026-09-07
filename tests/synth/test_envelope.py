@@ -4,9 +4,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from harpy.synth.curves import evaluate_quadratic_segment, sample_envelope_preview
+from harpy.synth.curves import evaluate_quadratic_segment
 from harpy.synth.envelope import AdsrEnvelope, EnvelopeStage
-from harpy.synth.models import EnvelopeConfig, RenderConfig
+from harpy.synth.models import EnvelopeConfig
 
 EXPECTED_LINEAR_ENVELOPE_BITS = np.array(
     [
@@ -197,7 +197,7 @@ def test_zero_sustain_still_emits_full_zero_release() -> None:
 @pytest.mark.parametrize("frames", [1, 2, 7, 257])
 @pytest.mark.parametrize("curvature", [-1.0, -0.73, 0.0, 0.61, 1.0])
 @pytest.mark.parametrize("stage", ["attack", "decay", "release"])
-def test_preview_endpoint_excluded_samples_match_renderer(
+def test_curve_positions_exclude_start_and_include_renderer_endpoint(
     frames: int,
     curvature: float,
     stage: str,
@@ -213,28 +213,25 @@ def test_preview_endpoint_excluded_samples_match_renderer(
         decay_curve=curvature if stage == "decay" else 0.0,
         release_curve=curvature if stage == "release" else 0.0,
     )
-    preview = sample_envelope_preview(
-        config,
-        RenderConfig(sample_rate_hz=sample_rate_hz),
-        samples_per_stage=frames + 1,
-    )
     envelope = AdsrEnvelope(config, sample_rate_hz)
     envelope.note_on()
     if stage == "attack":
         rendered_stage = envelope.render(frames)
-        preview_stage = preview.attack_level
+        start, end = 0.0, 1.0
     elif stage == "decay":
         envelope.render(frames)
         rendered_stage = envelope.render(frames)
-        preview_stage = preview.decay_level
+        start, end = 1.0, 0.5
     else:
         envelope.render(frames * 2)
         envelope.note_off()
         rendered_stage = envelope.render(frames)
-        preview_stage = preview.release_level
+        start, end = 0.5, 0.0
     np.testing.assert_allclose(
         rendered_stage,
-        preview_stage[1:],
+        evaluate_quadratic_segment(
+            start, end, curvature, np.arange(1, frames + 1, dtype=np.float64) / frames
+        ),
         rtol=0.0,
         atol=1e-12,
     )

@@ -1,4 +1,4 @@
-"""Six-command CLI for training, diagnosing, evaluating, and running sine policies."""
+"""Headless CLI for training, evaluating, diagnosing, and reading research results."""
 
 from __future__ import annotations
 
@@ -50,6 +50,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_evaluate(arguments)
         if arguments.command == "run":
             return _run_episode(arguments)
+        if arguments.command == "summarize":
+            return _run_summarize(arguments)
         raise LearningContractError(f"unsupported command: {arguments.command}")
     except KeyboardInterrupt:
         _write_diagnostic("interrupted")
@@ -63,39 +65,148 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="harpy-sine-learn")
+    parser = argparse.ArgumentParser(
+        prog="harpy-sine-learn",
+        description="Train sine-control models and inspect reproducible experiment results.",
+        epilog="Use COMMAND --help for examples. "
+        "JSON results go to stdout; progress goes to stderr.",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    train_bc = commands.add_parser("train-bc")
+    train_bc = commands.add_parser(
+        "train-bc",
+        help="train the supervised oracle-action diagnostic",
+        description="Train behavior cloning from oracle action labels.",
+    )
     _add_training_arguments(train_bc)
 
-    train_ppo = commands.add_parser("train-ppo")
+    train_ppo = commands.add_parser(
+        "train-ppo",
+        help="train a freshly initialized PPO policy",
+        description="Train PPO from scratch on the frozen sine-pitch environment.",
+    )
     _add_training_arguments(train_ppo)
 
-    train_pitch = commands.add_parser("train-pitch")
+    train_pitch = commands.add_parser(
+        "train-pitch",
+        help="train a spectrum pitch estimator with symbolic control",
+        description="Train the spectrum-only pitch estimator used by the symbolic planner.",
+    )
     _add_training_arguments(train_pitch)
 
-    diagnose = commands.add_parser("diagnose")
-    diagnose.add_argument("artifacts", nargs="+", type=_nonempty_path, metavar="ARTIFACT")
+    diagnose = commands.add_parser(
+        "diagnose",
+        help="explain action errors, loops, and failed episodes",
+        description="Write strict per-decision diagnostic JSON from complete artifacts.",
+        epilog="Example: harpy-sine-learn diagnose runs/pitch-smoke --suite smoke "
+        "--output runs/pitch-diagnostics.json",
+    )
+    diagnose.add_argument(
+        "artifacts",
+        nargs="+",
+        type=_nonempty_path,
+        metavar="ARTIFACT",
+        help="one BC/PPO artifact; one pitch smoke artifact "
+        "or pitch checkpoints with seeds 0, 1, 2",
+    )
     diagnose.add_argument(
         "--suite",
         choices=("smoke", "iid", "ood-lower", "ood-upper"),
         required=True,
+        help="smoke checks plumbing; iid and ood suites diagnose checkpoint behavior "
+        "(ood-lower/ood-upper require pitch artifacts)",
     )
-    diagnose.add_argument("--output", type=_nonempty_path, required=True, metavar="FILE")
+    diagnose.add_argument(
+        "--output",
+        type=_nonempty_path,
+        required=True,
+        metavar="FILE",
+        help="new JSON file outside every input artifact directory",
+    )
     _add_device_argument(diagnose)
-    diagnose.add_argument("--bound-mask", action="store_true")
+    diagnose.add_argument(
+        "--bound-mask",
+        action="store_true",
+        help="mask actions blocked by control bounds; "
+        "diagnostic intervention for one BC artifact only",
+    )
+    diagnose.add_argument(
+        "--exploratory",
+        action="store_true",
+        help="inspect one pitch artifact independently; always scientifically ineligible",
+    )
 
-    evaluate = commands.add_parser("evaluate")
-    evaluate.add_argument("artifacts", nargs="+", type=_nonempty_path, metavar="ARTIFACT")
-    evaluate.add_argument("--output", type=_nonempty_path, metavar="FILE")
+    evaluate = commands.add_parser(
+        "evaluate",
+        help="compare policies with matched baselines and scientific criteria",
+        description="Write canonical evaluation JSON with separately labeled observation tracks.",
+        epilog="Example: harpy-sine-learn evaluate runs/pitch-smoke --output runs/report.json",
+    )
+    evaluate.add_argument(
+        "artifacts",
+        nargs="+",
+        type=_nonempty_path,
+        metavar="ARTIFACT",
+        help="compatible complete artifacts; final pitch evaluation requires exact seeds 0, 1, 2",
+    )
+    evaluate.add_argument(
+        "--output",
+        type=_nonempty_path,
+        metavar="FILE",
+        help="also save stdout JSON to a new file outside every input artifact directory",
+    )
     _add_device_argument(evaluate)
+    evaluate.add_argument(
+        "--exploratory",
+        action="store_true",
+        help="evaluate one pitch artifact independently; always scientifically ineligible",
+    )
 
-    run = commands.add_parser("run")
-    run.add_argument("artifact", type=_nonempty_path, metavar="ARTIFACT")
-    run.add_argument("--seed", type=_nonnegative_integer, required=True, metavar="N")
-    run.add_argument("--json", action="store_true")
+    run = commands.add_parser(
+        "run",
+        help="trace one seeded demonstration episode",
+        description="Run a model on one full-range demonstration episode, "
+        "separate from test suites.",
+        epilog="Example: harpy-sine-learn run runs/pitch-smoke --seed 123 --json",
+    )
+    run.add_argument(
+        "artifact",
+        type=_nonempty_path,
+        metavar="ARTIFACT",
+        help="complete model artifact directory",
+    )
+    run.add_argument(
+        "--seed",
+        type=_nonnegative_integer,
+        required=True,
+        metavar="N",
+        help="non-negative demonstration episode seed (independent of the model training seed)",
+    )
+    run.add_argument(
+        "--json", action="store_true", help="emit canonical JSON instead of a text trace"
+    )
+    run.add_argument(
+        "--with-provenance",
+        action="store_true",
+        help="emit a versioned JSON run result identifying its model and runtime (implies --json)",
+    )
     _add_device_argument(run)
+
+    summarize = commands.add_parser(
+        "summarize",
+        help="read an existing evaluation or diagnostic report without loading models",
+        description="Strictly validate saved report JSON and print a concise research readout.",
+        epilog="Example: harpy-sine-learn summarize runs/report.json --format markdown > report.md",
+    )
+    summarize.add_argument(
+        "report", type=_nonempty_path, metavar="REPORT", help="saved report JSON"
+    )
+    summarize.add_argument(
+        "--format",
+        choices=("text", "markdown"),
+        default="text",
+        help="readout format (default: text); the source report is never modified",
+    )
     return parser
 
 
@@ -105,9 +216,26 @@ def _add_training_arguments(parser: argparse.ArgumentParser) -> None:
         type=ProfileName,
         choices=tuple(ProfileName),
         required=True,
+        help="smoke verifies the workflow and is scientifically ineligible; checkpoint uses "
+        "the frozen experiment settings",
     )
-    parser.add_argument("--seed", type=_nonnegative_integer, required=True, metavar="N")
-    parser.add_argument("--output", type=_nonempty_path, required=True, metavar="PATH")
+    parser.add_argument(
+        "--seed",
+        type=_nonnegative_integer,
+        required=True,
+        metavar="N",
+        help="non-negative training seed; authoritative pitch cohorts use exact seeds 0, 1, 2",
+    )
+    parser.add_argument(
+        "--output",
+        type=_nonempty_path,
+        required=True,
+        metavar="PATH",
+        help="new artifact directory; existing paths are never overwritten",
+    )
+    parser.epilog = (
+        f"Example: {parser.prog} --profile smoke --seed 0 --output runs/model-smoke --device cpu"
+    )
     _add_device_argument(parser)
 
 
@@ -117,6 +245,8 @@ def _add_device_argument(parser: argparse.ArgumentParser) -> None:
         type=DeviceName,
         choices=tuple(DeviceName),
         default=DeviceName.CPU,
+        help="execution device (default: cpu); cuda must be available and is not authoritative "
+        "except for a qualifying E.1 training cohort",
     )
 
 
@@ -140,6 +270,11 @@ def _run_train(arguments: argparse.Namespace, *, trainer: str) -> int:
     output = _preflight_new_output(arguments.output, role="artifact output")
     _create_parent(output)
     _require_requested_device(arguments.device)
+    _write_progress(
+        f"Training {trainer}: profile={arguments.profile}, seed={arguments.seed}, "
+        f"device={arguments.device}; artifact={output.resolve(strict=False)}. "
+        "Preparing data, fitting the model, and validating the saved result; this may take minutes."
+    )
     if trainer == "bc":
         _train_bc_artifact(
             profile=arguments.profile,
@@ -163,6 +298,7 @@ def _run_train(arguments: argparse.Namespace, *, trainer: str) -> int:
         )
     else:
         raise LearningContractError(f"unsupported trainer: {trainer}")
+    _write_progress(f"Training complete; artifact={output.resolve(strict=False)}")
     return 0
 
 
@@ -170,24 +306,34 @@ def _run_diagnose(arguments: argparse.Namespace) -> int:
     artifacts = _canonical_input_directories(arguments.artifacts)
     output = _preflight_new_output(arguments.output, role="diagnostic output")
     output = _validate_diagnostic_output(output, artifacts=artifacts)
+    exploratory = {"exploratory": True} if arguments.exploratory else {}
     _preflight_diagnostic_request(
         artifacts,
         suite=arguments.suite,
         device=arguments.device,
         bound_mask=arguments.bound_mask,
+        **exploratory,
     )
     _require_requested_device(arguments.device)
     _create_parent(output)
+    _write_trusted_local_warning()
+    _write_progress(f"Diagnosing {len(artifacts)} artifact(s); suite={arguments.suite}")
     bundle = _diagnose_artifacts(
         artifacts,
         suite=arguments.suite,
         device=arguments.device,
         bound_mask=arguments.bound_mask,
+        **exploratory,
     )
-    content = _diagnostic_bundle_bytes(bundle)
+    if arguments.exploratory:
+        from harpy.learning.experiment_results import readout_bytes
+
+        content = readout_bytes(bundle)
+    else:
+        content = _diagnostic_bundle_bytes(bundle)
     write_new_bytes(output, content)
-    _write_trusted_local_warning()
     _write_stdout_bytes(content)
+    _write_progress(f"Diagnostics complete; report={output.resolve(strict=False)}")
     return 0
 
 
@@ -206,18 +352,37 @@ def _run_evaluate(arguments: argparse.Namespace) -> int:
             )
         _create_parent(output)
     _require_requested_device(arguments.device)
-    report = evaluate_artifacts(artifacts, device=arguments.device)
-    content = evaluation_report_bytes(report)
+    _write_trusted_local_warning()
+    _write_progress(f"Evaluating {len(artifacts)} artifact(s); device={arguments.device}")
+    if arguments.exploratory:
+        from harpy.learning.experiment_results import readout_bytes
+
+        report = evaluate_artifacts(artifacts, device=arguments.device, exploratory=True)
+        content = readout_bytes(report)
+    else:
+        report = evaluate_artifacts(artifacts, device=arguments.device)
+        content = evaluation_report_bytes(report)
     if output is not None:
         write_new_bytes(output, content)
-    _write_trusted_local_warning()
     _write_stdout_bytes(content)
+    destination = "stdout" if output is None else str(output.resolve(strict=False))
+    _write_progress(f"Evaluation complete; report={destination}")
     return 0
 
 
 def _run_episode(arguments: argparse.Namespace) -> int:
     artifact = _canonical_input_directories((arguments.artifact,))[0]
     _require_requested_device(arguments.device)
+    _write_trusted_local_warning()
+    _write_progress(f"Running demonstration; seed={arguments.seed}, device={arguments.device}")
+    if arguments.with_provenance:
+        from harpy.learning.experiment_results import readout_bytes
+        from harpy.learning.workflows import run_artifact_result
+
+        result = run_artifact_result(artifact, seed=arguments.seed, device=arguments.device)
+        _write_stdout_bytes(readout_bytes(result))
+        _write_progress("Demonstration complete; trace=stdout")
+        return 0
     episode = run_artifact(
         artifact,
         seed=arguments.seed,
@@ -227,8 +392,17 @@ def _run_episode(arguments: argparse.Namespace) -> int:
         content = trace_json_bytes(episode)
     else:
         content = format_human_trace(episode).encode("utf-8")
-    _write_trusted_local_warning()
     _write_stdout_bytes(content)
+    _write_progress("Demonstration complete; trace=stdout")
+    return 0
+
+
+def _run_summarize(arguments: argparse.Namespace) -> int:
+    from harpy.learning.readout import summarize_report_bytes
+
+    content = arguments.report.read_bytes()
+    summary = summarize_report_bytes(content, format=arguments.format)
+    _write_stdout_bytes(summary.encode("utf-8"))
     return 0
 
 
@@ -355,14 +529,17 @@ def _diagnose_artifacts(
     suite: str,
     device: DeviceName,
     bound_mask: bool,
+    exploratory: bool = False,
 ) -> DiagnosticBundle:
     from harpy.learning.workflows import diagnose_artifacts
 
+    options = {"exploratory": True} if exploratory else {}
     return diagnose_artifacts(
         artifacts,
         suite=suite,
         device=device,
         bound_mask=bound_mask,
+        **options,
     )
 
 
@@ -372,14 +549,17 @@ def _preflight_diagnostic_request(
     suite: str,
     device: DeviceName,
     bound_mask: bool,
+    exploratory: bool = False,
 ) -> None:
     from harpy.learning.workflows import preflight_diagnostic_request
 
+    options = {"exploratory": True} if exploratory else {}
     preflight_diagnostic_request(
         artifacts,
         suite=suite,
         device=device,
         bound_mask=bound_mask,
+        **options,
     )
 
 
@@ -391,6 +571,11 @@ def _diagnostic_bundle_bytes(bundle: DiagnosticBundle) -> bytes:
 
 def _write_trusted_local_warning() -> None:
     sys.stderr.write(f"{TRUSTED_LOCAL_MODEL_WARNING}\n")
+
+
+def _write_progress(message: str) -> None:
+    sys.stderr.write(f"{' '.join(message.splitlines())}\n")
+    sys.stderr.flush()
 
 
 def _write_stdout_bytes(content: bytes) -> None:

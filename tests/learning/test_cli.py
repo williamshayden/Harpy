@@ -1,4 +1,4 @@
-"""Six-command learned sine-policy CLI and stable exit contracts."""
+"""Headless learned sine-policy CLI and stable exit contracts."""
 
 from __future__ import annotations
 
@@ -63,14 +63,14 @@ def _write_pitch_preflight_manifest(
     )
 
 
-def test_parser_exposes_exact_six_command_grammar(capsys: pytest.CaptureFixture[str]) -> None:
+def test_parser_exposes_research_command_grammar(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as raised:
         cli.main(["--help"])
 
     captured = capsys.readouterr()
     assert raised.value.code == 0
     assert captured.err == ""
-    assert "{train-bc,train-ppo,train-pitch,diagnose,evaluate,run}" in captured.out
+    assert "{train-bc,train-ppo,train-pitch,diagnose,evaluate,run,summarize}" in captured.out
     for command in (
         "train-bc",
         "train-ppo",
@@ -78,8 +78,116 @@ def test_parser_exposes_exact_six_command_grammar(capsys: pytest.CaptureFixture[
         "diagnose",
         "evaluate",
         "run",
+        "summarize",
     ):
         assert command in captured.out
+
+
+@pytest.mark.parametrize("command", ["run", "evaluate", "diagnose"])
+def test_trust_warning_precedes_loading_even_when_workflow_fails(
+    command: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events = []
+    warning = cli._write_trusted_local_warning
+
+    def warn():
+        events.append("warning")
+        warning()
+
+    def fail(*args, **kwargs):
+        events.append("load")
+        raise LearningExecutionError("model loading failed")
+
+    monkeypatch.setattr(cli, "_write_trusted_local_warning", warn)
+    monkeypatch.setattr(cli, "_require_requested_device", lambda device: None)
+    monkeypatch.setattr(cli, "_preflight_diagnostic_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "run_artifact", fail)
+    monkeypatch.setattr(cli, "evaluate_artifacts", fail)
+    monkeypatch.setattr(cli, "_diagnose_artifacts", fail)
+    arguments = [command, str(tmp_path)]
+    if command == "run":
+        arguments.extend(["--seed", "0"])
+    elif command == "diagnose":
+        arguments.extend(["--suite", "smoke", "--output", str(tmp_path.parent / "readout.json")])
+
+    assert cli.main(arguments) == 1
+    captured = capsys.readouterr()
+    assert events == ["warning", "load"]
+    assert captured.out == ""
+    assert captured.err.startswith(cli.TRUSTED_LOCAL_MODEL_WARNING + "\n")
+    assert "error: model loading failed" in captured.err
+    assert "complete;" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("command", "explanation"),
+    [
+        ("train-pitch", "scientifically ineligible"),
+        ("diagnose", "one BC artifact only"),
+        ("run", "independent of the model training seed"),
+        ("summarize", "never modified"),
+    ],
+)
+def test_command_help_explains_research_constraints(
+    command: str, explanation: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        cli.main([command, "--help"])
+    captured = capsys.readouterr()
+    assert raised.value.code == 0
+    assert explanation in " ".join(captured.out.split())
+    assert "Example:" in captured.out
+
+
+@pytest.mark.parametrize("command", ["evaluate", "diagnose", "run"])
+def test_additive_readout_flags_route_and_preserve_stdout(
+    command: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from harpy.learning import experiment_results, workflows
+
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    output = tmp_path / "report.json"
+    result = object()
+    calls = []
+
+    def workflow(*args, **kwargs):
+        calls.append(kwargs)
+        return result
+
+    monkeypatch.setattr(cli, "_require_requested_device", lambda device: None)
+    monkeypatch.setattr(cli, "_preflight_diagnostic_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "evaluate_artifacts", workflow)
+    monkeypatch.setattr(cli, "_diagnose_artifacts", workflow)
+    monkeypatch.setattr(workflows, "run_artifact_result", workflow)
+    monkeypatch.setattr(
+        experiment_results,
+        "readout_bytes",
+        lambda value: b'{"portable":true}\n' if value is result else pytest.fail("wrong result"),
+    )
+    arguments = [command, str(artifact)]
+    if command == "run":
+        arguments.extend(["--seed", "12", "--with-provenance"])
+    else:
+        arguments.extend(["--exploratory", "--output", str(output)])
+        if command == "diagnose":
+            arguments.extend(["--suite", "iid"])
+
+    assert cli.main(arguments) == 0
+    captured = capsys.readouterr()
+    assert captured.out == '{"portable":true}\n'
+    assert captured.err.count(cli.TRUSTED_LOCAL_MODEL_WARNING) == 1
+    if command == "run":
+        assert calls == [{"seed": 12, "device": DeviceName.CPU}]
+    else:
+        assert calls[0]["exploratory"] is True
+        assert output.read_bytes() == captured.out.encode()
 
 
 def test_diagnose_help_pins_exact_options_and_order(capsys: pytest.CaptureFixture[str]) -> None:
@@ -211,7 +319,9 @@ def test_train_commands_validate_and_create_only_parents_before_lazy_trainer(
         ("ppo", ProfileName.SMOKE, 4, DeviceName.CUDA, ppo_output),
         ("pitch", ProfileName.CHECKPOINT, 5, DeviceName.CUDA, pitch_output),
     ]
-    assert capsys.readouterr() == ("", "")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("Training complete; artifact=") == 3
 
 
 def test_train_pitch_lazy_adapter_forwards_exact_public_api(
@@ -462,7 +572,9 @@ def test_diagnose_valid_v1_bc_bound_mask_canonicalizes_and_publishes_identical_b
     ]
     assert output.read_bytes() == content
     assert captured.out.encode() == content
-    assert captured.err == f"{cli.TRUSTED_LOCAL_MODEL_WARNING}\n"
+    assert captured.err.startswith(f"{cli.TRUSTED_LOCAL_MODEL_WARNING}\n")
+    assert captured.err.count(cli.TRUSTED_LOCAL_MODEL_WARNING) == 1
+    assert "Diagnostics complete; report=" in captured.err
 
 
 def test_diagnose_adapter_forwards_exact_workflow_api(
@@ -853,7 +965,9 @@ def test_diagnose_exact_e1_cuda_triple_reaches_cpu_workflow(
     assert output.read_bytes() == content
     captured = capsys.readouterr()
     assert captured.out.encode() == content
-    assert captured.err == f"{cli.TRUSTED_LOCAL_MODEL_WARNING}\n"
+    assert captured.err.startswith(f"{cli.TRUSTED_LOCAL_MODEL_WARNING}\n")
+    assert captured.err.count(cli.TRUSTED_LOCAL_MODEL_WARNING) == 1
+    assert "Diagnostics complete; report=" in captured.err
 
 
 def test_diagnose_multi_v1_bound_mask_precedes_device_and_output_creation(
@@ -900,7 +1014,7 @@ def test_diagnose_multi_v1_bound_mask_precedes_device_and_output_creation(
 @pytest.mark.parametrize(
     ("failure", "exit_code"),
     [
-        (DependencyUnavailableError("uv sync --group train"), 1),
+        (DependencyUnavailableError("python -m pip install 'harpy-audio[train]'"), 1),
         (ArtifactError("pitch artifact hash mismatch"), 1),
         (LearningExecutionError("diagnostics failed"), 1),
         (LearningContractError("unsupported diagnostic mask"), 2),
@@ -943,14 +1057,15 @@ def test_diagnose_failures_have_stable_exit_and_never_publish(
     captured = capsys.readouterr()
     assert not output.exists()
     assert captured.out == ""
-    assert captured.err.count("\n") == 1
+    assert sum(line.startswith("error: ") for line in captured.err.splitlines()) == 1
+    assert "Diagnostics complete;" not in captured.err
     assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize(
     ("device", "message"),
     [
-        (DeviceName.CPU, "uv sync --group train"),
+        (DeviceName.CPU, "python -m pip install 'harpy-audio[train]'"),
         (DeviceName.CUDA, "CUDA was requested but is unavailable"),
     ],
 )
@@ -1075,7 +1190,7 @@ def test_run_emits_exact_human_or_json_trace_and_one_trusted_warning(
     [
         (LearningContractError("duplicate artifact seed"), 2),
         (ArtifactError("hash mismatch"), 1),
-        (DependencyUnavailableError("uv sync --group train"), 1),
+        (DependencyUnavailableError("python -m pip install 'harpy-audio[train]'"), 1),
         (LearningExecutionError("evaluation failed"), 1),
         (OSError("publication failed"), 1),
         (RuntimeError("unexpected evaluator failure"), 1),
@@ -1103,7 +1218,8 @@ def test_operational_failures_have_stable_exit_empty_stdout_and_one_diagnostic(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.count("\n") == 1
+    assert sum(line.startswith("error: ") for line in captured.err.splitlines()) == 1
+    assert "Evaluation complete;" not in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -1135,16 +1251,16 @@ def test_explicit_unavailable_cuda_is_exit_one_after_all_paths_validate(
     assert "CUDA" in captured.err
 
 
-def test_console_script_metadata_preserves_existing_scripts() -> None:
+def test_console_script_metadata_exposes_headless_commands_only() -> None:
     scripts = {entry.name: entry.value for entry in entry_points(group="console_scripts")}
 
-    assert scripts["harpy"] == "harpy.gui.app:main"
+    assert "harpy" not in scripts
     assert scripts["harpy-sine-gym"] == "harpy.envs.checkpoint:main"
     assert scripts["harpy-sine-learn"] == "harpy.learning.cli:main"
 
 
 @pytest.mark.parametrize("entry_point", ["module", "console"])
-def test_help_is_torch_sb3_and_qt_free(
+def test_help_is_torch_and_sb3_free(
     entry_point: str,
     tmp_path: Path,
 ) -> None:
@@ -1168,7 +1284,7 @@ def test_help_is_torch_sb3_and_qt_free(
 
     assert completed.returncode == 0
     assert completed.stderr == ""
-    assert "{train-bc,train-ppo,train-pitch,diagnose,evaluate,run}" in completed.stdout
+    assert "{train-bc,train-ppo,train-pitch,diagnose,evaluate,run,summarize}" in completed.stdout
 
 
 def _heavy_import_poisoned_environment(tmp_path: Path) -> dict[str, str]:
@@ -1181,7 +1297,7 @@ import builtins
 _original_import = builtins.__import__
 
 def _guarded_import(name, *args, **kwargs):
-    blocked = ("torch", "stable_baselines3", "PySide6", "pyqtgraph")
+    blocked = ("torch", "stable_baselines3")
     if any(name == item or name.startswith(item + ".") for item in blocked):
         raise RuntimeError("help imported optional heavy dependency: " + name)
     return _original_import(name, *args, **kwargs)

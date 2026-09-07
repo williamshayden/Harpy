@@ -297,6 +297,29 @@ def test_analysis_uses_only_the_most_recent_exact_fft_capture() -> None:
     assert result.peak_frequency_hz == pytest.approx(900.0, abs=0.1)
 
 
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("sample_index", [0, 8_192, 16_383])
+def test_analysis_rejects_nonfinite_samples_anywhere_in_the_capture(
+    value: float, sample_index: int
+) -> None:
+    samples = np.zeros(16_384, dtype=np.float32)
+    samples[sample_index] = value
+
+    with pytest.raises(ValueError, match="capture must contain only finite samples"):
+        analyze(samples, 48_000)
+
+
+def test_analysis_ignores_nonfinite_samples_outside_the_recent_capture() -> None:
+    frames = np.arange(16_384, dtype=np.float64)
+    recent_capture = 0.25 * np.sin(math.tau * 900.0 * frames / 48_000)
+    samples = np.concatenate(([math.nan, math.inf, -math.inf], recent_capture))
+
+    result = analyze(samples, 48_000)
+
+    assert result.peak_frequency_hz == pytest.approx(900.0, abs=0.1)
+    assert np.all(np.isfinite(result.spectrum_level_dbfs))
+
+
 def test_below_floor_in_range_spectrum_has_signal_without_spectral_peak() -> None:
     frames = np.arange(16_384, dtype=np.float64)
     frequency_hz = 500 * 48_000 / 16_384

@@ -8,9 +8,11 @@ def test_public_import_smoke_is_silent() -> None:
             sys.executable,
             "-c",
             (
-                "import harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
-                "import harpy.gui.app, harpy.gui.envelope_editor, harpy.gui.window; "
-                "import harpy.synth.curves, harpy.synth.engine, harpy.synth.patch_json"
+                "import harpy, harpy.analysis, harpy.tuning; "
+                "import harpy.envs, harpy.envs.sine_pitch; "
+                "import harpy.learning, harpy.learning.cli; "
+                "import harpy.synth, harpy.synth.curves, harpy.synth.engine, "
+                "harpy.synth.patch_json"
             ),
         ],
         capture_output=True,
@@ -30,10 +32,10 @@ def test_ordinary_public_imports_do_not_load_training_stack() -> None:
             "-c",
             (
                 "import sys; "
-                "import harpy, harpy.analysis, harpy.capture, harpy.playback, harpy.tuning; "
+                "import harpy, harpy.analysis, harpy.tuning; "
                 "import harpy.envs, harpy.envs.sine_pitch; "
                 "import harpy.synth, harpy.synth.engine, harpy.synth.models; "
-                "import harpy.gui.app; "
+                "import harpy.learning, harpy.learning.cli; "
                 "assert 'torch' not in sys.modules; "
                 "assert 'stable_baselines3' not in sys.modules"
             ),
@@ -82,23 +84,21 @@ def test_environment_submodules_remain_importable_after_package_initialization()
     assert result.returncode == 0, result.stderr.decode()
 
 
-def test_environment_import_and_episode_do_not_load_qt_or_audio_devices() -> None:
+def test_environment_import_and_episode_do_not_load_training_stack() -> None:
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             (
                 "import sys; "
-                "sys.modules['PySide6'] = None; "
                 "import gymnasium; "
                 "import harpy.envs; "
                 "env = gymnasium.make('Harpy/SinePitch-v0'); "
                 "env.reset(seed=0); "
                 "env.step(3); "
                 "env.close(); "
-                "assert not any(name == 'harpy.gui' or name.startswith('harpy.gui.') "
-                "or name == 'PySide6' or name.startswith('PySide6.') "
-                "for name in sys.modules if sys.modules[name] is not None)"
+                "assert 'torch' not in sys.modules; "
+                "assert 'stable_baselines3' not in sys.modules"
             ),
         ],
         capture_output=True,
