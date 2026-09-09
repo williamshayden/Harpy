@@ -149,6 +149,7 @@ def test_action_labels_are_actor_facing_musical_names() -> None:
 def test_observation_modes_and_terminal_reasons_have_stable_values() -> None:
     assert [(mode.name, mode.value) for mode in ObservationMode] == [
         ("SPECTRUM", "spectrum"),
+        ("WAVEFORM", "waveform"),
         ("ORACLE", "oracle"),
         ("REWARD_ONLY", "reward_only"),
     ]

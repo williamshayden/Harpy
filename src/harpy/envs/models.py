@@ -44,6 +44,7 @@ class PitchAction(IntEnum):
 
 class ObservationMode(StrEnum):
     SPECTRUM = "spectrum"
+    WAVEFORM = "waveform"
     ORACLE = "oracle"
     REWARD_ONLY = "reward_only"
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Final
 
 from harpy.envs.spectrum import LOG_SPECTRUM_SIZE
-from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.dependencies import require_pitch_dependencies
 from harpy.learning.errors import LearningContractError, LearningExecutionError
 
-_training_stack = require_training_dependencies()
+_training_stack = require_pitch_dependencies()
 torch = _training_stack.torch
 
 PITCH_GRID_MIN_CENTS: Final = 1_100

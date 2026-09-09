@@ -15,7 +15,7 @@ import torch
 from harpy.envs.models import ZERO_CONTROLS, ControlState, PitchAction
 from harpy.envs.planning import minimum_action_plan
 from harpy.learning.errors import LearningContractError, LearningExecutionError
-from harpy.learning.pitch_actor import PitchDecision, PitchPlannerActor
+from harpy.learning.pitch_actor import PitchDecision, PitchDecoding, PitchPlannerActor
 from harpy.learning.pitch_network import PITCH_CLASS_COUNT, PitchEstimatorNetwork
 
 
@@ -43,8 +43,8 @@ class ScriptedPitchEstimator:
         self.outputs = outputs
         self.observed_spectra: list[torch.Tensor] = []
 
-    def actor(self) -> PitchPlannerActor:
-        actor = PitchPlannerActor(self.model)
+    def actor(self, *, decoding: PitchDecoding = PitchDecoding.GLOBAL_ARGMAX) -> PitchPlannerActor:
+        actor = PitchPlannerActor(self.model, decoding=decoding)
         self.model.forward = self._forward  # type: ignore[method-assign]
         return actor
 
@@ -137,9 +137,150 @@ def test_actor_uses_first_argmax_and_passes_only_owned_spectrum_to_estimator() -
     )
 
 
-def test_actor_validates_full_raw_observation_before_estimator_inference() -> None:
+def test_default_decoding_preserves_the_released_actor_identity_and_decision() -> None:
+    logits = logits_for(0, 980)
+    default = PitchPlannerActor(PitchEstimatorNetwork())
+    default._model.forward = lambda _spectrum: logits  # type: ignore[method-assign]
+    explicit = ScriptedPitchEstimator([logits]).actor(decoding=PitchDecoding.GLOBAL_ARGMAX)
+
+    assert default.decoding is PitchDecoding.GLOBAL_ARGMAX
+    assert default.semantics_id == "harpy-sine-pitch-estimator-planner-v1"
+    assert default.decide(raw_observation()) == explicit.decide(raw_observation())
+
+
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_decoding_identity_is_explicit_and_read_only(decoding: PitchDecoding) -> None:
+    actor = ScriptedPitchEstimator([]).actor(decoding=decoding)
+
+    assert actor.decoding is decoding
+    assert actor.semantics_id == decoding.semantics_id
+    if decoding is PitchDecoding.FEASIBLE_ARGMAX:
+        assert actor.semantics_id == "harpy-sine-pitch-feasible-estimator-planner-v1"
+    with pytest.raises(AttributeError):
+        actor.decoding = PitchDecoding.GLOBAL_ARGMAX  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("decoding", ["global-argmax", "feasible-argmax", None, True])
+def test_actor_rejects_untyped_decoding(decoding: object) -> None:
+    with pytest.raises(LearningContractError, match="PitchDecoding"):
+        PitchPlannerActor(object(), decoding=decoding)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("impossible_cents", [1_100, 10_900])
+def test_feasible_decoding_selects_the_best_possible_logit_without_clamping_or_mutation(
+    impossible_cents: int,
+) -> None:
+    logits = logits_for((6_600 - 1_100) // 5)
+    logits[0, (impossible_cents - 1_100) // 5] = 2.0
+    original = logits.clone()
+    actor = ScriptedPitchEstimator([logits]).actor(decoding=PitchDecoding.FEASIBLE_ARGMAX)
+
+    decision = actor.decide(raw_observation(target_note=18))
+
+    assert decision == PitchDecision(PitchAction.SUBMIT, 6_600)
+    assert torch.equal(logits, original)
+
+
+@pytest.mark.parametrize(
+    ("controls", "lower_cents", "upper_cents"),
+    [
+        (ControlState(cents=2), 4_800, 7_200),
+        (ControlState(cents=3), 4_805, 7_205),
+        (ControlState(cents=-2), 4_800, 7_200),
+        (ControlState(cents=-3), 4_795, 7_195),
+    ],
+)
+@pytest.mark.parametrize("boundary", ["lower", "upper"])
+def test_feasible_decoding_includes_quantized_endpoints_and_excludes_the_next_class(
+    controls: ControlState,
+    lower_cents: int,
+    upper_cents: int,
+    boundary: str,
+) -> None:
+    endpoint = lower_cents if boundary == "lower" else upper_cents
+    impossible_neighbor = endpoint + (-5 if boundary == "lower" else 5)
+    logits = logits_for((endpoint - 1_100) // 5)
+    logits[0, (impossible_neighbor - 1_100) // 5] = 2.0
+    actor = ScriptedPitchEstimator([logits]).actor(decoding=PitchDecoding.FEASIBLE_ARGMAX)
+
+    assert actor.decide(raw_observation(controls=controls)).estimated_candidate_cents == endpoint
+
+
+@pytest.mark.parametrize(
+    ("controls", "estimated_cents"),
+    [
+        (ControlState(octaves=-2, semitones=-12, cents=-100), 1_100),
+        (ControlState(octaves=2, semitones=12, cents=100), 10_900),
+    ],
+)
+def test_feasible_decoding_retains_valid_extreme_grid_classes(
+    controls: ControlState, estimated_cents: int
+) -> None:
+    actor = ScriptedPitchEstimator([logits_for((estimated_cents - 1_100) // 5)]).actor(
+        decoding=PitchDecoding.FEASIBLE_ARGMAX
+    )
+
+    decision = actor.decide(raw_observation(controls=controls))
+
+    assert decision.estimated_candidate_cents == estimated_cents
+
+
+def test_feasible_decoding_keeps_the_first_maximum_inside_the_possible_interval() -> None:
+    actor = ScriptedPitchEstimator([logits_for(0, 740, 741, 1_960)]).actor(
+        decoding=PitchDecoding.FEASIBLE_ARGMAX
+    )
+
+    assert actor.decide(raw_observation()).estimated_candidate_cents == 4_800
+
+
+def test_feasible_decoding_uses_only_public_source_bounds_and_total_control_offset() -> None:
+    logits = logits_for((8_200 - 1_100) // 5)
+    logits[0, 0] = 2.0
+    actor = ScriptedPitchEstimator([logits, logits, logits]).actor(
+        decoding=PitchDecoding.FEASIBLE_ARGMAX
+    )
+    observations = [
+        raw_observation(target_note=0, controls=ControlState(octaves=1)),
+        raw_observation(target_note=24, controls=ControlState(semitones=12)),
+        raw_observation(target_note=12, controls=ControlState(octaves=1, semitones=1, cents=-100)),
+    ]
+    observations[-1]["steps_remaining"] = np.int64(1)
+
+    assert [actor.decide(obs).estimated_candidate_cents for obs in observations] == [8_200] * 3
+
+
+def test_feasible_decoding_recomputes_the_interval_after_controls_change() -> None:
+    logits = logits_for(0)
+    logits[0, (6_100 - 1_100) // 5] = 2.0
+    actor = ScriptedPitchEstimator([logits, logits]).actor(decoding=PitchDecoding.FEASIBLE_ARGMAX)
+
+    initial = actor.decide(raw_observation())
+    shifted = actor.decide(
+        raw_observation(controls=ControlState(octaves=-2, semitones=-12, cents=-100))
+    )
+
+    assert initial.estimated_candidate_cents == 6_100
+    assert shifted.estimated_candidate_cents == 1_100
+
+
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+def test_feasible_decoding_rejects_nonfinite_logits_even_outside_the_possible_interval(
+    nonfinite: float,
+) -> None:
+    logits = logits_for(980)
+    logits[0, 0] = nonfinite
+    actor = ScriptedPitchEstimator([logits]).actor(decoding=PitchDecoding.FEASIBLE_ARGMAX)
+
+    with pytest.raises(LearningExecutionError, match="finite"):
+        actor.decide(raw_observation())
+
+
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_actor_validates_full_raw_observation_before_estimator_inference(
+    decoding: PitchDecoding,
+) -> None:
     model = ScriptedPitchEstimator([logits_for(980)])
-    actor = model.actor()
+    actor = model.actor(decoding=decoding)
     observation = raw_observation()
     observation["source_pitch_cents"] = 6_000
 
@@ -148,9 +289,10 @@ def test_actor_validates_full_raw_observation_before_estimator_inference() -> No
     assert model.observed_spectra == []
 
 
-def test_actor_plans_from_one_owned_validated_observation_snapshot() -> None:
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_actor_plans_from_one_owned_validated_observation_snapshot(decoding: PitchDecoding) -> None:
     model = ScriptedPitchEstimator([logits_for((6_000 - 1_100) // 5)])
-    actor = model.actor()
+    actor = model.actor(decoding=decoding)
     observation = ChangingTargetObservation(raw_observation(target_note=12))
 
     assert actor.act(observation) is PitchAction.SUBMIT
@@ -203,11 +345,12 @@ def test_actor_returns_the_first_real_planned_action_and_it_is_legal(
         assert applied
 
 
-def test_actor_reestimates_on_every_call_and_keeps_no_plan_cursor() -> None:
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_actor_reestimates_on_every_call_and_keeps_no_plan_cursor(decoding: PitchDecoding) -> None:
     first = logits_for((6_100 - 1_100) // 5)
     second = logits_for((5_900 - 1_100) // 5)
     model = ScriptedPitchEstimator([first, second])
-    actor = model.actor()
+    actor = model.actor(decoding=decoding)
 
     first_decision = actor.decide(raw_observation(target_note=12, spectrum_fill=0.1))
     second_decision = actor.decide(raw_observation(target_note=12, spectrum_fill=0.9))
@@ -228,8 +371,11 @@ def test_actor_reestimates_on_every_call_and_keeps_no_plan_cursor() -> None:
         torch.full((1, PITCH_CLASS_COUNT), float("nan")),
     ],
 )
-def test_actor_rejects_malformed_estimator_output(output: torch.Tensor) -> None:
-    actor = ScriptedPitchEstimator([output]).actor()
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_actor_rejects_malformed_estimator_output(
+    output: torch.Tensor, decoding: PitchDecoding
+) -> None:
+    actor = ScriptedPitchEstimator([output]).actor(decoding=decoding)
 
     with pytest.raises(LearningExecutionError, match="logits"):
         actor.decide(raw_observation())
@@ -246,8 +392,9 @@ def test_actor_rejects_malformed_or_nonfinite_model_state() -> None:
         PitchPlannerActor(model)
 
 
-def test_actor_rejects_an_illegal_planned_action() -> None:
-    actor = ScriptedPitchEstimator([logits_for(980)]).actor()
+@pytest.mark.parametrize("decoding", list(PitchDecoding))
+def test_actor_rejects_an_illegal_planned_action(decoding: PitchDecoding) -> None:
+    actor = ScriptedPitchEstimator([logits_for(980)]).actor(decoding=decoding)
 
     with (
         patch(

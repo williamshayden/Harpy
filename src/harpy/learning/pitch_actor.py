@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
 
-from harpy.envs.models import TARGET_MIN_COORDINATE, ControlState, PitchAction
+from harpy.envs.models import (
+    SOURCE_MAX_CENTS,
+    SOURCE_MIN_CENTS,
+    TARGET_MIN_COORDINATE,
+    ControlState,
+    PitchAction,
+)
 from harpy.envs.planning import minimum_action_plan
 from harpy.learning.action_masks import legal_action_mask
-from harpy.learning.dependencies import require_training_dependencies
+from harpy.learning.dependencies import require_pitch_dependencies
 from harpy.learning.errors import LearningContractError, LearningExecutionError
 from harpy.learning.observations import preprocess_observation
 
@@ -26,6 +33,20 @@ _RAW_OBSERVATION_KEYS = (
     "controls",
     "steps_remaining",
 )
+
+
+class PitchDecoding(StrEnum):
+    """Explicit estimator decoding; the released actor uses global argmax."""
+
+    GLOBAL_ARGMAX = "global-argmax"
+    FEASIBLE_ARGMAX = "feasible-argmax"
+
+    @property
+    def semantics_id(self) -> str:
+        """Distinguish the released actor from the explicit decoding intervention."""
+        if self is PitchDecoding.GLOBAL_ARGMAX:
+            return "harpy-sine-pitch-estimator-planner-v1"
+        return "harpy-sine-pitch-feasible-estimator-planner-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +74,16 @@ class PitchDecision:
 class PitchPlannerActor:
     """Re-estimate and replan from every complete actor-visible observation."""
 
-    def __init__(self, model: object, *, device: object | None = None) -> None:
-        training_stack = require_training_dependencies()
+    def __init__(
+        self,
+        model: object,
+        *,
+        device: object | None = None,
+        decoding: PitchDecoding = PitchDecoding.GLOBAL_ARGMAX,
+    ) -> None:
+        if not isinstance(decoding, PitchDecoding):
+            raise LearningContractError("decoding must be a PitchDecoding")
+        training_stack = require_pitch_dependencies()
         self._torch = training_stack.torch
         # Importing the Torch-defined network module remains lazy until actor construction.
         from harpy.learning.pitch_network import validate_pitch_estimator_model
@@ -64,6 +93,17 @@ class PitchPlannerActor:
         self._model = model.to(requested_device)
         self._device = next(self._model.parameters()).device
         self._model.eval()
+        self._decoding = decoding
+
+    @property
+    def decoding(self) -> PitchDecoding:
+        """Identify the explicitly selected estimator decoding behavior."""
+        return self._decoding
+
+    @property
+    def semantics_id(self) -> str:
+        """Identify the estimator-plus-planner behavior for comparison reports."""
+        return self._decoding.semantics_id
 
     def act(self, observation: Mapping[str, object]) -> PitchAction:
         """Return only the chosen action through the existing narrow actor protocol."""
@@ -78,12 +118,11 @@ class PitchPlannerActor:
         )
         with self._torch.inference_mode():
             logits = self._model(spectrum)
-        estimated_candidate_cents = self._estimate_from_logits(logits)
-
         raw_controls = snapshot["controls"]
         if not isinstance(raw_controls, np.ndarray):  # proved by preprocessing; narrows typing
             raise LearningContractError("controls must be an int16 ndarray")
         controls = ControlState(*(int(value) for value in raw_controls))
+        estimated_candidate_cents = self._estimate_from_logits(logits, controls=controls)
         target_note = int(snapshot["target_note"])
         target_cents = TARGET_MIN_COORDINATE * 100 + 100 * target_note
         estimated_base_error = estimated_candidate_cents - controls.offset_cents - target_cents
@@ -107,7 +146,7 @@ class PitchPlannerActor:
             estimated_candidate_cents=estimated_candidate_cents,
         )
 
-    def _estimate_from_logits(self, logits: object) -> int:
+    def _estimate_from_logits(self, logits: object, *, controls: ControlState) -> int:
         if not isinstance(logits, self._torch.Tensor):
             raise LearningExecutionError("pitch estimator logits must be a torch tensor")
         if logits.shape != (1, _PITCH_CLASS_COUNT):
@@ -120,7 +159,21 @@ class PitchPlannerActor:
             raise LearningExecutionError("pitch estimator logits must share the actor device")
         if not self._torch.isfinite(logits).all():
             raise LearningExecutionError("pitch estimator logits must contain only finite values")
-        first_maximum = int(self._torch.argmax(logits, dim=1).item())
+        first_class = 0
+        if self._decoding is PitchDecoding.FEASIBLE_ARGMAX:
+            # Integer-cent sources round to five-cent classes with up to two cents
+            # of quantization error. Include the classes nearest both public bounds,
+            # even when a class center lies just outside the unrounded interval.
+            offset = controls.offset_cents
+            half_step = _PITCH_GRID_STEP_CENTS // 2
+            first_class = (
+                SOURCE_MIN_CENTS + offset - _PITCH_GRID_MIN_CENTS + half_step
+            ) // _PITCH_GRID_STEP_CENTS
+            last_class = (
+                SOURCE_MAX_CENTS + offset - _PITCH_GRID_MIN_CENTS + half_step
+            ) // _PITCH_GRID_STEP_CENTS
+            logits = logits[:, first_class : last_class + 1]
+        first_maximum = first_class + int(self._torch.argmax(logits, dim=1).item())
         return _PITCH_GRID_MIN_CENTS + _PITCH_GRID_STEP_CENTS * first_maximum
 
 
@@ -139,4 +192,4 @@ def _owned_observation_snapshot(observation: Mapping[str, object]) -> dict[str, 
     return snapshot
 
 
-__all__ = ["PitchDecision", "PitchPlannerActor"]
+__all__ = ["PitchDecision", "PitchDecoding", "PitchPlannerActor"]

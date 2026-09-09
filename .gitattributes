@@ -1,0 +1,10 @@
+# Preserve the bytes used by artifact and scientific-evidence checksums.
+/src/harpy/reference/** -text
+/src/harpy/experiments/data/*.json -text
+/docs/verification/v1-respec/** -text
+/research/spectrum_preservation/membership.json -text
+/research/spectrum_preservation/results/** -text
+
+# Python's CSV writer uses CRLF. Keep it, while checking other whitespace errors.
+/docs/verification/v1-respec/*.csv whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/research/spectrum_preservation/results/*.csv whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

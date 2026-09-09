@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -142,26 +141,21 @@ def test_invalid_arguments_use_standard_argparse_errors_without_evaluation(
     assert captured.err.startswith("usage: harpy-sine-gym")
 
 
-def test_console_script_metadata_targets_checkpoint_main() -> None:
+def test_console_script_metadata_targets_unified_cli() -> None:
     scripts = {entry.name: entry.value for entry in entry_points(group="console_scripts")}
 
-    assert scripts["harpy-sine-gym"] == "harpy.envs.checkpoint:main"
+    assert scripts["harpy"] == "harpy.cli:main"
+    assert "harpy-sine-gym" not in scripts
 
 
 def test_checkpoint_is_not_a_harpy_envs_compatibility_export() -> None:
     assert "checkpoint" not in harpy.envs.__all__
 
 
-@pytest.mark.parametrize("entry_point", ["module", "console"])
-def test_entry_points_run_without_stderr_or_files(entry_point: str, tmp_path: Path) -> None:
+def test_historical_module_runs_without_stderr_or_files(tmp_path: Path) -> None:
     run_directory = tmp_path / "empty-cwd"
     run_directory.mkdir()
-    if entry_point == "module":
-        command = [sys.executable, "-m", "harpy.envs.checkpoint"]
-    else:
-        console_script = shutil.which("harpy-sine-gym")
-        assert console_script is not None
-        command = [console_script]
+    command = [sys.executable, "-m", "harpy.envs.checkpoint"]
 
     completed = subprocess.run(
         [*command, "--episodes", "1", "--seed", "0"],

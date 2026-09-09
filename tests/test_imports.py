@@ -1,5 +1,8 @@
+import os
 import subprocess
 import sys
+from importlib.metadata import entry_points
+from pathlib import Path
 
 
 def test_public_import_smoke_is_silent() -> None:
@@ -10,7 +13,7 @@ def test_public_import_smoke_is_silent() -> None:
             (
                 "import harpy, harpy.analysis, harpy.tuning; "
                 "import harpy.envs, harpy.envs.sine_pitch; "
-                "import harpy.learning, harpy.learning.cli; "
+                "import harpy.cli, harpy.experiments; "
                 "import harpy.synth, harpy.synth.curves, harpy.synth.engine, "
                 "harpy.synth.patch_json"
             ),
@@ -35,7 +38,7 @@ def test_ordinary_public_imports_do_not_load_training_stack() -> None:
                 "import harpy, harpy.analysis, harpy.tuning; "
                 "import harpy.envs, harpy.envs.sine_pitch; "
                 "import harpy.synth, harpy.synth.engine, harpy.synth.models; "
-                "import harpy.learning, harpy.learning.cli; "
+                "import harpy.cli, harpy.experiments; "
                 "assert 'torch' not in sys.modules; "
                 "assert 'stable_baselines3' not in sys.modules"
             ),
@@ -107,3 +110,60 @@ def test_environment_import_and_episode_do_not_load_training_stack() -> None:
     )
 
     assert result.returncode == 0, result.stderr.decode()
+
+
+def test_console_script_metadata_exposes_headless_commands_only() -> None:
+    scripts = {entry.name: entry.value for entry in entry_points(group="console_scripts")}
+
+    assert scripts["harpy"] == "harpy.cli:main"
+    assert "harpy-sine-gym" not in scripts
+    assert "harpy-sine-learn" not in scripts
+
+
+def test_help_is_torch_and_sb3_free(
+    tmp_path: Path,
+) -> None:
+    environment = _heavy_import_poisoned_environment(tmp_path)
+    command = [sys.executable, "-m", "harpy", "--help"]
+
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert "{train,evaluate,run,summarize}" in completed.stdout
+
+
+def _heavy_import_poisoned_environment(tmp_path: Path) -> dict[str, str]:
+    poison = tmp_path / "import-poison"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text(
+        """
+import builtins
+
+_original_import = builtins.__import__
+
+def _guarded_import(name, *args, **kwargs):
+    blocked = ("torch", "stable_baselines3")
+    if any(name == item or name.startswith(item + ".") for item in blocked):
+        raise RuntimeError("help imported optional heavy dependency: " + name)
+    return _original_import(name, *args, **kwargs)
+
+builtins.__import__ = _guarded_import
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    python_path = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(poison), *(value for value in [python_path] if value)]
+    )
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment

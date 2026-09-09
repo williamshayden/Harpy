@@ -1,0 +1,136 @@
+{
+  "benchmark_episodes": 650,
+  "conditions": [
+    {
+      "gain_db": 0.0,
+      "id": "clean",
+      "phase_degrees": 0.0,
+      "snr_db": null
+    },
+    {
+      "gain_db": -12.0,
+      "id": "level-minus-12db",
+      "phase_degrees": 0.0,
+      "snr_db": null
+    },
+    {
+      "gain_db": -24.0,
+      "id": "level-minus-24db",
+      "phase_degrees": 0.0,
+      "snr_db": null
+    },
+    {
+      "gain_db": 0.0,
+      "id": "phase-45",
+      "phase_degrees": 45.0,
+      "snr_db": null
+    },
+    {
+      "gain_db": 0.0,
+      "id": "phase-90",
+      "phase_degrees": 90.0,
+      "snr_db": null
+    },
+    {
+      "gain_db": 0.0,
+      "id": "noise-30db",
+      "phase_degrees": 0.0,
+      "snr_db": 30.0
+    },
+    {
+      "gain_db": 0.0,
+      "id": "noise-10db",
+      "phase_degrees": 0.0,
+      "snr_db": 10.0
+    },
+    {
+      "gain_db": -24.0,
+      "id": "combined",
+      "phase_degrees": 90.0,
+      "snr_db": 10.0
+    }
+  ],
+  "confirmation_episodes": 1000,
+  "confirmation_manifest_sha256": "74d5791439eabc71c9d9b91c10780fd7f435a4e7fb3691ffb70fdcf4d0a809e6",
+  "evaluation_device": "cpu",
+  "known_family_fresh_combinations_not_unseen_audio": true,
+  "models": {
+    "0": {
+      "artifact_schema": "harpy-experiment-artifact-v1",
+      "manifest_sha256": "a3ad2169fd0e84151a1e4810f6f55a0b5ad05f84361b508947c50be4bcd270e0",
+      "payload_sha256": {
+        "metadata.json": "3cf9715960ce75a77f826368927e1babe053858df70f6b540186c7b048db4065",
+        "model.pt": "3372304c022b0f13f837c79511a92f25fa7b0cd34217be976608fe46be7c6ac2"
+      },
+      "profile": "checkpoint",
+      "seed": 0,
+      "source": {
+        "identity": {
+          "commit": "1f2ba3fe1829537c3f8e274dd45abeeafaa744d2",
+          "dependency_lock_sha256": "798655d99d7f4931c04ffc90159fc8d7c377c61452d246456a9b9433dc08b4c1",
+          "dirty_tree": false,
+          "required_inputs_committed": true,
+          "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "package_sha256": null,
+        "status": "known"
+      },
+      "trainer": "pitch",
+      "training_device": "cuda"
+    },
+    "1": {
+      "artifact_schema": "harpy-experiment-artifact-v1",
+      "manifest_sha256": "a00e6fcda7c6b8b44ef6adeaa1d1ae65fc8ac776f7587f8a834e6a45b8042e65",
+      "payload_sha256": {
+        "metadata.json": "6e1abaf600bf660ac0f7d2a83026cdc3e455249985c293f7b81b0f6e69d2cb22",
+        "model.pt": "703bdaaae6aed66b2553c6a6f854cbfd66e601f86935ffd373abde6c7561c120"
+      },
+      "profile": "checkpoint",
+      "seed": 1,
+      "source": {
+        "identity": {
+          "commit": "1f2ba3fe1829537c3f8e274dd45abeeafaa744d2",
+          "dependency_lock_sha256": "798655d99d7f4931c04ffc90159fc8d7c377c61452d246456a9b9433dc08b4c1",
+          "dirty_tree": false,
+          "required_inputs_committed": true,
+          "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "package_sha256": null,
+        "status": "known"
+      },
+      "trainer": "pitch",
+      "training_device": "cuda"
+    },
+    "2": {
+      "artifact_schema": "harpy-experiment-artifact-v1",
+      "manifest_sha256": "b9d8687b528261264cf98aecd992604a1bd8f22d4fb9261beb26b230039d747a",
+      "payload_sha256": {
+        "metadata.json": "aa1d72d44eab2b55442d507da31c43f07a71e0d41367b85a7e9e2e2d0c9c7b37",
+        "model.pt": "2b0ace3c7ab2e09f2c9e211914f9a877b46adc7b6bf4255328cb31fa3e54bd63"
+      },
+      "profile": "checkpoint",
+      "seed": 2,
+      "source": {
+        "identity": {
+          "commit": "1f2ba3fe1829537c3f8e274dd45abeeafaa744d2",
+          "dependency_lock_sha256": "798655d99d7f4931c04ffc90159fc8d7c377c61452d246456a9b9433dc08b4c1",
+          "dirty_tree": false,
+          "required_inputs_committed": true,
+          "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "package_sha256": null,
+        "status": "known"
+      },
+      "trainer": "pitch",
+      "training_device": "cuda"
+    }
+  },
+  "purpose": "fixed revised-v1 performance qualification; no model adaptation",
+  "reference_seeds": [
+    0,
+    1,
+    2
+  ],
+  "shipped_seed_declared_before_evaluation": 0,
+  "torch_num_threads": 1
+}

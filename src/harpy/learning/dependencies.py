@@ -11,6 +11,7 @@ from types import ModuleType
 from harpy.learning.errors import DependencyUnavailableError
 
 TRAIN_INSTALL_INSTRUCTION = "python -m pip install 'harpy-audio[train]'"
+PITCH_INSTALL_INSTRUCTION = "python -m pip install 'harpy-audio[pitch]'"
 CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG = ":4096:8"
 
 
@@ -23,6 +24,27 @@ def configure_deterministic_cuda_environment() -> None:
     """
 
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG
+
+
+@dataclass(frozen=True, slots=True)
+class PitchStack:
+    """The standalone PyTorch dependency used by pitch perception."""
+
+    torch: ModuleType
+    torch_version: str
+
+
+def require_pitch_dependencies(
+    import_module: Callable[[str], ModuleType] = importlib.import_module,
+) -> PitchStack:
+    """Load PyTorch without importing the unrelated reinforcement-learning stack."""
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise DependencyUnavailableError(
+            f"Pitch training requires PyTorch. Install it with `{PITCH_INSTALL_INSTRUCTION}`."
+        ) from error
+    return PitchStack(torch=torch, torch_version=torch.__version__)
 
 
 @dataclass(frozen=True, slots=True)

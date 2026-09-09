@@ -1,5 +1,24 @@
 # Release notes
 
+## Unreleased
+
+- Present the project as **harPY — harmonic research in python**. The distribution,
+  CLI, Python imports, artifact formats, and historical release tag retain their
+  existing names.
+
+- Re-spec v1 as an extensible headless audio-control research toolkit; `docs/v1-spec.md` is authoritative and the old `v1.0.0` tag remains intact.
+- Add one `harpy` CLI for training, matched evaluation, traced episodes, and validated text/Markdown/CSV result views.
+- Add custom actor factories with fresh episode state, separate estimator/decoder/controller identities, and ordinary experiment results with explicit provenance.
+- Match supervised pitch and Spectrum Peak with public feasibility decoding and committed zero-tolerance plans; label repeated replanning separately.
+- Add waveform observations, eight controlled static-corruption conditions, a 128 MiB evidence cache, and a frozen 1,000-pair clean confirmation protocol.
+- Add optional `waveform-fft`, a NumPy-only classical actor preserving the separately evaluated quadratic FFT estimator, five-cent decoder, and committed controller. Keep the qualified learned reference and spectrum bytes unchanged; further representation research is outside this v1 scope.
+- Add a Torch-only `pitch` extra, retain experimental PPO through `train`, and retire BC from the new active training interface.
+- Include the predesignated seed-0 reference checkpoint. Seeds 0, 1, and 2 each passed 650 clean benchmark and 1,000 clean confirmation episodes, with zero invalid actions or truncations. Preserve complete eight-condition results, including failures under strong noise; no learned superiority claim is made.
+- Preserve historical readers and prototype evidence. Revised qualification and packaging evidence are tracked in `docs/v1-acceptance.md`; publication and a revised release tag remain separate actions.
+- Remove the duplicate historical command module; use the single `harpy` CLI for current work and the original tag for historical execution. Retain saved-report readers and installed-package training checks.
+- Avoid repeated action-history reconstruction in result summaries while preserving serialized metrics and readout output. Validate membership for the reserved clean smoke protocol.
+- Promote the practical guide to `docs/v1-getting-started.md`, label historical workflow documents, and keep website presentation drafts outside the headless package repository. Retain the scientific figure-data exporter with the research tools.
+
 ## 1.0.0
 
 Harpy's first headless release provides a reproducible toolkit for clean, procedural single-sine audio-control research. The supported surface is the documented synthesis/analysis API, three registered Gymnasium environments, the baseline CLI, and the optional learning CLI with strict persisted evidence formats.

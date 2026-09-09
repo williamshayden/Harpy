@@ -35,9 +35,16 @@ class SynthEngine:
     def patch(self) -> SynthPatch:
         return self._patch
 
-    def note_on(self, frequency_hz: float) -> None:
+    def note_on(self, frequency_hz: float, *, phase_radians: float = 0.0) -> None:
         phase_increment = self._validated_phase_increment(frequency_hz)
-        self._phase_anchor = 0.0
+        if (
+            isinstance(phase_radians, bool)
+            or not isinstance(phase_radians, int | float)
+            or not math.isfinite(phase_radians)
+            or not 0.0 <= phase_radians < math.tau
+        ):
+            raise ValueError("phase_radians must be finite and within 0..2*pi (exclusive)")
+        self._phase_anchor = float(phase_radians)
         self._phase_increment = phase_increment
         self._phase_frame_offset = 0
         self._envelope.note_on()

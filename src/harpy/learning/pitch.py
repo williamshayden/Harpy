@@ -25,7 +25,7 @@ from harpy.learning.cache import SpectrumEvidenceCache
 from harpy.learning.dependencies import (
     CUBLAS_DETERMINISTIC_WORKSPACE_CONFIG,
     configure_deterministic_cuda_environment,
-    require_training_dependencies,
+    require_pitch_dependencies,
 )
 from harpy.learning.envs import SpectrumEvidenceProvider
 from harpy.learning.errors import LearningContractError, LearningExecutionError
@@ -41,7 +41,7 @@ from harpy.learning.pitch_network import (
     validate_pitch_estimator_model,
 )
 
-_training_stack = require_training_dependencies()
+_training_stack = require_pitch_dependencies()
 torch = _training_stack.torch
 
 PITCH_TRAINING_NUM_WORKERS: Final = 0

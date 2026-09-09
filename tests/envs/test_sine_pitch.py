@@ -8,7 +8,6 @@ import pytest
 import harpy.envs.sine_pitch as sine_pitch_module
 from harpy.envs.models import ControlState, ObservationMode, PitchAction, TerminalReason
 from harpy.envs.sine_pitch import SinePitchEnv, _CandidateEvidence
-from harpy.tuning import Tuning
 
 
 def test_spectrum_reset_is_seeded_fixed_and_actor_safe() -> None:
@@ -594,37 +593,22 @@ def test_every_applied_action_fresh_renders_from_immutable_source() -> None:
     np.testing.assert_array_equal(returned["spectrum"], initial["spectrum"])
 
 
-def test_reset_and_applied_moves_each_use_a_fresh_engine_and_analysis_chain(
+def test_reset_and_applied_moves_each_render_the_exact_candidate_before_analysis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    real_engine = sine_pitch_module.SynthEngine
+    real_renderer = sine_pitch_module._render_settled_sine
     real_encoder = sine_pitch_module.encode_log_spectrum
     events: list[tuple[object, ...]] = []
-    note_on_frequencies: list[float] = []
-    engine_count = 0
 
-    class RecordingEngine:
-        def __init__(self, render: object, patch: object) -> None:
-            nonlocal engine_count
-            self.identifier = engine_count
-            engine_count += 1
-            self.inner = real_engine(render, patch)  # type: ignore[arg-type]
-            events.append(("construct", self.identifier))
-
-        def note_on(self, frequency_hz: float) -> None:
-            events.append(("note_on", self.identifier))
-            note_on_frequencies.append(frequency_hz)
-            self.inner.note_on(frequency_hz)
-
-        def render(self, frame_count: int) -> np.ndarray:
-            events.append(("render", self.identifier, frame_count))
-            return self.inner.render(frame_count)
+    def recording_renderer(candidate_cents: int) -> np.ndarray:
+        events.append(("render", candidate_cents))
+        return real_renderer(candidate_cents)
 
     def recording_encoder(samples: np.ndarray) -> np.ndarray:
         events.append(("analyze",))
         return real_encoder(samples)
 
-    monkeypatch.setattr(sine_pitch_module, "SynthEngine", RecordingEngine)
+    monkeypatch.setattr(sine_pitch_module, "_render_settled_sine", recording_renderer)
     monkeypatch.setattr(sine_pitch_module, "encode_log_spectrum", recording_encoder)
     env = SinePitchEnv()
 
@@ -633,26 +617,13 @@ def test_reset_and_applied_moves_each_use_a_fresh_engine_and_analysis_chain(
     env.step(PitchAction.OCTAVE_UP)
 
     assert events == [
-        ("construct", 0),
-        ("note_on", 0),
-        ("render", 0, 290_992),
+        ("render", 6_000),
         ("analyze",),
-        ("construct", 1),
-        ("note_on", 1),
-        ("render", 1, 290_992),
+        ("render", 7_200),
         ("analyze",),
-        ("construct", 2),
-        ("note_on", 2),
-        ("render", 2, 290_992),
+        ("render", 8_400),
         ("analyze",),
     ]
-    tuning = Tuning()
-    assert note_on_frequencies == pytest.approx(
-        [
-            tuning.frequency_hz_for_midi_coordinate(pitch_cents / 100.0)
-            for pitch_cents in (6_000, 7_200, 8_400)
-        ]
-    )
     events.clear()
 
     env.step(PitchAction.OCTAVE_UP)
@@ -917,6 +888,8 @@ def test_observations_and_info_expose_only_actor_safe_allowlisted_keys(
     base_keys = {"target_note", "controls", "steps_remaining"}
     if mode is ObservationMode.SPECTRUM:
         base_keys.add("spectrum")
+    elif mode is ObservationMode.WAVEFORM:
+        base_keys.add("waveform")
     elif mode is ObservationMode.ORACLE:
         base_keys.add("current_pitch_coordinate")
     assert set(reset_observation) == base_keys

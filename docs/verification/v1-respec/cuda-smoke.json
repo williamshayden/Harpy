@@ -1,0 +1,68 @@
+{
+  "artifact_fingerprint": {
+    "manifest_sha256": "ad12932afa12b34076ea212a7d1d38f4c041207d8e5bc42faba1b3e136957875",
+    "payload_sha256": {
+      "metadata.json": "5c3296e776e4142564bfc5b0f0476c52e33003b643aee374578931b6f3369ef6",
+      "model.pt": "59572ae1db1d4b646d3518ed6c272dfb7dac72f3f6ff89a5db180c09e7736dde"
+    }
+  },
+  "batches_observed": 8,
+  "changed_parameter_tensors": [
+    "scorer.0.weight",
+    "scorer.0.bias",
+    "scorer.2.weight",
+    "scorer.2.bias",
+    "scorer.4.weight",
+    "scorer.4.bias"
+  ],
+  "cpu_episode_actions": 37,
+  "cpu_episode_final_absolute_error_cents": 0,
+  "cpu_episode_inferences": 1,
+  "cpu_episode_submitted_success": true,
+  "cpu_episode_terminal_reason": "submitted_success",
+  "cpu_reload_parameter_devices": [
+    "cpu"
+  ],
+  "cpu_threads": 1,
+  "cuda_runtime_version": "13.0",
+  "cudnn_version": 92000,
+  "elapsed_wall_time_seconds": 8.741949582996313,
+  "epochs_observed": 2,
+  "gpu_capability": [
+    8,
+    9
+  ],
+  "gpu_name": "NVIDIA RTX 500 Ada Generation Laptop GPU",
+  "gpu_peak_allocated_bytes": 33173504,
+  "gpu_peak_reserved_bytes": 46137344,
+  "initial_state_sha256": "cd4940770552ed24d4b7bc3801032a0d54f7a66bdeca0f7dab816efc76cf529e",
+  "model_file_sha256": "59572ae1db1d4b646d3518ed6c272dfb7dac72f3f6ff89a5db180c09e7736dde",
+  "parameter_count": 2497,
+  "performance_claim": "Engineering execution only; smoke model accuracy and elapsed time are not a scientific quality or throughput claim.",
+  "scope": "new API CUDA pitch smoke; CPU checkpoint reload and one episode",
+  "selected_epoch": 2,
+  "selected_state_sha256": "e61618115ecf33d0023371b506fc845d8ac08811a8b62c0905d65815498cfff3",
+  "source": {
+    "identity": {
+      "commit": "1f2ba3fe1829537c3f8e274dd45abeeafaa744d2",
+      "dependency_lock_sha256": "c223e113ebf6f442425fc0fe32a2ae105c98a5d002c9a4daa7ba58b2f49b7a8f",
+      "dirty_tree": true,
+      "required_inputs_committed": true,
+      "tracked_diff_sha256": "99bc5e2951bad96cba7d5b38111f19d7c1ea187cb5d9eced3f1c41693821f5a3"
+    },
+    "package_sha256": "e8c36d78062586e48ff7636e62152ee16780af386d2d20711713798c5f72600e",
+    "status": "known"
+  },
+  "status": "passed",
+  "torch_version": "2.13.0+cu130",
+  "training_batch_devices": [
+    "cuda:0"
+  ],
+  "training_device": "cuda",
+  "training_examples": 256,
+  "training_parameter_devices": [
+    "cuda:0"
+  ],
+  "training_seed": 0,
+  "validation_examples": 64
+}

@@ -1,0 +1,195 @@
+{
+  "elapsed_wall_time_seconds": 1158.3554378660046,
+  "engineering_qualification": "separate",
+  "performance_qualified": true,
+  "protocol": "harpy-v1-supervised-reference-qualification-v1",
+  "result_sha256": {
+    "confirmation.json": "f3ff171b71438096f3e7c5bd4c2e25d3d7c39d7f9e7274ca00ae183460210013",
+    "robustness.json": "8c988346cfa712d692502305fef2dfab953806ccc7f07b3b583153c31575b831"
+  },
+  "robustness_complete": true,
+  "robustness_score_gate": null,
+  "rows": [
+    {
+      "episodes": 250,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 0,
+      "successes": 250,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 0,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 0,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 400,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 0,
+      "successes": 400,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 0,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 0,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 250,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 1,
+      "successes": 250,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 1,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 1,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 400,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 1,
+      "successes": 400,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 1,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 1,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 250,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 2,
+      "successes": 250,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 2,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 200,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 2,
+      "successes": 200,
+      "suite": "benchmark",
+      "truncations": 0
+    },
+    {
+      "episodes": 400,
+      "invalid_actions": 0,
+      "partition": "iid",
+      "passed": true,
+      "seed": 2,
+      "successes": 400,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "lower",
+      "passed": true,
+      "seed": 2,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    },
+    {
+      "episodes": 300,
+      "invalid_actions": 0,
+      "partition": "upper",
+      "passed": true,
+      "seed": 2,
+      "successes": 300,
+      "suite": "confirmation",
+      "truncations": 0
+    }
+  ],
+  "shipped_seed": 0
+}

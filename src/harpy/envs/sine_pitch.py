@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import operator
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -32,11 +33,29 @@ from harpy.envs.models import (
 )
 from harpy.envs.planning import minimum_action_plan
 from harpy.envs.spectrum import GYM_ANALYSIS_CONFIG, LOG_SPECTRUM_SIZE, encode_log_spectrum
-from harpy.synth import RenderConfig, SynthEngine, SynthPatch
+from harpy.synth import RenderConfig, SynthPatch
 from harpy.synth.models import seconds_to_frames
 from harpy.tuning import Tuning
 
 Observation = dict[str, np.ndarray[Any, Any] | np.int64]
+
+
+def _render_settled_sine(candidate_cents: int, *, phase_radians: float = 0.0) -> np.ndarray:
+    """Render the exact retained engine window after its fixed envelope has settled.
+
+    The legacy path discards every attack/decay sample. At the next sample the
+    envelope is exactly its sustain target. Preserve the engine's phase indexing
+    and multiplication order, avoiding simulation of those discarded samples.
+    """
+    render, patch = RenderConfig(), SynthPatch()
+    frequency = Tuning().frequency_hz_for_midi_coordinate(candidate_cents / 100.0)
+    settle = seconds_to_frames(patch.envelope.attack_seconds, render.sample_rate_hz)
+    settle += seconds_to_frames(patch.envelope.decay_seconds, render.sample_rate_hz)
+    positions = np.arange(settle, settle + GYM_ANALYSIS_CONFIG.fft_frames, dtype=np.float64)
+    phase_increment = math.tau * frequency / render.sample_rate_hz
+    oscillator = np.sin(phase_radians + phase_increment * positions)
+    samples = oscillator * patch.envelope.sustain_amplitude * patch.output_gain
+    return samples.astype(np.float32)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -219,6 +238,10 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
             spaces["spectrum"] = gymnasium.spaces.Box(
                 0.0, 1.0, shape=(LOG_SPECTRUM_SIZE,), dtype=np.float32
             )
+        elif observation_mode is ObservationMode.WAVEFORM:
+            spaces["waveform"] = gymnasium.spaces.Box(
+                -np.inf, np.inf, shape=(GYM_ANALYSIS_CONFIG.fft_frames,), dtype=np.float32
+            )
         elif observation_mode is ObservationMode.ORACLE:
             spaces["current_pitch_coordinate"] = gymnasium.spaces.Box(
                 11.0, 109.0, shape=(1,), dtype=np.float32
@@ -241,16 +264,7 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
         np.ndarray[Any, np.dtype[np.float32]],
         np.ndarray[Any, np.dtype[np.float32]],
     ]:
-        engine = SynthEngine(RenderConfig(), SynthPatch())
-        engine.note_on(Tuning().frequency_hz_for_midi_coordinate(candidate_cents / 100.0))
-        settle = seconds_to_frames(0.001, 48_000) + seconds_to_frames(0.600, 48_000)
-        rendered = engine.render(settle + GYM_ANALYSIS_CONFIG.fft_frames)
-        candidate_audio = np.array(
-            rendered[-GYM_ANALYSIS_CONFIG.fft_frames :],
-            dtype=np.float32,
-            copy=True,
-            order="C",
-        )
+        candidate_audio = _render_settled_sine(candidate_cents)
         candidate_audio.setflags(write=False)
         spectrum = encode_log_spectrum(candidate_audio)
         spectrum.setflags(write=False)
@@ -278,6 +292,12 @@ class SinePitchEnv(gymnasium.Env[Observation, int]):
         if self.observation_mode is ObservationMode.SPECTRUM:
             observation["spectrum"] = np.array(
                 self._spectrum, dtype=np.float32, copy=True, order="C"
+            )
+        elif self.observation_mode is ObservationMode.WAVEFORM:
+            if self._candidate_audio is None:
+                raise RuntimeError("waveform observations require candidate audio")
+            observation["waveform"] = np.array(
+                self._candidate_audio, dtype=np.float32, copy=True, order="C"
             )
         elif self.observation_mode is ObservationMode.ORACLE:
             candidate_pitch_cents = self._source_pitch_cents + self._controls.offset_cents

@@ -1,158 +1,151 @@
-# Harpy
+# harPY
 
-Harpy is a headless toolkit for reproducible audio-control research. It gives researchers a deterministic sine renderer, a small Gymnasium tuning task, classical baselines, and optional learned models whose results can be inspected and reproduced.
+**harmonic research in python**
 
-The task is deliberately narrow: tune one clean, procedurally generated sine through bounded musical controls, then explicitly submit. Harpy makes it possible to separate perception, planning, and learning failures. It does not yet establish reliable tuning of recorded, noisy, or polyphonic audio.
+harPY is a headless Python toolkit for researchers and developers comparing audio
+representations, pitch estimators, and tuning controllers. It supplies a controlled
+task, classical and learned baselines, matched experiments, and saved results so
+you can change a method and inspect what changed.
 
-The [1.0.0 release notes](https://github.com/williamshayden/Harpy/blob/v1.0.0/CHANGELOG.md) describe the supported scope and migration from the retired development workbench.
+The current environment is single-tone pitch matching. A synthesized sine gives
+the evaluator an exact source pitch, while the actor must estimate it from audio
+and use bounded controls to reach a target note. Controlled level, phase, and noise
+variations help separate representation errors from estimation and control behavior.
 
-## First experiment
+Bring a custom Python actor or use a built-in baseline. For example, compare an
+alternative waveform encoding under the same controller, test a learned estimator
+against a classical method, or examine committed planning versus repeated
+replanning. Custom actors and explicit episode membership are supported within
+the current task; other audio sources and tasks require additional implementation.
 
-Use Python 3.12. Install a downloaded release wheel and run the baseline comparison:
+**Revised v1 is qualified and Unreleased.** The existing `v1.0.0` tag preserves
+historical workflows. Publishing a revised package release and assigning its
+release identifier remain separate steps from updating this source repository.
 
-```bash
-python -m pip install ./harpy_audio-1.0.0-py3-none-any.whl
-harpy-sine-gym --episodes 10 --seed 0 > baseline.json
-python -m json.tool baseline.json
-```
+## Install
 
-After a package-index release, use `python -m pip install harpy-audio` instead. An installed package does not require `uv` or a Git checkout.
-
-The baseline command writes deterministic JSON with separate results for Random, Spectrum Peak, Oracle, and Reward Search. Read `submitted_success_rate`, final error, action count, and truncation together. Reaching the right pitch without submitting is not success. Oracle and Reward Search use different observation tracks; their results must not be pooled with spectrum-based actors.
-
-## Train, inspect, and understand a result
-
-The optional training stack contains PyTorch and Stable-Baselines3:
-
-```bash
-python -m pip install './harpy_audio-1.0.0-py3-none-any.whl[train]'
-# After a package-index release: python -m pip install 'harpy-audio[train]'
-
-harpy-sine-learn train-pitch \
-  --profile smoke --seed 0 --output runs/pitch-smoke --device cpu
-
-harpy-sine-learn evaluate runs/pitch-smoke \
-  --output runs/pitch-smoke-report.json > /dev/null
-harpy-sine-learn summarize runs/pitch-smoke-report.json
-
-harpy-sine-learn diagnose runs/pitch-smoke \
-  --suite smoke --output runs/pitch-smoke-diagnostics.json > /dev/null
-harpy-sine-learn summarize runs/pitch-smoke-diagnostics.json --format markdown \
-  > runs/pitch-smoke-findings.md
-
-harpy-sine-learn run runs/pitch-smoke --seed 123
-harpy-sine-learn run runs/pitch-smoke --seed 123 --with-provenance \
-  > runs/pitch-smoke-trace.json
-```
-
-These shell examples use POSIX redirection. Progress and completion messages go to stderr. Evaluation and diagnosis write canonical JSON to stdout and, when requested, the same bytes to a file. `summarize` reads saved evidence without loading a model or requiring the training stack. It can produce a compact text readout or Markdown for a research notebook or README.
-
-Artifact directories and evaluation/diagnostic output files are create-only: choose a new path for every run. Keep reports outside their input artifact directories. Shell redirection itself follows your shell's overwrite rules. If training is interrupted, retain the incomplete artifact for inspection and retry at a fresh path.
-
-The smoke profile checks that the engineering workflow works; low model accuracy is expected and is not a scientific result. CPU is the default. CUDA training must be explicitly requested and fails when unavailable. A smoke model's `run` output demonstrates its behavior, not checkpoint-quality tuning.
-
-Model `.pt` and `.zip` files are trusted-local artifacts. The CLI warns before loading them. Only load your own artifacts or models from sources you trust.
-
-## Everyday research versus scientific checkpoints
-
-Inspect one pitch checkpoint without assembling a formal three-seed cohort:
+Use Python 3.12 on Linux/WSL, the qualified environment. Clone the current source,
+then create and activate a virtual environment:
 
 ```bash
-harpy-sine-learn train-pitch \
-  --profile checkpoint --seed 7 --output runs/pitch-experiment --device cpu
-harpy-sine-learn evaluate runs/pitch-experiment --exploratory \
-  --output runs/pitch-experiment-report.json > /dev/null
-harpy-sine-learn diagnose runs/pitch-experiment --exploratory --suite iid \
-  --output runs/pitch-experiment-diagnostics.json > /dev/null
-harpy-sine-learn summarize runs/pitch-experiment-report.json --format markdown
+git clone https://github.com/williamshayden/Harpy.git
+cd Harpy
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
-Exploratory evaluation and diagnosis accept one complete pitch artifact, including arbitrary training seeds and artifacts from installed packages or modified source. Their results are explicitly ineligible for the frozen scientific criterion. The model and evaluation are real; the distinction concerns the strength of the claim.
-
-Installed-package artifacts record a `package_snapshot` source identity: a digest of package contents and the distribution version when available. They do not claim a Git commit or a clean checkout. Historical source-checkout artifacts retain their original Git provenance and serialization. Older Harpy readers cannot read the new package-source variant; use this release to inspect it.
-
-Formal evaluation retains the declared CPU cohort with exact seeds 0, 1, and 2, clean committed source and locked dependencies. E.1's separate homogeneous CUDA cohort additionally requires matching evaluator source and CPU evaluation. See the [research workflow and protocol guide](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/research-workflow.md) for complete commands, eligibility, and historical protocol links.
-
-`run --json` retains the original canonical episode format. `run --with-provenance` writes a versioned JSON envelope with the manifest/model digests, trainer, training seed, source identity, and execution device. Prefer the latter when saving or sharing traces.
-
-## What the current results show
-
-The learned pitch estimator is a small spectrum-only network followed by the exact symbolic planner. It is a learned-perception experiment, not an end-to-end reinforcement-learning result. It has no hidden-pitch access, Spectrum Peak fallback, or evaluator rescue.
-
-The recorded E.1 IID results are:
-
-| Actor | Submitted within 5 cents | Truncated episodes | Mean final error |
-| --- | ---: | ---: | ---: |
-| Learned pitch, seed 0 | 94.0% | 15 / 250 | 47.556 cents |
-| Learned pitch, seed 1 | 96.8% | 8 / 250 | 21.388 cents |
-| Learned pitch, seed 2 | 100% | 0 / 250 | 1.980 cents |
-| Spectrum Peak | 100% | 0 / 250 | 1.252 cents |
-
-The declared reliability criterion was **not met**. Rare pitch aliases can cause repeated-state loops and large final errors. The successful seed is not selected as a substitute for the complete cohort. Even that seed's submitted accuracy within one cent is 2%, versus Spectrum Peak's 58.4%; its mean action count is lower, 27.324 versus 29.492.
-
-These are preserved historical results, not a newly trained release cohort. The [E.1 acceptance record](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/verification/2026-08-28-milestone-e1-cuda-device-cohort-acceptance.md) contains full metrics, provenance, probes, and failure analysis. BC and PPO remain reproducible Milestone D controls; their declared scientific criteria also missed. Negative outcomes are useful research evidence, not claims of dependable tuning performance.
-
-## Use the Python API
-
-Render and analyze a sine without any UI or training dependency:
-
-```python
-from harpy.analysis import analyze
-from harpy.synth import SynthEngine, SynthPatch
-from harpy.synth.models import RenderConfig
-
-render = RenderConfig(sample_rate_hz=48_000)
-engine = SynthEngine(render, SynthPatch())
-engine.note_on(440.0)
-samples = engine.render(48_000)  # mono float32; choose each block's length explicitly
-observation = analyze(samples, render.sample_rate_hz)
-print(observation.peak_frequency_hz)
-```
-
-`analyze` uses the most recent complete FFT capture and rejects non-finite samples in that capture. The synth accepts finite positive frequencies strictly below Nyquist. Patch JSON describes sound parameters, not performance state or an application session. `harpy.synth.patch_json` reads strict schema-v1/v2 patches and writes canonical v2; `harpy.tuning.Tuning` handles frequency/note conversions.
-
-Run the spectrum baseline through the public environment:
-
-```python
-import gymnasium as gym
-import harpy.envs  # registers Harpy's environment IDs
-from harpy.envs.baselines import spectrum_peak_plan
-
-with gym.make("Harpy/SinePitch-v0") as env:
-    observation, _ = env.reset(seed=0)
-    for action in spectrum_peak_plan(observation):
-        observation, reward, terminated, truncated, info = env.step(action)
-        if terminated or truncated:
-            break
-    print(env.unwrapped.episode_result)  # evaluator truth is available only after done
-```
-
-| Environment | Observation track |
-| --- | --- |
-| `Harpy/SinePitch-v0` | Normalized log-frequency spectrum with shape `(1961,)` |
-| `Harpy/SinePitchOracle-v0` | Exact current-pitch coordinate |
-| `Harpy/SinePitchRewardOnly-v0` | Controls, target, budget, and scalar feedback |
-
-All tracks expose target, bounded controls, and remaining budget. Action IDs remain `0` Octave Down, `1` Semitone Down, `2` Cent Down, `3` Submit, `4` Cent Up, `5` Semitone Up, `6` Octave Up. Controls are independently bounded to octaves `-2..2`, semitones `-12..12`, and cents `-100..100`; they never carry into each other. Success requires an explicit submission within an inclusive five-cent tolerance and the 64-action budget. One-cent accuracy is reported separately.
-
-Actor observations omit source pitch and exact error. This is a supported API boundary, not a security sandbox against Python code deliberately accessing private state. Every applied action resynthesizes a fresh sine from immutable source truth and controls; it is not recorded-audio pitch shifting.
-
-## Develop and verify
-
-Contributors use Python 3.12 and the committed `uv.lock`:
+Then choose the dependencies you need:
 
 ```bash
-uv sync --locked --extra train
-uv run --locked --extra train pytest
-uv run --locked --extra train ruff check .
-uv run --locked --extra train ruff format --check .
-uv build
+python -m pip install .          # Classical actors and result readers
+python -m pip install '.[pitch]'  # Also supervised pitch, using Torch
+python -m pip install '.[train]'  # Also PPO, using Torch and Stable-Baselines3
 ```
 
-Use `uv sync` without the extra for the base package. Real training smoke tests require the extra; a skipped training test is not proof that learning works. The pitch smoke test builds and installs the wheel outside Git, then exercises training, reload, diagnosis, evaluation, and tracing. Verification is currently exercised on Linux/WSL; native Windows and macOS have not been qualified.
+A built wheel can replace `.`. The package distribution is `harpy-audio`; the CLI
+and Python imports remain `harpy`. Installed execution needs neither Git nor `uv`;
+pitch does not require Stable-Baselines3. Native Windows/macOS are not yet
+qualified. CPU evaluation and CUDA training evidence are separate; CUDA must be
+explicitly requested and available.
 
-Harpy ships no desktop or browser UI. The retired Sine Lab design documents remain historical evidence. A future visualization on the author's personal website is separate from this package. Recorded audio, additional waveforms, chords, polyphony, and generalized experiment storage require new experiments and contracts.
+## Run a first experiment
 
-The [project notebook](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/project-notebook.md) preserves motivation, references, and decisions. The [workflow guide](https://github.com/williamshayden/Harpy/blob/v1.0.0/docs/research-workflow.md) indexes historical protocols. Before v1, unused GUI-only envelope preview helpers and the ineffective `RenderConfig.block_frames` field were removed; external callers of those helpers must update.
+Compare two classical actors on the same six clean smoke episodes, then inspect
+the saved result:
 
-Harpy is released under the [MIT License](https://github.com/williamshayden/Harpy/blob/v1.0.0/LICENSE), included in the wheel and source distribution.
+```bash
+harpy evaluate --actor waveform-fft --actor spectrum-peak \
+  --suite smoke --output runs/first-comparison.json
+harpy summarize runs/first-comparison.json
+harpy summarize runs/first-comparison.json --format markdown
+harpy summarize runs/first-comparison.json --format csv
+harpy run --actor waveform-fft --source-cents 6064 --target-note-index 12 \
+  --output runs/first-trace.json
+```
+
+`evaluate` compares actors; `run` saves one episode with its decision trace;
+`summarize` validates saved results without loading models; `train` creates a
+learned artifact. Smoke checks the workflow, not model quality.
+
+The task allows 64 actions using independent octave, semitone, and fine-cent
+controls. Success requires **explicit submission within five cents, inclusive**.
+Being close without submitting is not success.
+
+Outputs are create-only: choose a new result file or artifact directory for each
+run. Interrupted training leaves an incomplete directory for inspection, not a
+valid artifact. Shell redirection follows the shell's overwrite rules.
+
+## What you can compare
+
+- Classical actors: `spectrum-peak`, `spectrum-peak-replan`, `waveform-fft`,
+  `oracle`, `reward-search`, and `random`. Spectrum Peak remains the default.
+- The packaged seed-0 `reference`, or your own pitch/PPO artifact directory.
+  Use `LABEL=PATH` to distinguish artifacts with the same training seed.
+- Custom Python actor factories with fresh episode state and optionally shared
+  immutable model weights. See the [guide](docs/v1-getting-started.md) and
+  [waveform adapter example](examples/custom_actor.py).
+- Clean, level, phase, and white-noise conditions with matched nuisance identity.
+  Noise stays fixed within an episode: these are static-corruption experiments.
+
+With the `pitch` extra installed, use the shipped reference without training:
+
+```bash
+harpy evaluate --actor reference --actor spectrum-peak \
+  --suite smoke --output runs/reference-smoke.json
+```
+
+The guide covers `harpy train pitch` and `harpy train ppo`, checkpoint reload,
+and custom Python actors. Pitch trains on clean coordinates
+and selects on clean validation. PPO is experimental, with no release-score gate;
+its reset sources use the training partition, though control trajectories can
+visit other coordinates. Load PPO archives from trusted producers: hashes
+establish identity, not trust.
+
+Synthesis, analysis, tuning, and Gymnasium remain supporting APIs. Waveform and
+spectrum actors receive the target, controls, and budget, without source pitch,
+true error, or nuisance seed. Oracle and Reward Search use different information;
+keep those comparisons separate from audio-only actors.
+
+## Read the evidence
+
+Results retain membership, conditions, actor components, source/model identity,
+runtime, and terminal records. Readers recompute metrics and evaluation rejects
+changed artifacts. Read initial one/five-cent accuracy alongside submitted
+success, p99/max error, invalid actions, truncations, and action/inference cost.
+Keep observation tracks, seeds, partitions, and conditions separate.
+
+The clean suite has 650 episodes; robustness repeats them under eight conditions.
+The 1,000 confirmation combinations were frozen before reference qualification
+within the known rendering family. They are now consumed evidence for reproducing
+that qualification; future development needs fresh membership for a new final
+confirmation claim.
+
+Reference seeds 0, 1, and 2 each passed **650/650 clean benchmark and 1,000/1,000
+clean confirmation episodes**, with no invalid actions or truncations. All three
+and matched Spectrum Peak passed the level, phase, and 30 dB noise conditions;
+each had failures at 10 dB and under combined corruption. There is no demonstrated
+learned advantage or one-cent guarantee. These results qualify the recorded
+reference artifacts, not arbitrary trained models.
+
+Separately, the waveform FFT prototype passed **600/600 pairs in each of eight
+conditions**, matching every clean Spectrum Peak estimate. This supports the
+optional baseline, not learned-model gains or universal audio robustness.
+Recorded instruments, chords, live microphone tuning, and UI are outside v1.
+
+The source includes the seed-0 checkpoint, protocol membership, and compact
+results. Full saved experiments and seed-1/2 artifacts remain in local archives;
+reproducing every recorded study requires those archives in addition to a fresh
+clone. The qualification record identifies their hashes and scope.
+
+## Documentation
+
+- [Getting started](docs/v1-getting-started.md): capabilities, installation, traces,
+  training, custom actors, and result interpretation.
+- [Specification](docs/v1-spec.md) and [acceptance checklist](docs/v1-acceptance.md):
+  the authoritative contract and verification scope.
+- [Reference qualification](docs/verification/2026-09-08-v1-respec-qualification.md)
+  and [waveform FFT evidence](docs/v1-waveform-fft.md): results and limitations.
+- [Migration](docs/v1-migration.md): historical execution at `v1.0.0`; old reports
+  remain readable through `harpy summarize` in text or Markdown.
+
+MIT licensed. See [LICENSE](LICENSE).

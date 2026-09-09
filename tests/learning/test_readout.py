@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from harpy import cli
 from harpy.envs.baselines import BaselineKind
-from harpy.learning import cli
 from harpy.learning.artifacts import SourceStatus, canonical_json_bytes
 from harpy.learning.diagnostic_codecs import diagnostic_report_bytes
 from harpy.learning.diagnostics import build_diagnostic_report
@@ -29,6 +29,7 @@ from harpy.learning.trace import trace_from_document
 from harpy.learning.workflows import evaluation_report_bytes
 
 from .test_diagnostic_codecs import _pitch_episodes, _report
+from .test_pitch_comparison import _report as _comparison_report
 
 _V1_REPORT = Path(__file__).parents[1] / "fixtures/learning/schema-v1/evaluation-report.json"
 
@@ -112,11 +113,13 @@ def test_summary_preserves_source_and_explains_ineligible_smoke_results(
     report = tmp_path / "report.json"
     content = evaluation_report_bytes(_smoke_report())
     report.write_bytes(content)
-    monkeypatch.setattr(
-        cli,
-        "_require_requested_device",
-        lambda device: pytest.fail("summary requested a model stack"),
-    )
+    from harpy.learning import dependencies
+
+    def unexpected_model_stack():
+        pytest.fail("summary requested a model stack")
+
+    monkeypatch.setattr(dependencies, "require_pitch_dependencies", unexpected_model_stack)
+    monkeypatch.setattr(dependencies, "require_training_dependencies", unexpected_model_stack)
 
     assert cli.main(["summarize", str(report), "--format", format]) == 0
 
@@ -140,6 +143,30 @@ def test_historical_bc_ppo_report_has_separate_status_and_baselines() -> None:
     assert "BC criterion: ineligible" in summary
     assert "PPO criterion: ineligible" in summary
     assert "bc-0" in summary and "ppo-2" in summary and "oracle" in summary
+
+
+@pytest.mark.parametrize("format", ["text", "markdown"])
+def test_saved_decoder_comparison_cli_and_readout_preserve_identity(
+    format: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from harpy.learning.pitch_comparison import comparison_bytes
+
+    content = comparison_bytes(_comparison_report())
+    output = tmp_path / "comparison.json"
+    output.write_bytes(content)
+    assert cli.main(["summarize", str(output), "--format", format]) == 0
+    captured = capsys.readouterr()
+    summary = summarize_report_bytes(content, format=format)
+    assert captured.err == ""
+    assert captured.out == summary
+    assert output.read_bytes() == content
+    assert "Scientifically eligible: no" in summary
+    assert "Paired decoder changes" in summary
+    assert "pitch-global-argmax-7" in summary and "pitch-feasible-argmax-7" in summary
+    assert "Rescued" in summary and "Regressed" in summary
+    assert "commits its initial plan" in summary
 
 
 @pytest.mark.parametrize("factory", [_exploration, _run_result, _exploratory_diagnostics])
@@ -192,10 +219,10 @@ def test_summary_rejects_tampered_evidence_before_printing(
     path = tmp_path / "tampered.json"
     path.write_bytes(canonical_json_bytes(document))
 
-    assert cli.main(["summarize", str(path)]) == 1
+    assert cli.main(["summarize", str(path)]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("error: ")
+    assert captured.err.startswith("harpy: ")
 
 
 @pytest.mark.parametrize("content", [b"{", b'{"schema_version":1,"schema_version":1}', b"{}"])
@@ -205,7 +232,10 @@ def test_summary_rejects_malformed_or_unknown_documents(content: bytes) -> None:
 
 
 def test_all_report_codecs_can_be_read_without_torch_or_sb3(tmp_path: Path) -> None:
+    from harpy.learning.pitch_comparison import comparison_bytes
+
     contents = [
+        comparison_bytes(_comparison_report()),
         _V1_REPORT.read_bytes(),
         evaluation_report_bytes(_smoke_report()),
         evaluation_report_bytes(_e1_report()),
@@ -229,9 +259,11 @@ class BlockTraining(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in {'torch', 'stable_baselines3'}:
             raise AssertionError(f'readout imported {fullname}')
 sys.meta_path.insert(0, BlockTraining())
+from harpy.cli import main
 from harpy.learning.readout import summarize_report_bytes
 for path in json.loads(sys.argv[1]):
     assert 'Harpy research readout' in summarize_report_bytes(pathlib.Path(path).read_bytes())
+    assert main(['summarize', path]) == 0
 assert 'torch' not in sys.modules and 'stable_baselines3' not in sys.modules
 """
     result = subprocess.run(

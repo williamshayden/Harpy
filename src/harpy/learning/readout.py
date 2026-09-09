@@ -18,7 +18,13 @@ def summarize_report_bytes(content: bytes, *, format: str = "text") -> str:
     if format not in {"text", "markdown"}:
         raise ValueError("format must be text or markdown")
     document = decode_json_bytes(content)
-    if "schema_version" in document:
+    comparison = None
+    if document.get("schema_id") == "harpy-pitch-decoder-comparison-v1":
+        from harpy.learning.pitch_comparison import comparison_from_bytes
+
+        comparison = comparison_from_bytes(content)
+        document = comparison.to_document()
+    elif "schema_version" in document:
         from harpy.learning.workflows import evaluation_report_from_bytes
 
         report = evaluation_report_from_bytes(content)
@@ -90,6 +96,8 @@ def summarize_report_bytes(content: bytes, *, format: str = "text") -> str:
 
     evidence = document.get("evidence", document)
     rows = evidence.get("terminal_rows", evidence.get("rows", []))
+    if comparison is not None:
+        rows = document["global_rows"] + document["feasible_rows"] + document["baseline_rows"]
     if rows:
         lines.extend(["", _heading("Policy outcomes and matched baselines", format, level=2), ""])
         lines.extend(_outcome_table(rows, format))
@@ -103,9 +111,41 @@ def summarize_report_bytes(content: bytes, *, format: str = "text") -> str:
             ]
         )
 
+    if comparison is not None:
+        lines.extend(["", _heading("Paired decoder changes", format, level=2), ""])
+        lines.extend(
+            _table(
+                ["Suite", "N", "Rescued", "Regressed", "Changed outcome"],
+                [
+                    [
+                        _suite_label(row.suite_id.value),
+                        str(row.episodes),
+                        str(row.rescued),
+                        str(row.regressed),
+                        str(row.changed_outcome),
+                    ]
+                    for row in comparison.paired_counts
+                ],
+                format,
+            )
+        )
+        lines.extend(
+            [
+                "",
+                "Rescued: original decoding failed and feasible decoding succeeded. "
+                "Regressed: the reverse. Changed outcome compares terminal records, "
+                "not full trajectories.",
+                "Both decoders use the same weights. Feasible decoding uses public source bounds "
+                "and current controls; it does not improve the raw spectrum-only estimator.",
+                "These fixed suites are development comparisons, not fresh held-out confirmation.",
+                "Spectrum Peak commits its initial plan; both learned decoders replan every step. "
+                "Precision and action counts therefore reflect controller differences too.",
+            ]
+        )
+
     diagnostic = document.get("diagnostics", document)
     reports = diagnostic.get("reports", [])
-    if not reports and "actor_semantics" in diagnostic:
+    if comparison is None and not reports and "actor_semantics" in diagnostic:
         reports = [diagnostic]
     if reports:
         lines.extend(["", _heading("Diagnostic hotspots", format, level=2), ""])

@@ -16,14 +16,16 @@ Repository = "https://github.com/williamshayden/Harpy"
 Issues = "https://github.com/williamshayden/Harpy/issues"
 
 [project.optional-dependencies]
+pitch = [
+  "torch>=2.8,<3",
+]
 train = [
   "stable-baselines3==2.9.0",
   "torch>=2.8,<3",
 ]
 
 [project.scripts]
-harpy-sine-gym = "harpy.envs.checkpoint:main"
-harpy-sine-learn = "harpy.learning.cli:main"
+harpy = "harpy.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]
@@ -35,6 +37,12 @@ packages = ["src/harpy"]
 [tool.hatch.build.targets.sdist]
 include = [
   "/src/**",
+  "/docs/v1-*.md",
+  "/docs/reviews/2026-09-09-v1-release-review.md",
+  "/docs/verification/2026-09-08-pitch-decoding-v1.md",
+  "/docs/verification/2026-09-08-v1-respec-qualification.md",
+  "/docs/verification/v1-respec/**",
+  "/examples/**",
   "/README.md",
   "/CHANGELOG.md",
   "/LICENSE*",

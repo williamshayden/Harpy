@@ -1,5 +1,10 @@
 # Harpy project notebook
 
+> Historical notebook snapshot, last updated 2026-08-31. Milestone descriptions
+> and proposed curricula below are preserved research context, not the current
+> release contract or a committed roadmap. See the [revised v1 specification](v1-spec.md)
+> and [current guide](v1-getting-started.md).
+
 Last updated: 2026-08-31
 
 Status: exploratory project-level notes. Milestone specifications and their review status live under `docs/superpowers/specs/`.
@@ -346,7 +351,7 @@ reproducible experiment ledger remain the longer-term direction.
 
 ### How established pitch tools bound the problem
 
-- **Global sample transposition** applies one ratio, `2^(cents / 1200)`, to the whole signal. A duration-preserving implementation combines pitch shifting and time stretching, with renderer-dependent transient, formant, and phase artifacts. It works on chords because it preserves every interval; it cannot change chord quality. [Rubber Band technical notes](https://www.breakfastquay.com/rubberband/technical.html) describe a production-oriented implementation, while [librosa documents](https://librosa.org/doc/latest/generated/librosa.effects.pitch_shift.html) a convenient open-source baseline.
+- **Global sample transposition** applies one ratio, `2^(cents / 1200)`, to the whole signal. A duration-preserving implementation combines pitch shifting and time stretching, with renderer-dependent transient, formant, and phase artifacts. It works on chords because it preserves every interval; it cannot change chord quality. [Rubber Band technical notes](https://www.breakfastquay.com/rubberband/technical.html) describe a production-oriented implementation, while [librosa documents](https://librosa.org/doc/0.11.0/generated/librosa.effects.pitch_shift.html) a convenient open-source baseline.
 - **Auto-Tune-style correction** first estimates a monophonic pitch contour, chooses target notes from a key/scale, MIDI, or edited contour, then applies a smoothed time-varying shift with voicing/formant handling. Antares explicitly scopes its tracker to a single voice or non-chordal instrument; it does not independently tune simultaneous chord voices. References: [original Auto-Tune patent](https://patents.google.com/patent/US5973252A/en), [AutoTune 2026 guide](https://antares-web-frontend.sfo3.cdn.digitaloceanspaces.com/documentation/pdfs/AutoTune_2026_User_Guide.pdf), and [Antares tracking guidance](https://help.antarestech.com/hc/en-us/articles/41115327742740-What-does-the-Tracking-knob-and-other-controls-do-in-Auto-Tune-Pro).
 - **Polyphonic note editing** detects overlapping note objects, assigns spectral energy to them, edits individual pitch/time/formant properties, and resynthesizes the mixture. This is closer to source separation plus transcription and resynthesis than to one pitch knob. Celemony notes that its DNA algorithms separate by pitch rather than instrument, so two instruments on the same pitch remain one object. References: [Celemony audio algorithms](https://helpcenter.celemony.com/M5/doc/melodyneStudio5/en/M5tour_AudioAlgorithms?env=standAlone) and [DNA patent](https://patents.google.com/patent/US8022286B2/en).
 
@@ -354,7 +359,7 @@ reproducible experiment ledger remain the longer-term direction.
 
 | Work | Relevance | Reuse/constraint |
 | --- | --- | --- |
-| [RL-synth-control / NIME 2026](https://github.com/vincenzomadaghiele/RL-synth-control) and [paper](https://doi.org/10.5281/zenodo.20784272) | Gymnasium + Stable-Baselines3 agents match live/recorded target audio by changing SignalFlow synth parameters; includes tone, FM, granular, and Benjolin tasks plus multiple audio rewards. | Closest conceptual predecessor, but it controls synth parameters rather than an immutable audio asset. No clear repository license was visible on 2026-08-07, so use as literature unless licensing is clarified. |
+| [RL-synth-control / NIME 2026](https://github.com/vincenzomadaghiele/RL-synth-control) and [paper](https://github.com/vincenzomadaghiele/RL-synth-control/blob/main/paper/RLsynth_NIME26.pdf) | Gymnasium + Stable-Baselines3 agents match live/recorded target audio by changing SignalFlow synth parameters; includes tone, FM, granular, and Benjolin tasks plus multiple audio rewards. | Closest conceptual predecessor, but it controls synth parameters rather than an immutable audio asset. No clear repository license was visible on 2026-08-07, so use as literature unless licensing is clarified. |
 | [RL-impro](https://github.com/vincenzomadaghiele/RL-impro) and [AIMC 2024 paper](https://aimc2024.pubpub.org/pub/9zd8yyyv/release/1) | Earlier discrete-action Gymnasium/DQN system with sine, FM, granular, descriptors, lookup tables, Pure Data, and live OSC control. | LGPL-3.0; useful architectural reference, but its Pure Data/lookup-table path is unnecessary for the first Harpy environment. |
 | [SynthRL, IJCAI 2025](https://www.ijcai.org/proceedings/2025/1129) and [code](https://github.com/argaaw/SynthRL) | RL fine-tunes Dexed parameter inference with rendered-audio rewards for in- and out-of-domain sound matching. | MIT; same inverse-audio objective, but not an interactive pitch-tool Gym. |
 | [DDSynth-RL, ISMIR 2026](https://arxiv.org/abs/2608.03032) and [code](https://github.com/DDSynth-RL/DDSynthRL) | Discrete diffusion over Dexed/MIDI parameters followed by GRPO-style audio-reward fine-tuning. | Apache-2.0 code; powerful current reference, substantially heavier than Harpy's intended first rung. |

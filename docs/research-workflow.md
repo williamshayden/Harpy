@@ -1,5 +1,10 @@
 # Research workflow and protocol history
 
+> Historical command reference for the original `v1.0.0` tag. Run the commands
+> below from a separate checkout of that tag with its recorded dependencies;
+> `harpy-sine-learn` is not the revised CLI. For current workflows, use the
+> [getting-started guide](v1-getting-started.md) and [migration map](v1-migration.md).
+
 Harpy separates ordinary measurements from the fixed protocols used to support a scientific claim. Start with the smoke and exploratory workflows in the README. Use the commands below when reproducing the declared historical experiment.
 
 ## Formal pitch checkpoint
