@@ -1,7 +1,10 @@
-# Migration from the original v1.0.0
+# Migration from the historical v1.0.0 checkpoint to v1
 
-The revised v1 is currently **Unreleased**. The existing `v1.0.0` tag remains the
-reproducibility boundary for historical training and artifact execution.
+The public v1 release is package 1.0.0, tagged `v1`. It implements the revised
+v1 research protocol. The older `v1.0.0` tag is a development checkpoint, not a
+published package release; it remains the reproducibility boundary for historical
+training and artifact execution. The research protocol identifiers and frozen
+evidence keep their existing names.
 The old `python -m harpy.learning.cli` command module is retired alongside its
 console entry points. Use `harpy` or `python -m harpy` for the revised workflows.
 

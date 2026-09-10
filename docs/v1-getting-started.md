@@ -1,8 +1,8 @@
 # Getting started with harPY
 
-> This guide targets the revised v1 source on `main`, currently Unreleased. The original `v1.0.0` tag uses the historical interfaces.
+> This guide targets the public v1 release: package 1.0.0, tagged `v1`. The older `v1.0.0` tag is a development checkpoint with historical interfaces.
 
-harPY (harmonic research in python) is a headless toolkit for comparing audio representations, pitch estimators, and tuning controllers. Its current environment uses a single synthesized tone so the source, target, controls, and corruption conditions can be specified exactly. Start with a classical comparison, read its saved results, and inspect an episode before trying optional training or a custom actor.
+Start with a classical comparison, inspect its saved results, then try optional training or your own actor. The current task uses a single synthesized tone.
 
 ## Capabilities
 
@@ -15,14 +15,14 @@ The four operations form a simple workflow: `evaluate` compares actors, `run` re
 
 ## Install from the revised checkout
 
-Use Python 3.12 on Linux or WSL, the qualified environment. Clone the current source before running the installation commands below:
+Use Python 3.12 on Linux or WSL, the qualified environment. Clone the release source before running the installation commands below:
 
 ```bash
-git clone https://github.com/williamshayden/Harpy.git
+git clone --branch v1 https://github.com/williamshayden/Harpy.git
 cd Harpy
 ```
 
-The old `v1.0.0` tag provides historical interfaces. Install this revision from source; a revised PyPI release has not been published. Existing users should run the commands from their updated checkout rather than clone into a directory that already exists.
+These commands install from the `v1` release checkout. For an existing checkout, preserve local changes before switching revisions. A built 1.0.0 release wheel can also be installed into an existing Python 3.12 environment without Git.
 
 ```bash
 python3.12 -m venv .venv
@@ -41,7 +41,9 @@ The base installation supplies classical actors, experiments, and result readers
 
 Installed execution needs neither Git nor `uv`. The commands below use distinct output paths. Harpy creates new results and artifacts; choose another path when repeating a command.
 
-## Compare two ways of hearing
+## Compare baselines
+
+<a id="compare-two-ways-of-hearing"></a>
 
 ```bash
 harpy evaluate --actor waveform-fft --actor spectrum-peak \
@@ -80,9 +82,11 @@ for step in result.records[0].trace:
 
 Later steps show `None` for the estimate because this actor executes its initial plan without another inference. That distinction helps separate perception errors from control behavior.
 
-## Read the outcome before scaling up
+## Interpret results
 
-Success requires explicit submission within five cents, inclusive, within the 64-action budget. Being close when the budget expires is not success. Inspect initial one/five-cent accuracy alongside final submitted success, p99 and maximum error, invalid actions, truncations, and action/inference counts. A better estimate and a cheaper controller are different improvements.
+<a id="read-the-outcome-before-scaling-up"></a>
+
+Success requires explicit submission within five cents, inclusive, within the 64-action budget. Being close when the budget expires is not success. Inspect initial one/five-cent accuracy alongside final submitted success, p99 and maximum error, invalid actions, truncations, and action/inference counts.
 
 Keep source partitions, observation tracks, seeds, and corruption conditions separate. The `clean` suite has 650 established episodes; `robustness` repeats them under eight conditions. The 1,000-pair `confirmation` suite reproduces the release qualification on fixed, already evaluated pairs. A new final confirmation claim needs fresh frozen membership; do not use the existing suite for development selection.
 
@@ -100,6 +104,8 @@ harpy summarize runs/guide-reference-smoke.json
 
 `reference` loads the packaged seed-0 checkpoint. It requires no download or training. Its recorded clean qualification is specific to that artifact and protocol; it does not establish superiority over the classical baseline or guarantee strong-noise performance.
 
+Pitch training uses categorical cross-entropy and PyTorch's [AdamW optimizer](https://arxiv.org/abs/1711.05101) (Loshchilov and Hutter, 2019).
+
 To exercise training and checkpoint reload yourself:
 
 ```bash
@@ -108,7 +114,7 @@ harpy evaluate --actor runs/guide-pitch-model --actor spectrum-peak \
   --suite smoke --output runs/guide-pitch-results.json
 ```
 
-With the `train` extra, the equivalent PPO workflow is:
+With the `train` extra, PPO uses [Stable-Baselines3](https://jmlr.org/papers/v22/20-1364.html)'s implementation of [Proximal Policy Optimization](https://arxiv.org/abs/1707.06347):
 
 ```bash
 harpy train ppo --profile smoke --seed 0 --output runs/guide-ppo-model
@@ -161,4 +167,16 @@ harpy summarize runs/guide-custom-adapter.json
 
 This reproduces the spectrum method from waveform input; it introduces no new estimator claim. Change the encoding step to explore a representation while keeping control fixed. The script is included in the recorded artifact hashes. A factory can also share immutable model weights while giving each episode its own controller.
 
+## Evaluate a general-purpose model
+
+You can use the same [actor factory pattern](#bring-an-actor-factory) to test whether a general-purpose model can complete this task. Supply the model call inside your adapter; harPY has no built-in hosted-model integration or generic model-name CLI option.
+
+Choose waveform or spectrum input and expose only that observation plus the target note, controls, and remaining action budget. Convert the model's response to an existing `PitchAction`: octave, semitone, or cent up/down, or `SUBMIT`. Keep hidden source coordinates and nuisance seeds out of the model's inputs. The adapter must give each episode fresh controller state, as in the example above.
+
+Fix and record the model version, input conversion, prompt, sampling settings, response parsing, and tool access. Keep these details in experiment notes or configuration files; `artifact_paths` can include those files in the saved hashes. Declare any estimator or planner used by the adapter. A model receiving a tool's pitch estimate is a different condition from a model estimating pitch itself, and a supplied planner changes what the model is being asked to do.
+
+Evaluate the adapter and named classical baselines on the same episode membership and conditions. Inspect submitted success, invalid actions, truncations, and action/inference counts as well as any pitch estimates the adapter reports. The result measures that model-and-adapter configuration on this single-sine task; it does not establish broad audio generalization.
+
 For the experiments behind these choices, see the [reference qualification](verification/2026-09-08-v1-respec-qualification.md) and [waveform FFT evidence](v1-waveform-fft.md).
+
+To work on the toolkit itself, see [Contributing to harPY](v1-contributing.md) for development setup, focused checks, and guidance on changing actors and result readers.

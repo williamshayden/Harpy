@@ -1,8 +1,10 @@
 # harPY v1 specification
 
-Status: **Unreleased**. This document is authoritative for the revised v1.
+This document is authoritative for the revised **v1 research protocol**, delivered
+as **package 1.0.0, tagged `v1`**. The protocol identifiers and scientific evidence
+retain their existing names.
 Historical milestone specifications and reports are evidence, not requirements
-that constrain this architecture. The existing `v1.0.0` tag is preserved.
+that constrain this architecture. The existing `v1.0.0` development tag is preserved.
 
 ## Purpose and users
 
@@ -197,5 +199,5 @@ revision Unreleased; it must not be fixed by weakening the gate or selecting see
 
 The decoder prototype has been integrated and its evidence preserved. The completed
 qualification and subsequent engineering checks are recorded in the
-[acceptance checklist](v1-acceptance.md). This revision remains Unreleased;
-publishing and assigning a revised release tag are separate authorized actions.
+[acceptance checklist](v1-acceptance.md). The public `v1` release delivers this
+implementation without revising the scientific protocol or historical evidence.

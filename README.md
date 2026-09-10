@@ -18,17 +18,21 @@ against a classical method, or examine committed planning versus repeated
 replanning. Custom actors and explicit episode membership are supported within
 the current task; other audio sources and tasks require additional implementation.
 
-**Revised v1 is qualified and Unreleased.** The existing `v1.0.0` tag preserves
-historical workflows. Publishing a revised package release and assigning its
-release identifier remain separate steps from updating this source repository.
+**The v1 release is package 1.0.0, tagged `v1`.** It implements the revised v1
+research protocol. The older `v1.0.0` tag is a historical development checkpoint,
+not the public release; it preserves the earlier workflows and evidence.
 
 ## Install
 
-Use Python 3.12 on Linux/WSL, the qualified environment. Clone the current source,
+Download the wheel, source archive, and checksums from the
+[v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1).
+The wheel installs into a Python 3.12 environment with `python -m pip install ./harpy_audio-1.0.0-py3-none-any.whl`.
+
+Use Python 3.12 on Linux/WSL, the qualified environment. Clone the release source,
 then create and activate a virtual environment:
 
 ```bash
-git clone https://github.com/williamshayden/Harpy.git
+git clone --branch v1 https://github.com/williamshayden/Harpy.git
 cd Harpy
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -133,14 +137,21 @@ optional baseline, not learned-model gains or universal audio robustness.
 Recorded instruments, chords, live microphone tuning, and UI are outside v1.
 
 The source includes the seed-0 checkpoint, protocol membership, and compact
-results. Full saved experiments and seed-1/2 artifacts remain in local archives;
-reproducing every recorded study requires those archives in addition to a fresh
-clone. The qualification record identifies their hashes and scope.
+results. The [v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1)
+also includes `spectrum-study.json.gz`: all 14,400 records from the representation
+study, with a manifest documenting hashes and the removal of local checkout
+prefixes from artifact path labels. Unpack it with `gzip -dk spectrum-study.json.gz`
+and read it with `harpy summarize spectrum-study.json`.
+Full reference-qualification experiments and seed-1/2 artifacts remain local;
+reproducing those studies requires their archives in addition to a fresh clone.
+The qualification record identifies their hashes and scope.
 
 ## Documentation
 
 - [Getting started](docs/v1-getting-started.md): capabilities, installation, traces,
   training, custom actors, and result interpretation.
+- [Contributing](docs/v1-contributing.md): development setup, focused checks, and
+  the issue and pull-request workflow.
 - [Specification](docs/v1-spec.md) and [acceptance checklist](docs/v1-acceptance.md):
   the authoritative contract and verification scope.
 - [Reference qualification](docs/verification/2026-09-08-v1-respec-qualification.md)
