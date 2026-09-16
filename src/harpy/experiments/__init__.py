@@ -10,7 +10,14 @@ from harpy.experiments.actors import (
     waveform_fft_actor_spec,
 )
 from harpy.experiments.models import ActorSpec, Decision, EpisodeSpec
-from harpy.experiments.results import ExperimentResult, load_result, save_result, summarize
+from harpy.experiments.results import (
+    ExperimentResult,
+    load_result,
+    load_result_bytes,
+    load_result_document,
+    save_result,
+    summarize,
+)
 from harpy.experiments.runner import evaluate, run
 from harpy.experiments.training import train
 
@@ -21,6 +28,8 @@ __all__ = [
     "ExperimentResult",
     "evaluate",
     "load_result",
+    "load_result_bytes",
+    "load_result_document",
     "oracle_actor_spec",
     "pitch_actor_spec",
     "ppo_actor_spec",

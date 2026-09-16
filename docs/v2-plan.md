@@ -3,6 +3,10 @@
 Status: proposed implementation plan, 2026-09-16. Scope is defined in
 [v2-spec.md](v2-spec.md). This planning change does not implement the new task.
 
+Implementation has since started on the development branch. The
+[first milestone record](v2-m1-verification.md) distinguishes completed M1/M0
+work from the remaining calibration, training, persistence, and release gates.
+
 The audit baseline is released v1 source
 `2ea00c692dfdee216ea9036b2d3f7c45e81bc9c6`, matching `main` and tag `v1` when checked
 on 2026-09-16. The older `v1.0.0` tag is a separate historical checkpoint.

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+from harpy._serialization import decode_json_bytes, write_new_bytes
 from harpy.envs.models import (
     MAX_ABSOLUTE_ERROR_CENTS,
     MAX_STEPS,
@@ -25,7 +26,6 @@ from harpy.experiments.models import (
     _freeze,
     _integer,
     _json_bytes,
-    _json_loads,
     _name,
     _object,
     _plain,
@@ -670,18 +670,31 @@ class ExperimentResult:
 
 def save_result(result: ExperimentResult, path: Path) -> None:
     """Write a new result atomically; an existing destination is never replaced."""
-    from harpy.learning.artifacts import write_new_bytes
-
     if not isinstance(result, ExperimentResult) or not isinstance(path, Path):
         raise ValueError("save_result requires an ExperimentResult and Path")
     path.parent.mkdir(parents=True, exist_ok=True)
     write_new_bytes(path, _json_bytes(result.to_document()))
 
 
+def load_result_document(document: object) -> ExperimentResult:
+    """Validate a decoded result, re-deriving all metrics from its records.
+
+    Byte readers should first use the strict decoder to reject duplicate keys.
+    This entry point does not perform file I/O or decode the document again.
+    """
+    return ExperimentResult.from_document(document)
+
+
+def load_result_bytes(content: bytes) -> ExperimentResult:
+    """Strictly decode and validate a result from one in-memory byte payload."""
+    return load_result_document(decode_json_bytes(content))
+
+
 def load_result(path: Path) -> ExperimentResult:
+    """Read and validate a result with one file read and one strict JSON decode."""
     if not isinstance(path, Path):
         raise ValueError("path must be a Path")
-    return ExperimentResult.from_document(_json_loads(path.read_bytes()))
+    return load_result_bytes(path.read_bytes())
 
 
 def summarize(result: ExperimentResult, *, format: str = "text") -> str:

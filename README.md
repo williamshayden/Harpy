@@ -7,7 +7,7 @@ representations, pitch estimators, and tuning controllers. It supplies a control
 task, classical and learned baselines, matched experiments, and saved results so
 you can change a method and inspect what changed.
 
-The current environment is single-tone pitch matching. A synthesized sine gives
+The released v1 environment is single-tone pitch matching. A synthesized sine gives
 the evaluator an exact source pitch, while the actor must estimate it from audio
 and use bounded controls to reach a target note. Controlled level, phase, and noise
 variations help separate representation errors from estimation and control behavior.
@@ -21,6 +21,11 @@ the current task; other audio sources and tasks require additional implementatio
 **The v1 release is package 1.0.0, tagged `v1`.** It implements the revised v1
 research protocol. The older `v1.0.0` tag is a historical development checkpoint,
 not the public release; it preserves the earlier workflows and evidence.
+
+This development branch is **2.0.0.dev0** and also includes the first v2
+sound-matching workflow. See the [development guide](docs/v2-getting-started.md)
+for synthesis, bounded patch search, and saved audio/results. Model training and
+benchmark qualification for that new task remain in progress.
 
 ## Install
 
@@ -148,9 +153,13 @@ The qualification record identifies their hashes and scope.
 
 ## Documentation
 
+- [Sound-matching development guide](docs/v2-getting-started.md): the first
+  executable v2 workflow on this development branch, with rendered patches,
+  metered search, and saved audio/results. This is not a released or calibrated
+  sound-matching benchmark.
 - [v2 specification](docs/v2-spec.md) and [delivery plan](docs/v2-plan.md): proposed
   headless sound/chord matching, constrained patch editing, training, and v1
-  reliability improvements. These features are not yet implemented.
+  reliability improvements, including subsequent milestones.
 - [Getting started](docs/v1-getting-started.md): capabilities, installation, traces,
   training, custom actors, and result interpretation.
 - [Contributing](docs/v1-contributing.md): development setup, focused checks, and

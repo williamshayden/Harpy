@@ -15,6 +15,8 @@ from harpy.experiments import (
     ExperimentResult,
     evaluate,
     load_result,
+    load_result_bytes,
+    load_result_document,
     save_result,
     spectrum_peak_actor_spec,
     summarize,
@@ -48,6 +50,17 @@ def test_roundtrip_create_only_and_partition_rows(result, tmp_path):
     with pytest.raises(FileExistsError):
         save_result(result, path)
     assert load_result(path) == result
+
+
+def test_result_document_and_byte_loaders_keep_full_semantic_validation(result):
+    document = result.to_document()
+    assert load_result_document(document) == result
+    assert load_result_bytes(json.dumps(document).encode("utf-8")) == result
+    document["rows"][0]["submitted_success_rate"] = 0
+    with pytest.raises(ValueError, match="re-derived"):
+        load_result_document(document)
+    with pytest.raises(ValueError, match="re-derived"):
+        load_result_bytes(json.dumps(document).encode("utf-8"))
 
 
 @pytest.mark.parametrize(

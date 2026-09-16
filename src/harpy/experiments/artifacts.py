@@ -10,12 +10,8 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from harpy.learning.artifacts import (
-    FileRecord,
-    _verify_file_record,
-    canonical_json_bytes,
-    decode_json_bytes,
-)
+from harpy._serialization import canonical_json_bytes, decode_json_bytes
+from harpy.learning.artifacts import FileRecord, _verify_file_record
 
 ARTIFACT_SCHEMA_ID = "harpy-experiment-artifact-v1"
 METADATA_SCHEMA_ID = "harpy-experiment-training-v1"

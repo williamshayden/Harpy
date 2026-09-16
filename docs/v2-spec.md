@@ -1,7 +1,8 @@
 # harPY v2: bounded sound matching
 
-Status: implementation specification, 2026-09-16. **The features and commands in
-this document are proposed, not implemented.** The released package remains v1.
+Status: implementation specification, 2026-09-16. **This is the complete v2 target,
+not a statement that all features are implemented.** The released package remains v1.
+The [development guide](v2-getting-started.md) describes the executable first slice.
 This document defines the intended v2 scope; [the delivery plan](v2-plan.md)
 records the v1 cleanup, milestones, and evidence needed to release it.
 
@@ -44,8 +45,9 @@ v2 still ships a real new training workflow, not only a renderer or model adapte
 Task identity: `sound-match-v1`. Initial renderer identity:
 `harpy-compact-synth-v1`. These identifiers are independent of the package version.
 
-`render(patch, schedule, config)` starts with fresh oscillator, filter, and
-envelope state and returns exactly 96,000 finite mono float32 samples: two seconds
+`render(patch)` uses the task's fixed schedule/configuration and starts with fresh
+oscillator, filter, and envelope state. It returns exactly 96,000 finite mono
+float32 samples: two seconds
 at 48 kHz. All voices start at sample zero; note-off is sample 48,000. There is no
 random phase, noise, automatic gain normalization, limiter, or implicit clipping.
 Target and candidate use the same frozen renderer and public timing schedule.

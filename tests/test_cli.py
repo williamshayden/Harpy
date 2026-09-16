@@ -88,6 +88,52 @@ def test_summarize_rejects_nonobject_json_without_traceback(tmp_path: Path, caps
     assert "harpy:" in capsys.readouterr().err
 
 
+def test_current_summary_loads_and_decodes_result_once(tmp_path: Path, monkeypatch) -> None:
+    from harpy import _serialization
+    from harpy.cli import _summarize_path
+
+    path = tmp_path / "episode.json"
+    assert main(["run", "--actor", "oracle", "--output", str(path)]) == 0
+    reads = []
+    decodes = []
+    original_read = Path.read_bytes
+    original_decode = _serialization.decode_json_bytes
+
+    def counted_read(self):
+        if self == path:
+            reads.append(self)
+        return original_read(self)
+
+    def counted_decode(content):
+        decodes.append(len(content))
+        return original_decode(content)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read)
+    monkeypatch.setattr(_serialization, "decode_json_bytes", counted_decode)
+    assert "oracle" in _summarize_path(path, format="text")
+    assert reads == [path]
+    assert len(decodes) == 1
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"schema_id": "first", "schema_id": "second"}',
+        '{"schema_id": "unknown", "value": NaN}',
+        '{"schema_id": "unknown", "value": 1e999}',
+    ],
+)
+def test_summary_dispatch_rejects_invalid_json_before_reader(
+    tmp_path: Path,
+    capsys,
+    content: str,
+) -> None:
+    path = tmp_path / "malformed.json"
+    path.write_text(content)
+    assert main(["summarize", str(path)]) == 2
+    assert "harpy:" in capsys.readouterr().err
+
+
 def test_training_dispatch_preserves_explicit_request(tmp_path: Path, monkeypatch) -> None:
     from harpy.experiments import training
 

@@ -1,0 +1,161 @@
+name: Python contracts and packages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_training:
+        description: Run optional CPU training and frozen-model compatibility tests
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  base:
+    name: Python 3.12 base contracts and installed packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked base and development dependencies
+        run: uv sync --locked --group dev
+      - name: Check style
+        run: |
+          uv run --no-sync ruff check src tests examples
+          uv run --no-sync ruff format --check src tests examples
+      - name: Run base contracts without the optional training stack
+        run: |
+          uv run --no-sync python -c "import importlib.util; assert importlib.util.find_spec('torch') is None; assert importlib.util.find_spec('stable_baselines3') is None"
+          uv run --no-sync pytest -q \
+            tests/test_analysis.py tests/test_tuning.py tests/test_imports.py \
+            tests/test_cli.py tests/test_serialization.py tests/test_sound_match_cli.py \
+            tests/envs tests/synth tests/tasks tests/experiments tests/learning/test_artifacts.py \
+            --ignore=tests/experiments/test_training.py \
+            -k 'not test_frozen_schema_v1_models_strict_load_and_repeat_seeded_actions and not test_historical_import_retains_model_bytes_and_original_training_identity'
+      - name: Build wheel and sdist
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/harpy-dist"
+          uv export --locked --no-dev --no-emit-project --no-hashes --output-file "$RUNNER_TEMP/harpy-base-requirements.txt"
+      - name: Exercise both installed distributions outside the checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in "$RUNNER_TEMP"/harpy-dist/*.whl "$RUNNER_TEMP"/harpy-dist/*.tar.gz; do
+            smoke_root="$(mktemp -d "$RUNNER_TEMP/harpy-installed.XXXXXX")"
+            uv venv --python 3.12 "$smoke_root/venv"
+            uv pip install --python "$smoke_root/venv/bin/python" \
+              --constraint "$RUNNER_TEMP/harpy-base-requirements.txt" "$artifact"
+            (
+              cd "$smoke_root"
+              unset PYTHONPATH
+              "$smoke_root/venv/bin/harpy" --help
+              "$smoke_root/venv/bin/python" - <<'PY'
+          import hashlib
+          import importlib.util
+          import os
+          import sys
+          from importlib.resources import files
+          from pathlib import Path
+
+          import harpy
+          from harpy.experiments import (
+              EpisodeSpec, evaluate, load_result, save_result, spectrum_peak_actor_spec,
+          )
+          from harpy.experiments.artifacts import load_artifact
+
+          package = Path(harpy.__file__).resolve()
+          assert not package.is_relative_to(Path(os.environ["GITHUB_WORKSPACE"]).resolve())
+          assert package.is_relative_to(Path(sys.prefix).resolve())
+          for dependency in ("torch", "stable_baselines3"):
+              assert importlib.util.find_spec(dependency) is None
+          reference = load_artifact(Path(str(files("harpy").joinpath("reference"))))
+          reference.verify_unchanged()
+          assert reference.manifest.trainer == "pitch"
+          for record in reference.manifest.files:
+              assert hashlib.sha256((reference.root / record.relative_path).read_bytes()).hexdigest() == record.sha256
+          result = evaluate((EpisodeSpec("installed", 6001, 12),), (spectrum_peak_actor_spec(),), trace=True)
+          save_result(result, Path("result.json"))
+          assert load_result(Path("result.json")) == result
+          assert "torch" not in sys.modules and "stable_baselines3" not in sys.modules
+          print("Installed package:", package)
+          PY
+              for format in text markdown csv; do
+                "$smoke_root/venv/bin/harpy" summarize result.json --format "$format" > "summary.$format"
+                test -s "summary.$format"
+              done
+              "$smoke_root/venv/bin/harpy" run --actor waveform-fft --source-cents 6001 --output waveform.json
+              "$smoke_root/venv/bin/harpy" run --task sound-match-v1 --actor fixed --output sound-match
+              for format in text markdown csv; do
+                "$smoke_root/venv/bin/harpy" summarize sound-match --format "$format" > "sound-match.$format"
+                test -s "sound-match.$format"
+              done
+            )
+          done
+      - name: State optional coverage separately
+        if: always()
+        run: |
+          echo 'Base coverage excludes real training and two model-loading compatibility tests; Torch-dependent actor tests may skip.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Use workflow_dispatch with run_training=true for the separate optional CPU job. A skipped job is not a training pass.' >> "$GITHUB_STEP_SUMMARY"
+
+  optional-training:
+    name: Optional CPU training and frozen model compatibility
+    if: github.event_name == 'workflow_dispatch' && inputs.run_training
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: true
+          cache-suffix: cpu-training
+      - name: Install locked versions with the official CPU Torch wheel
+        run: |
+          uv python install 3.12
+          uv venv --python 3.12
+          uv run --no-project --python 3.12 python - <<'PY'
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          lock = tomllib.loads(Path("uv.lock").read_text())
+          output = Path(os.environ["RUNNER_TEMP"]) / "harpy-cpu-training.txt"
+          command = ["uv", "export", "--locked", "--extra", "train", "--group", "dev", "--no-hashes", "--output-file", str(output)]
+          # The lock uses Linux CUDA wheels. Preserve its version pins while
+          # selecting the official CPU Torch variant and excluding GPU payloads.
+          for package in lock["package"]:
+              name = package["name"]
+              if name == "triton" or name.startswith(("nvidia-", "cuda-")):
+                  command.extend(("--no-emit-package", name))
+          subprocess.run(command, check=True)
+          subprocess.run(["uv", "pip", "sync", "--python", ".venv/bin/python", "--torch-backend=cpu", str(output)], check=True)
+          PY
+      - name: Require optional dependencies and CPU variant
+        run: |
+          .venv/bin/python -c "import torch, stable_baselines3; assert torch.version.cuda is None; print(torch.__version__, stable_baselines3.__version__)"
+      - name: Run actual parameter-update and model compatibility tests
+        run: |
+          .venv/bin/pytest -q tests/experiments/test_training.py tests/experiments/test_actors.py \
+            tests/experiments/test_artifacts.py tests/learning/test_artifacts.py
+      - name: Explain the optional environment
+        if: always()
+        run: |
+          echo 'Optional coverage uses lockfile version pins and the official CPU Torch variant. It does not qualify CUDA, checkpoint training, or a release cohort.' >> "$GITHUB_STEP_SUMMARY"

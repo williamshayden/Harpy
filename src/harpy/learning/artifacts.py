@@ -22,6 +22,15 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 
+from harpy._serialization import (
+    canonical_json_bytes,
+    decode_json_bytes,
+    read_json_document,
+    write_new_bytes,
+)
+from harpy._serialization import (
+    sha256_file as _sha256_file,
+)
 from harpy.learning.models import (
     ARCHITECTURE_SCHEMA_ID,
     ENVIRONMENT_CONTRACT_ID,
@@ -1424,89 +1433,6 @@ def required_payload_names(trainer: TrainerKind, profile: ProfileName) -> tuple[
     return ("training-config.json", "training-summary.json", model, *evaluations)
 
 
-def _owned_json(value: object, field: str) -> JSONValue:
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if type(value) is int:
-        return value
-    if type(value) is float:
-        if not math.isfinite(value):
-            raise ValueError(f"{field} must contain only finite JSON numbers")
-        return value
-    if isinstance(value, list):
-        return [_owned_json(item, field) for item in value]
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) for key in value):
-            raise ValueError(f"{field} must contain only string-keyed JSON objects")
-        return {key: _owned_json(item, field) for key, item in value.items()}
-    raise ValueError(f"{field} must contain only JSON values")
-
-
-def canonical_json_bytes(document: Mapping[str, JSONValue]) -> bytes:
-    """Encode one finite JSON object in the artifact's canonical byte form."""
-
-    normalized = _owned_json(document, "document")
-    if not isinstance(normalized, dict):
-        raise ValueError("document must be a JSON object")
-    return (
-        json.dumps(
-            normalized,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
-    )
-
-
-def _reject_constant(value: str) -> object:
-    raise ValueError(f"JSON number {value} must be finite")
-
-
-def _pairs_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON object key: {key!r}")
-        result[key] = value
-    return result
-
-
-def decode_json_bytes(content: bytes) -> dict[str, JSONValue]:
-    """Decode one duplicate-free finite UTF-8 JSON object."""
-
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError("content must be valid UTF-8") from error
-    try:
-        parsed: object = json.loads(
-            text,
-            object_pairs_hook=_pairs_object,
-            parse_constant=_reject_constant,
-        )
-    except json.JSONDecodeError as error:
-        raise ValueError("content must be valid JSON") from error
-    normalized = _owned_json(parsed, "JSON document")
-    if not isinstance(normalized, dict):
-        raise ValueError("JSON document must be an object")
-    return normalized
-
-
-def read_json_document(path: Path) -> dict[str, JSONValue]:
-    """Read one artifact JSON document with duplicate and finiteness checks."""
-
-    return decode_json_bytes(path.read_bytes())
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _record_file(path: Path, relative_path: str) -> FileRecord:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"artifact payload {relative_path!r} must be a regular file")
@@ -2176,28 +2102,6 @@ def _validate_completion_counts(
             != summary.summary.completed_environment_steps
         ):
             raise ValueError("completed_environment_steps must match training-summary.json")
-
-
-def write_new_bytes(path: Path, content: bytes) -> None:
-    """Atomically publish a new sibling file without a check-then-overwrite race."""
-
-    if not isinstance(content, bytes):
-        raise ValueError("content must be bytes")
-    parent = path.parent.resolve(strict=True)
-    final = parent / path.name
-    temporary = _temporary_path(final, preserve_suffix=True)
-    linked = False
-    try:
-        _write_fsynced_file(temporary, content)
-        os.link(temporary, final)
-        linked = True
-        temporary.unlink()
-        _fsync_directory(parent)
-    finally:
-        with suppress(FileNotFoundError):
-            temporary.unlink()
-    if not linked:
-        raise RuntimeError("create-only publication did not link the final path")
 
 
 def _git(anchor: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:

@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+- Start `2.0.0.dev0` with the `sound-match-v1` development task: deterministic
+  single-note/chord synthesis, bounded patch proposals and explicit submission,
+  fixed/random/pattern-search actors, strict saved bundles, and exported audio
+  and editable patches. The distance is uncalibrated; learned inverse models and
+  resumable evaluation remain subsequent milestones.
+- Read and strictly decode current result JSON once, preserving recomputed
+  metrics and readout; extract neutral JSON, file hashing, and create-only
+  publication primitives behind compatible historical imports.
+- Add base and optional CPU-training CI jobs, including installed wheel/sdist
+  checks. These workflow definitions do not constitute a hosted CI run.
 - Specify headless v2 sound/chord matching, constrained patch editing, and a
   supervised inverse-model workflow; record phased delivery and source-backed v1
-  reliability cleanup. This is a proposal, with no runtime or package-version change.
+  reliability cleanup. The specification describes the full intended release;
+  the development guide identifies currently executable features.
 - Correct the waveform FFT guide to link the published portable study and
   distinguish its original-result, portable-result, and compressed-download hashes.
 
