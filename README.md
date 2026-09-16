@@ -148,6 +148,9 @@ The qualification record identifies their hashes and scope.
 
 ## Documentation
 
+- [v2 specification](docs/v2-spec.md) and [delivery plan](docs/v2-plan.md): proposed
+  headless sound/chord matching, constrained patch editing, training, and v1
+  reliability improvements. These features are not yet implemented.
 - [Getting started](docs/v1-getting-started.md): capabilities, installation, traces,
   training, custom actors, and result interpretation.
 - [Contributing](docs/v1-contributing.md): development setup, focused checks, and

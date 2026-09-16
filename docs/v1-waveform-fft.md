@@ -76,13 +76,20 @@ control execution were excluded. No training or GPU computation was used.
 
 The source checkout retains the frozen study, compact metrics and timing views
 under `research/spectrum_preservation/`; these research scripts are not installed
-package APIs. Complete ordinary results remain in the local research archive
-`outputs/spectrum-preservation-study/experiment.json` (about 18 MiB). That archive
-is not tracked or bundled; exact validation of the complete saved study requires
-obtaining it separately. A fresh clone includes the research code and compact
-views, not the full recorded experiment.
+package APIs. The original result remains at
+`outputs/spectrum-preservation-study/experiment.json` and is not tracked or bundled.
+The public v1 release provides all 14,400 records as
+[spectrum-study.json.gz](https://github.com/williamshayden/Harpy/releases/download/v1/spectrum-study.json.gz).
+Its [portability manifest](https://github.com/williamshayden/Harpy/releases/download/v1/spectrum-study-manifest.json)
+records the removal of local checkout prefixes from 30 artifact path labels.
+Records, metrics, protocol, artifact hashes, and original producer provenance are
+unchanged; the portable JSON has a different hash from the original result.
+After downloading, run `gzip -dk spectrum-study.json.gz`, then
+`harpy summarize spectrum-study.json`.
 
-- Study result SHA-256: `69db356439daf33f320d7a596d236584c8053f55b1954927c452dbda8679be8f`.
+- Original study result SHA-256: `69db356439daf33f320d7a596d236584c8053f55b1954927c452dbda8679be8f`.
+- Portable JSON SHA-256 (after decompression): `1e56a54ef2cda4b3f1105ee41725b2c289966c1dd085d9ed1645fb43aa5b5d57`.
+- Compressed download SHA-256: `01c46c20ec266c778235b5008e5da8ec154c19643795d0ced3fa5a879e8c81e9`.
 - Membership digest: `7ec38d3af9e0a30baba4437e00350b1fdfe77166b50f72b92fe0c1ed185c9c48`.
 - Production package hash at study time: `9cca1d94ed865ed07f1a5072a394c83970fccf8575cda7d380067e7152754ab1`.
 

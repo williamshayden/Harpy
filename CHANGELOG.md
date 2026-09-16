@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Specify headless v2 sound/chord matching, constrained patch editing, and a
+  supervised inverse-model workflow; record phased delivery and source-backed v1
+  reliability cleanup. This is a proposal, with no runtime or package-version change.
+- Correct the waveform FFT guide to link the published portable study and
+  distinguish its original-result, portable-result, and compressed-download hashes.
+
 ## 1.0.0 — 2026-09-09
 
 The first public package release uses tag `v1` and implements the revised v1
