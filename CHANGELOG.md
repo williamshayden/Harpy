@@ -2,11 +2,18 @@
 
 ## Unreleased
 
-- Start `2.0.0.dev0` with the `sound-match-v1` development task: deterministic
+- Prepare package `2.0.0` with the `sound-match-v1` task: deterministic
   single-note/chord synthesis, bounded patch proposals and explicit submission,
   fixed/random/pattern-search actors, strict saved bundles, and exported audio
-  and editable patches. The distance is uncalibrated; learned inverse models and
-  resumable evaluation remain subsequent milestones.
+  and editable patches. Freeze continuous distance reporting after a 96-target
+  calibration pilot; no perceptual success cutoff is asserted.
+- Add Torch-only inverse training and ordinary-runner inverse/refinement actors,
+  frozen train/validation/test manifests, all-seed checkpoint selection evidence,
+  and tensor-only artifact loading. Keep quality qualification separate from
+  training workflow correctness.
+- Add append-only, single-writer evaluation bundles for sound matching and opt-in
+  v1 pitch work, with committed-member resume, interrupted-attempt accounting,
+  portable artifact identities, incomplete readout, and model-free replay.
 - Read and strictly decode current result JSON once, preserving recomputed
   metrics and readout; extract neutral JSON, file hashing, and create-only
   publication primitives behind compatible historical imports.

@@ -1,7 +1,9 @@
 # harPY v2 delivery and v1 cleanup plan
 
-Status: proposed implementation plan, 2026-09-16. Scope is defined in
-[v2-spec.md](v2-spec.md). This planning change does not implement the new task.
+This delivery plan was frozen on 2026-09-16. Scope is defined in
+[v2-spec.md](v2-spec.md). Implementation and qualification are tracked in the
+[current acceptance record](v2-acceptance.md); the findings and milestone gates
+below preserve the original plan.
 
 Implementation has since started on the development branch. The
 [first milestone record](v2-m1-verification.md) distinguishes completed M1/M0
@@ -25,7 +27,7 @@ is relative implementation order, not a claim that v1's scientific results fail.
 | P1 | Custom artifact inventories serialize resolved absolute filenames in [the runner](../src/harpy/experiments/runner.py) | Separate portable IDs from local lookup paths while retaining source identity, hashes, sizes, and mutation detection | Same content in two checkout roots has equivalent portable inventory; no machine-root prefixes in publication exports; original v1 bytes unchanged |
 | P2 | CLI summary dispatch parses the entire result, then [the result reader](../src/harpy/experiments/results.py) reads/parses it again | Dispatch and strictly validate a single decoded document; preserve metric recomputation | One file load; duplicate keys/nonfinite values still rejected; identical scientific records and readout across current/historical fixtures; measure retained large study |
 | P2 | [Active artifact code](../src/harpy/experiments/artifacts.py) imports neutral helpers from historical `learning.artifacts`; historical readout reaches training workflows | Extract shared JSON, hashing, source identity, and atomic publication helpers; isolate historical readers/execution with compatibility shims | Current and historical fixtures, installed imports, checkpoint reload, and source-provenance checks pass without broad deletion |
-| P2 | Full three-seed reference qualification and seed-1/2 artifacts remain local, as disclosed in [README](../README.md#read-the-evidence) | Prepare a checksum-bound portable v1 evidence bundle or keep its access limitation explicit; require distributable v2 evidence before claiming independent reproducibility | Recompute qualification from archived records and reload all cited artifacts without retraining or choosing a new seed |
+| P2 | Full three-seed reference qualification and seed-1/2 artifacts remain local, as disclosed in [README](../README.md#keep-using-the-v1-pitch-task) | Prepare a checksum-bound portable v1 evidence bundle or keep its access limitation explicit; require distributable v2 evidence before claiming independent reproducibility | Recompute qualification from archived records and reload all cited artifacts without retraining or choosing a new seed |
 | P2 | [The FFT guide](v1-waveform-fft.md) previously described only the local study archive | Point current guidance to the published portable result; distinguish original JSON, portable JSON, and compressed-download hashes | Verify manifest, hashes, and download/decompress/read instructions; preserve dated reviews as historical records |
 
 The final documentation item is corrected in this planning change. The remaining

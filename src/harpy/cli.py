@@ -15,10 +15,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     operations = parser.add_subparsers(dest="operation", required=True)
     train = operations.add_parser(
-        "train", help="Train a pitch reference or experimental PPO policy"
+        "train", help="Train an inverse sound model, pitch reference, or experimental PPO policy"
     )
-    train.add_argument("trainer", choices=("pitch", "ppo"))
-    train.add_argument("--profile", choices=("smoke", "checkpoint"), default="smoke")
+    train.add_argument("trainer", choices=("inverse", "pitch", "ppo"))
+    train.add_argument("--profile", choices=("quick", "reference", "smoke", "checkpoint"))
     train.add_argument("--seed", type=int, default=0)
     train.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     train.add_argument("--output", type=Path, required=True, help="New artifact directory")
@@ -35,16 +35,24 @@ def _parser() -> argparse.ArgumentParser:
         dest="actors",
         metavar="NAME_OR_PATH",
         help="Repeat for comparisons: spectrum-peak, spectrum-peak-replan, waveform-fft, oracle, "
-        "reward-search, random, reference, a saved artifact directory, or LABEL=PATH",
+        "reward-search, random, reference, a saved artifact directory, or LABEL=PATH. "
+        "Sound matching: fixed, random-search, pattern-search, inverse=PATH, inverse-refine=PATH, "
+        "or LABEL=inverse:PATH",
     )
     evaluate.add_argument(
         "--suite",
         help="Pitch: clean (default), robustness, confirmation, smoke; "
-        "sound matching: tone-smoke (default), chord-smoke, shaping-smoke",
+        "sound matching: tone-smoke (default), chord-smoke, shaping-smoke, calibration, "
+        "validation, iid-test, compositional-test",
     )
     evaluate.add_argument("--seed", type=int, help="Sound-matching search seed (default: 0)")
-    evaluate.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
-    evaluate.add_argument("--trace", action="store_true", help="Include every public decision")
+    evaluate.add_argument("--device", choices=("cpu", "cuda"))
+    evaluate.add_argument(
+        "--trace",
+        action="store_true",
+        default=None,
+        help="Include every public decision (always included for sound matching)",
+    )
     evaluate.add_argument(
         "--output", type=Path, required=True, help="New pitch JSON file or sound-matching bundle"
     )
@@ -63,10 +71,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--nuisance-seed", type=int)
     run.add_argument("--condition", help="A frozen pitch robustness condition (default: clean)")
-    run.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    run.add_argument("--device", choices=("cpu", "cuda"))
     run.add_argument(
         "--output", type=Path, required=True, help="New pitch JSON trace or sound-matching bundle"
     )
+    for operation in (evaluate, run):
+        operation.add_argument(
+            "--bundle",
+            action="store_true",
+            help="Use a resumable pitch bundle (default for sound matching)",
+        )
+        operation.add_argument(
+            "--resume",
+            action="store_true",
+            help="Resume this bundle; omitted options are restored from it",
+        )
 
     summarize = operations.add_parser(
         "summarize", help="Validate and read a saved result without ML"
@@ -74,9 +93,14 @@ def _parser() -> argparse.ArgumentParser:
     summarize.add_argument("result", type=Path)
     summarize.add_argument("--format", choices=("text", "markdown", "csv"), default="text")
     summarize.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Read committed evidence from an interrupted bundle",
+    )
+    summarize.add_argument(
         "--verify-replay",
         action="store_true",
-        help="Re-render and verify every candidate in a sound-matching bundle",
+        help="Replay recorded sound candidates or pitch actions without loading models",
     )
     return parser
 
@@ -118,8 +142,32 @@ def _actor(name: str, *, device: str):
     raise ValueError(f"Unsupported artifact trainer: {trainer}")
 
 
-def _summarize_path(path: Path, *, format: str, verify_replay: bool = False) -> str:
+def _summarize_path(
+    path: Path, *, format: str, verify_replay: bool = False, allow_incomplete: bool = False
+) -> str:
     if path.is_dir():
+        from harpy._serialization import read_json_document
+
+        if (path / "manifest.json").is_file():
+            manifest = read_json_document(path / "manifest.json")
+            from harpy._journal import BUNDLE_SCHEMA_ID
+
+            if manifest.get("schema_id") == BUNDLE_SCHEMA_ID:
+                if manifest.get("task_id") == "sound-match-v1":
+                    from harpy.tasks.sound_match import durable
+
+                    if verify_replay:
+                        durable.verify_replay(path, allow_incomplete=allow_incomplete)
+                elif manifest.get("task_id") == "pitch-control-v1":
+                    from harpy.experiments import durable
+
+                    if verify_replay:
+                        durable.verify_replay(path, allow_incomplete=allow_incomplete)
+                else:
+                    raise ValueError("Unknown durable bundle task")
+                return durable.summarize_bundle(
+                    path, format=format, allow_incomplete=allow_incomplete
+                )
         from harpy.tasks.sound_match.results import load_result, summarize
 
         result = load_result(path)
@@ -148,10 +196,9 @@ def _summarize_path(path: Path, *, format: str, verify_replay: bool = False) -> 
 
 
 def _execute_sound_match(args: argparse.Namespace) -> int:
-    from harpy.tasks.sound_match.actors import builtin_actor_spec
+    from harpy._cli_bundles import Progress, actor_requests, configuration
+    from harpy.tasks.sound_match.durable import evaluate_bundle, summarize_bundle
     from harpy.tasks.sound_match.protocols import smoke_episodes
-    from harpy.tasks.sound_match.results import save_result, summarize
-    from harpy.tasks.sound_match.runner import evaluate, run
 
     if args.device != "cpu":
         raise ValueError("sound-match-v1 currently supports CPU execution only")
@@ -162,10 +209,27 @@ def _execute_sound_match(args: argparse.Namespace) -> int:
         raise ValueError(
             "Pitch source/target/nuisance/condition options do not apply to sound matching"
         )
-    seed = 0 if args.seed is None else args.seed
-    if seed < 0:
+    args.seed = 0 if args.seed is None else args.seed
+    if args.seed < 0:
         raise ValueError("Sound-matching search seed must be nonnegative")
-    episodes = smoke_episodes(args.suite or "tone-smoke")
+    args.suite = args.suite or "tone-smoke"
+    dataset = None
+    if args.suite in ("calibration", "validation", "iid-test", "compositional-test"):
+        import hashlib
+
+        from harpy.tasks.sound_match.datasets import DATA_DIRECTORY, load_manifest
+
+        manifest = load_manifest(args.suite)
+        episodes = manifest.episodes
+        dataset = {
+            "split": manifest.split,
+            "manifest_sha256": manifest.manifest_sha256,
+            "catalog_sha256": hashlib.sha256(
+                (DATA_DIRECTORY / "catalog.json").read_bytes()
+            ).hexdigest(),
+        }
+    else:
+        episodes = smoke_episodes(args.suite)
     if args.operation == "run":
         episode = (
             episodes[0]
@@ -176,14 +240,25 @@ def _execute_sound_match(args: argparse.Namespace) -> int:
             raise ValueError(
                 "Unknown episode. Choose: " + ", ".join(e.episode_id for e in episodes)
             )
-        result = run(episode, builtin_actor_spec(args.actor or "pattern-search", seed=seed))
+        args.episode = episode.episode_id
+        episodes = (episode,)
+        requests = [args.actor or "pattern-search"]
     else:
-        actors = tuple(
-            builtin_actor_spec(name, seed=seed) for name in (args.actors or ["pattern-search"])
-        )
-        result = evaluate(episodes, actors)
-    save_result(result, args.output)
-    print(summarize(result), end="")
+        args.trace = True
+        requests = args.actors or ["pattern-search"]
+    actors, descriptors, locators = actor_requests(
+        requests, task=args.task, device=args.device, seed=args.seed
+    )
+    evaluate_bundle(
+        episodes,
+        actors,
+        args.output,
+        resume=args.resume,
+        progress=Progress(),
+        configuration=configuration(args, descriptors, dataset=dataset),
+        locators=locators,
+    )
+    print(summarize_bundle(args.output), end="")
     print(f"Saved sound-matching bundle: {args.output}", file=sys.stderr)
     return 0
 
@@ -191,20 +266,33 @@ def _execute_sound_match(args: argparse.Namespace) -> int:
 def _execute(args: argparse.Namespace) -> int:
     if args.operation == "summarize":
         print(
-            _summarize_path(args.result, format=args.format, verify_replay=args.verify_replay),
+            _summarize_path(
+                args.result,
+                format=args.format,
+                verify_replay=args.verify_replay,
+                allow_incomplete=args.allow_incomplete,
+            ),
             end="",
         )
         if args.verify_replay:
-            print("Verified sound-matching audio and score replay.", file=sys.stderr)
+            print("Verified recorded synthesis and decision replay.", file=sys.stderr)
         return 0
-    if args.output.exists():
+    if args.output.exists() and not getattr(args, "resume", False):
         raise FileExistsError(f"Output already exists; choose a new path: {args.output}")
     if args.operation == "train":
+        if args.trainer == "inverse":
+            from harpy.tasks.sound_match.inverse import train_inverse
+
+            train_inverse(
+                args.output, profile=args.profile or "quick", seed=args.seed, device=args.device
+            )
+            print(f"Saved inverse artifact: {args.output}", file=sys.stderr)
+            return 0
         from harpy.experiments.training import train
 
         train(
             trainer=args.trainer,
-            profile=args.profile,
+            profile=args.profile or "smoke",
             seed=args.seed,
             device=args.device,
             output=args.output,
@@ -212,6 +300,10 @@ def _execute(args: argparse.Namespace) -> int:
         print(f"Saved {args.trainer} artifact: {args.output}", file=sys.stderr)
         return 0
 
+    from harpy._cli_bundles import restore_arguments
+
+    restore_arguments(args)
+    args.device = args.device or "cpu"
     if args.task == "sound-match-v1":
         return _execute_sound_match(args)
     if args.seed is not None:
@@ -245,7 +337,7 @@ def _execute(args: argparse.Namespace) -> int:
                 0 if args.nuisance_seed is None else args.nuisance_seed,
             ),
         )
-        actor_specs = (_actor(args.actor or "spectrum-peak", device=args.device),)
+        requests = [args.actor or "spectrum-peak"]
         conditions = (condition,)
         trace = True
         protocol = None
@@ -259,11 +351,33 @@ def _execute(args: argparse.Namespace) -> int:
         conditions = (
             ROBUSTNESS_CONDITIONS if args.suite == "robustness" else (ROBUSTNESS_CONDITIONS[0],)
         )
-        actor_specs = tuple(
-            _actor(name, device=args.device) for name in (args.actors or ["spectrum-peak"])
-        )
+        requests = args.actors or ["spectrum-peak"]
+        args.trace = bool(args.trace)
         trace = args.trace
         protocol = protocol_document(args.suite)
+    if args.bundle:
+        from harpy._cli_bundles import Progress, actor_requests, configuration
+        from harpy.experiments.durable import evaluate_bundle, summarize_bundle
+
+        actor_specs, descriptors, locators = actor_requests(
+            requests, task=args.task, device=args.device
+        )
+        evaluate_bundle(
+            episodes,
+            actor_specs,
+            args.output,
+            conditions=conditions,
+            trace=trace,
+            protocol=protocol,
+            resume=args.resume,
+            progress=Progress(),
+            configuration=configuration(args, descriptors),
+            locators=locators,
+        )
+        print(summarize_bundle(args.output), end="")
+        print(f"Saved pitch bundle: {args.output}", file=sys.stderr)
+        return 0
+    actor_specs = tuple(_actor(name, device=args.device) for name in requests)
     result = evaluate(episodes, actor_specs, conditions=conditions, trace=trace, protocol=protocol)
     save_result(result, args.output)
     print(summarize(result), end="")

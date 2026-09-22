@@ -760,21 +760,21 @@ def test_ppo_criterion_eligibility_is_derived_only_from_the_complete_manifest_se
     events: list[str] = []
     _install_fast_workflow(monkeypatch, artifacts, events)
     eligibility: list[bool] = []
+    original_criterion = workflows.evaluate_ppo_criterion
 
     def ppo_criterion(*, iid_rows, random_iid_row, eligible: bool):
-        del iid_rows, random_iid_row
         eligibility.append(eligible)
-        return (
-            PPOScientificCriterion(True, 0.5, 5, True, "criterion_met")
-            if eligible
-            else PPOScientificCriterion(False, None, None, None, "ineligible")
+        return original_criterion(
+            iid_rows=iid_rows, random_iid_row=random_iid_row, eligible=eligible
         )
 
     monkeypatch.setattr(workflows, "evaluate_ppo_criterion", ppo_criterion)
 
     report = workflows.evaluate_artifacts(paths)
 
-    assert eligibility == ([expected, True] if expected else [False])
+    # The read-only codec independently recomputes scientific criteria; this spy
+    # observes only the execution workflow's eligibility decision.
+    assert eligibility == [expected]
     assert report.ppo_criterion is not None
     assert report.ppo_criterion.eligible is expected
 

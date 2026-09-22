@@ -2,173 +2,149 @@
 
 **harmonic research in python**
 
-harPY is a headless Python toolkit for researchers and developers comparing audio
-representations, pitch estimators, and tuning controllers. It supplies a controlled
-task, classical and learned baselines, matched experiments, and saved results so
-you can change a method and inspect what changed.
+harPY is a headless Python toolkit for controlled audio experiments. Version 2
+adds sound matching: an actor hears a short synthesized target, proposes editable
+patches, auditions each candidate, and submits a sound within a fixed budget.
+It also preserves the released v1 pitch-control benchmark and its saved evidence.
 
-The released v1 environment is single-tone pitch matching. A synthesized sine gives
-the evaluator an exact source pitch, while the actor must estimate it from audio
-and use bounded controls to reach a target note. Controlled level, phase, and noise
-variations help separate representation errors from estimation and control behavior.
+The synthesizer renders two-second mono clips with one or three notes, four
+waveforms, shared brightness, an ADSR envelope, and gain. Tasks cover complete
+reconstruction and changes restricted to pitch, envelope, or brightness.
+Classical search and a trained inverse estimator use the same public observations
+and candidate-evaluation rules.
 
-Bring a custom Python actor or use a built-in baseline. For example, compare an
-alternative waveform encoding under the same controller, test a learned estimator
-against a classical method, or examine committed planning versus repeated
-replanning. Custom actors and explicit episode membership are supported within
-the current task; other audio sources and tasks require additional implementation.
+**This checkout prepares package 2.0.0.** Local qualification and archive status
+are recorded in [v2 acceptance](docs/v2-acceptance.md). A local package or evidence
+archive is distinct from a published release. The existing public v1 release uses
+tag `v1`; the older `v1.0.0` tag preserves a historical development checkpoint.
 
-**The v1 release is package 1.0.0, tagged `v1`.** It implements the revised v1
-research protocol. The older `v1.0.0` tag is a historical development checkpoint,
-not the public release; it preserves the earlier workflows and evidence.
+## Install and run
 
-This development branch is **2.0.0.dev0** and also includes the first v2
-sound-matching workflow. See the [development guide](docs/v2-getting-started.md)
-for synthesis, bounded patch search, and saved audio/results. Model training and
-benchmark qualification for that new task remain in progress.
-
-## Install
-
-Download the wheel, source archive, and checksums from the
-[v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1).
-The wheel installs into a Python 3.12 environment with `python -m pip install ./harpy_audio-1.0.0-py3-none-any.whl`.
-
-Use Python 3.12 on Linux/WSL, the qualified environment. Clone the release source,
-then create and activate a virtual environment:
+Use Python 3.12 on Linux/WSL, the qualified platform, from this checkout or a
+built wheel:
 
 ```bash
-git clone --branch v1 https://github.com/williamshayden/Harpy.git
-cd Harpy
 python3.12 -m venv .venv
 source .venv/bin/activate
+python -m pip install .           # Synthesis, classical actors, readers, replay
+python -m pip install '.[learn]'  # Optional inverse sound model, using Torch
 ```
 
-Then choose the dependencies you need:
+The distribution is `harpy-audio`; the CLI and imports are `harpy`. Base
+operation has no Torch or Stable-Baselines3 dependency. The `pitch` extra retains
+v1 supervised learning, and `train` adds v1 PPO. Sound matching is CPU-qualified;
+native Windows/macOS and new-task CUDA execution are not qualified.
 
 ```bash
-python -m pip install .          # Classical actors and result readers
-python -m pip install '.[pitch]'  # Also supervised pitch, using Torch
-python -m pip install '.[train]'  # Also PPO, using Torch and Stable-Baselines3
+harpy run --task sound-match-v1 --suite tone-smoke --actor pattern-search \
+  --output runs/first-sound
+harpy summarize runs/first-sound
+harpy summarize runs/first-sound --verify-replay
+harpy evaluate --task sound-match-v1 --suite chord-smoke \
+  --actor fixed --actor random-search --seed 0 --output runs/chord-comparison
 ```
 
-A built wheel can replace `.`. The package distribution is `harpy-audio`; the CLI
-and Python imports remain `harpy`. Installed execution needs neither Git nor `uv`;
-pitch does not require Stable-Baselines3. Native Windows/macOS are not yet
-qualified. CPU evaluation and CUDA training evidence are separate; CUDA must be
-explicitly requested and available.
+Each bundle retains decision traces, objective components, target/submitted WAVs,
+and editable submitted patches. The [sound-matching guide](docs/v2-getting-started.md)
+shows how to find and audition the files, use shaping masks, compare actors, and
+write a custom Python actor.
 
-## Run a first experiment
+## Train and compare a learned initial patch
 
-Compare two classical actors on the same six clean smoke episodes, then inspect
-the saved result:
+```bash
+harpy train inverse --profile quick --seed 0 --output runs/inverse-quick
+harpy evaluate --task sound-match-v1 --suite tone-smoke \
+  --actor inverse=runs/inverse-quick \
+  --actor inverse-refine=runs/inverse-quick \
+  --actor pattern-search --output runs/inverse-comparison
+```
+
+The inverse model makes one legal patch proposal. `inverse-refine` spends the
+remaining budget on ordinary pattern search. A quick run exercises optimization
+and reload; the frozen reference profile trains on 2,016 targets and selects
+among six epochs using 192 validation targets. All three training seeds are
+retained and compared; see the [method](docs/v2-inverse.md).
+
+The public budget is 32 candidate evaluations and 64 decisions. The initial
+candidate costs one evaluation, and cache hits or restored patches still cost
+evaluations. Actors must explicitly submit their current candidate. Submission
+means the protocol finished, not that a listener would judge the sound correct.
+
+The objective is a frozen continuous spectral distance, accompanied by pitch,
+envelope, and level diagnostics. There is no asserted perceptual success cutoff.
+Read reconstruction and shaping cells separately, along with errors, truncations,
+invalid actions, model calls, and render costs. Model quality claims apply only
+to the recorded artifacts and declared criteria.
+
+## Interrupt, resume, and read
+
+```bash
+harpy summarize runs/chord-comparison --allow-incomplete
+harpy evaluate --resume --output runs/chord-comparison
+harpy summarize runs/chord-comparison --format csv
+```
+
+Sound evaluations commit one actor/episode at a time. Resume preserves completed
+records and runs missing work only, rejecting changed source, runtime,
+configuration, membership, or model bytes. Errors and truncations are retained
+observations. Interrupted attempts remain visible; unfinished costs are unknown.
+Single-writer locks prevent concurrent updates to the same bundle.
+
+Readers work without the actor's model and validate hashes, membership, records,
+and recomputed summaries. Portable actor identities are separate from local
+lookup paths. Exact audio/action replay is available for both durable tasks.
+Outputs and training artifacts are create-only; training does not support resume.
+
+## Keep using the v1 pitch task
+
+Omit `--task` to retain the single-tone pitch-control workflow and JSON outputs:
 
 ```bash
 harpy evaluate --actor waveform-fft --actor spectrum-peak \
-  --suite smoke --output runs/first-comparison.json
-harpy summarize runs/first-comparison.json
-harpy summarize runs/first-comparison.json --format markdown
-harpy summarize runs/first-comparison.json --format csv
+  --suite smoke --output runs/pitch-comparison.json
+harpy summarize runs/pitch-comparison.json
 harpy run --actor waveform-fft --source-cents 6064 --target-note-index 12 \
-  --output runs/first-trace.json
+  --output runs/pitch-trace.json
+# Opt into durable v1 evaluation:
+harpy evaluate --bundle --actor waveform-fft --suite smoke --output runs/pitch-bundle
 ```
 
-`evaluate` compares actors; `run` saves one episode with its decision trace;
-`summarize` validates saved results without loading models; `train` creates a
-learned artifact. Smoke checks the workflow, not model quality.
+V1 permits 64 actions with octave, semitone, and fine-cent controls. Success
+requires explicit submission within five cents, inclusive. Its renderer,
+observations, seven actions, criteria, reference weights, and old readers retain
+their existing contracts. With the `pitch` extra, `--actor reference` still loads
+the packaged v1 seed-0 pitch model. `harpy train pitch` and `harpy train ppo`
+continue to target v1; PPO remains experimental.
 
-The task allows 64 actions using independent octave, semitone, and fine-cent
-controls. Success requires **explicit submission within five cents, inclusive**.
-Being close without submitting is not success.
+Reference seeds 0, 1, and 2 each passed 650/650 clean benchmark and 1,000/1,000
+clean confirmation episodes. All three and matched Spectrum Peak passed level,
+phase, and 30 dB noise conditions; each had failures at 10 dB and under combined
+corruption. There is no demonstrated learned advantage or one-cent guarantee.
+The waveform FFT study separately passed 600/600 pairs in each of eight
+conditions. See [v1 qualification](docs/verification/2026-09-08-v1-respec-qualification.md)
+and [FFT evidence](docs/v1-waveform-fft.md).
 
-Outputs are create-only: choose a new result file or artifact directory for each
-run. Interrupted training leaves an incomplete directory for inspection, not a
-valid artifact. Shell redirection follows the shell's overwrite rules.
+The [public v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1)
+includes its wheel, source, and portable representation study. The v2 acceptance
+record identifies the separately prepared portable all-seed v1 archive and its
+access status. Consumed confirmation and final-test memberships support
+reproducing the recorded studies; future model selection needs new test data.
 
-## What you can compare
+## Documentation and scope
 
-- Classical actors: `spectrum-peak`, `spectrum-peak-replan`, `waveform-fft`,
-  `oracle`, `reward-search`, and `random`. Spectrum Peak remains the default.
-- The packaged seed-0 `reference`, or your own pitch/PPO artifact directory.
-  Use `LABEL=PATH` to distinguish artifacts with the same training seed.
-- Custom Python actor factories with fresh episode state and optionally shared
-  immutable model weights. See the [guide](docs/v1-getting-started.md) and
-  [waveform adapter example](examples/custom_actor.py).
-- Clean, level, phase, and white-noise conditions with matched nuisance identity.
-  Noise stays fixed within an episode: these are static-corruption experiments.
+- [V2 getting started](docs/v2-getting-started.md), [inverse method](docs/v2-inverse.md),
+  and [calibration](docs/v2-calibration.md).
+- [V2 acceptance](docs/v2-acceptance.md), [migration](docs/v2-migration.md),
+  [specification](docs/v2-spec.md), and [delivery plan](docs/v2-plan.md).
+- [V1 guide](docs/v1-getting-started.md), [acceptance](docs/v1-acceptance.md),
+  and [contributing](docs/v1-contributing.md).
 
-With the `pitch` extra installed, use the shipped reference without training:
+Custom actors use a cooperative Python interface with fresh per-episode state
+and declared artifacts. They are not sandboxed. Load PPO archives only from
+trusted producers; hashes establish identity, not trust.
 
-```bash
-harpy evaluate --actor reference --actor spectrum-peak \
-  --suite smoke --output runs/reference-smoke.json
-```
-
-The guide covers `harpy train pitch` and `harpy train ppo`, checkpoint reload,
-and custom Python actors. Pitch trains on clean coordinates
-and selects on clean validation. PPO is experimental, with no release-score gate;
-its reset sources use the training partition, though control trajectories can
-visit other coordinates. Load PPO archives from trusted producers: hashes
-establish identity, not trust.
-
-Synthesis, analysis, tuning, and Gymnasium remain supporting APIs. Waveform and
-spectrum actors receive the target, controls, and budget, without source pitch,
-true error, or nuisance seed. Oracle and Reward Search use different information;
-keep those comparisons separate from audio-only actors.
-
-## Read the evidence
-
-Results retain membership, conditions, actor components, source/model identity,
-runtime, and terminal records. Readers recompute metrics and evaluation rejects
-changed artifacts. Read initial one/five-cent accuracy alongside submitted
-success, p99/max error, invalid actions, truncations, and action/inference cost.
-Keep observation tracks, seeds, partitions, and conditions separate.
-
-The clean suite has 650 episodes; robustness repeats them under eight conditions.
-The 1,000 confirmation combinations were frozen before reference qualification
-within the known rendering family. They are now consumed evidence for reproducing
-that qualification; future development needs fresh membership for a new final
-confirmation claim.
-
-Reference seeds 0, 1, and 2 each passed **650/650 clean benchmark and 1,000/1,000
-clean confirmation episodes**, with no invalid actions or truncations. All three
-and matched Spectrum Peak passed the level, phase, and 30 dB noise conditions;
-each had failures at 10 dB and under combined corruption. There is no demonstrated
-learned advantage or one-cent guarantee. These results qualify the recorded
-reference artifacts, not arbitrary trained models.
-
-Separately, the waveform FFT prototype passed **600/600 pairs in each of eight
-conditions**, matching every clean Spectrum Peak estimate. This supports the
-optional baseline, not learned-model gains or universal audio robustness.
-Recorded instruments, chords, live microphone tuning, and UI are outside v1.
-
-The source includes the seed-0 checkpoint, protocol membership, and compact
-results. The [v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1)
-also includes `spectrum-study.json.gz`: all 14,400 records from the representation
-study, with a manifest documenting hashes and the removal of local checkout
-prefixes from artifact path labels. Unpack it with `gzip -dk spectrum-study.json.gz`
-and read it with `harpy summarize spectrum-study.json`.
-Full reference-qualification experiments and seed-1/2 artifacts remain local;
-reproducing those studies requires their archives in addition to a fresh clone.
-The qualification record identifies their hashes and scope.
-
-## Documentation
-
-- [Sound-matching development guide](docs/v2-getting-started.md): the first
-  executable v2 workflow on this development branch, with rendered patches,
-  metered search, and saved audio/results. This is not a released or calibrated
-  sound-matching benchmark.
-- [v2 specification](docs/v2-spec.md) and [delivery plan](docs/v2-plan.md): proposed
-  headless sound/chord matching, constrained patch editing, training, and v1
-  reliability improvements, including subsequent milestones.
-- [Getting started](docs/v1-getting-started.md): capabilities, installation, traces,
-  training, custom actors, and result interpretation.
-- [Contributing](docs/v1-contributing.md): development setup, focused checks, and
-  the issue and pull-request workflow.
-- [Specification](docs/v1-spec.md) and [acceptance checklist](docs/v1-acceptance.md):
-  the authoritative contract and verification scope.
-- [Reference qualification](docs/verification/2026-09-08-v1-respec-qualification.md)
-  and [waveform FFT evidence](docs/v1-waveform-fft.md): results and limitations.
-- [Migration](docs/v1-migration.md): historical execution at `v1.0.0`; old reports
-  remain readable through `harpy summarize` in text or Markdown.
+External recordings, live audio, VST, effects, a UI, and new-task PPO are outside
+v2. It is a controlled known-synth research toolkit, with engineering correctness
+and measured model performance reported separately.
 
 MIT licensed. See [LICENSE](LICENSE).

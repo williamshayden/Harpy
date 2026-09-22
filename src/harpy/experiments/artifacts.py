@@ -10,8 +10,8 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from harpy._provenance import FileRecord, _verify_file_record
 from harpy._serialization import canonical_json_bytes, decode_json_bytes
-from harpy.learning.artifacts import FileRecord, _verify_file_record
 
 ARTIFACT_SCHEMA_ID = "harpy-experiment-artifact-v1"
 METADATA_SCHEMA_ID = "harpy-experiment-training-v1"
@@ -64,7 +64,7 @@ class ExperimentManifest:
             if not isinstance(source["reason"], str) or not source["reason"]:
                 raise ValueError("unknown source must explain its missing provenance")
         else:
-            from harpy.learning.artifacts import _digest, _source_from_document
+            from harpy._provenance import _digest, _source_from_document
 
             _object(source, {"status", "identity", "package_sha256"}, "known source")
             _source_from_document(source["identity"])
@@ -211,7 +211,8 @@ def load_artifact(path: Path) -> LoadedExperimentArtifact:
 
 def import_pitch_artifact(source: Path, output: Path) -> LoadedExperimentArtifact:
     """Copy a validated historical pitch model without rewriting its training history."""
-    from harpy.learning.artifacts import _runtime_to_document, _source_to_document
+    from harpy._provenance import _source_to_document
+    from harpy.learning.artifacts import _runtime_to_document
     from harpy.learning.pitch_artifacts import load_pitch_artifact
 
     if not isinstance(source, Path) or not isinstance(output, Path):

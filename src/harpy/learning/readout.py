@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping, Sequence
 
-from harpy.learning.artifacts import decode_json_bytes
+from harpy._serialization import decode_json_bytes
 
 
 def summarize_report_bytes(content: bytes, *, format: str = "text") -> str:
@@ -25,7 +25,7 @@ def summarize_report_bytes(content: bytes, *, format: str = "text") -> str:
         comparison = comparison_from_bytes(content)
         document = comparison.to_document()
     elif "schema_version" in document:
-        from harpy.learning.workflows import evaluation_report_from_bytes
+        from harpy.learning.evaluation_reports import evaluation_report_from_bytes
 
         report = evaluation_report_from_bytes(content)
         document = report.to_document()

@@ -12,7 +12,7 @@ from harpy.cli import main
 
 
 def test_sound_matching_cli_round_trip(tmp_path: Path, capsys) -> None:
-    from harpy.tasks.sound_match.results import load_result
+    from harpy.tasks.sound_match.durable import read_bundle
 
     output = tmp_path / "sound"
     assert (
@@ -34,12 +34,12 @@ def test_sound_matching_cli_round_trip(tmp_path: Path, capsys) -> None:
         == 0
     )
     assert output.is_dir()
-    assert load_result(output)
+    assert read_bundle(output).complete
     for format in ("text", "markdown", "csv"):
         assert main(["summarize", str(output), "--format", format]) == 0
         assert "fixed" in capsys.readouterr().out
     assert main(["summarize", str(output), "--verify-replay"]) == 0
-    assert "Verified sound-matching audio" in capsys.readouterr().err
+    assert "Verified recorded synthesis" in capsys.readouterr().err
     assert (
         main(
             [

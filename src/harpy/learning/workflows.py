@@ -6,12 +6,12 @@ import hashlib
 import math
 import operator
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import gymnasium
 
+from harpy._serialization import canonical_json_bytes as canonical_json_bytes
 from harpy.envs.baselines import BaselineKind
 from harpy.envs.models import ObservationMode, PitchAction
 from harpy.learning.artifacts import (
@@ -22,7 +22,6 @@ from harpy.learning.artifacts import (
     LoadedArtifact,
     SourceStatus,
     _read_regular_file_bytes,
-    canonical_json_bytes,
     decode_json_bytes,
     load_artifact,
     read_training_summary,
@@ -38,7 +37,6 @@ from harpy.learning.errors import (
     PitchArtifactSetError,
 )
 from harpy.learning.evaluation import (
-    EVALUATION_SCHEMA_VERSION,
     SHUFFLED_SPECTRUM_PROBE,
     ZERO_SPECTRUM_PROBE,
     BCScientificCriterion,
@@ -52,17 +50,57 @@ from harpy.learning.evaluation import (
     evaluate_ppo_criterion,
     make_spectrum_probe_factory,
 )
+from harpy.learning.evaluation_reports import (
+    EvaluationReport as EvaluationReport,
+)
+from harpy.learning.evaluation_reports import (
+    _actor_row_blocks as _actor_row_blocks,
+)
+from harpy.learning.evaluation_reports import (
+    _base_iid_row as _base_iid_row,
+)
+from harpy.learning.evaluation_reports import (
+    _bc_criterion_document as _bc_criterion_document,
+)
+from harpy.learning.evaluation_reports import (
+    _bc_criterion_from_document as _bc_criterion_from_document,
+)
+from harpy.learning.evaluation_reports import (
+    _expected_row_lanes as _expected_row_lanes,
+)
+from harpy.learning.evaluation_reports import (
+    _ppo_criterion_document as _ppo_criterion_document,
+)
+from harpy.learning.evaluation_reports import (
+    _ppo_criterion_from_document as _ppo_criterion_from_document,
+)
+from harpy.learning.evaluation_reports import (
+    _row_documents as _row_documents,
+)
+from harpy.learning.evaluation_reports import (
+    _rows_from_documents as _rows_from_documents,
+)
+from harpy.learning.evaluation_reports import (
+    _validate_canonical_actor_order as _validate_canonical_actor_order,
+)
+from harpy.learning.evaluation_reports import (
+    _validate_complete_row_matrix as _validate_complete_row_matrix,
+)
+from harpy.learning.evaluation_reports import (
+    _validate_visible_criteria as _validate_visible_criteria,
+)
+from harpy.learning.evaluation_reports import (
+    _visible_actor_seeds as _visible_actor_seeds,
+)
+from harpy.learning.evaluation_reports import (
+    evaluation_report_bytes as evaluation_report_bytes,
+)
 from harpy.learning.models import (
-    ARCHITECTURE_SCHEMA_ID,
-    ENVIRONMENT_CONTRACT_ID,
     ENVIRONMENT_ID,
-    PREPROCESSING_SCHEMA_ID,
     PROFILE_CONFIGS,
-    SPECTRUM_GRID_ID,
     BCTrainingSummary,
     DeviceName,
     EvaluationSuiteId,
-    JSONValue,
     PPOTrainingSummary,
     ProfileName,
     TrainerKind,
@@ -153,197 +191,11 @@ def _enum[EnumT](enum_type: type[EnumT], value: object, field: str) -> EnumT:
         raise ValueError(f"{field} must be a valid {enum_type.__name__}") from error
 
 
-@dataclass(frozen=True, slots=True)
-class EvaluationReport:
-    """One deterministic compatible multi-artifact evaluation result."""
-
-    schema_version: int
-    profile: ProfileName
-    evaluation_device: DeviceName
-    environment_contract_id: str
-    spectrum_grid_id: str
-    preprocessing_schema_id: str
-    architecture_schema_id: str
-    rows: tuple[EvaluationRow, ...]
-    bc_criterion: BCScientificCriterion | None
-    ppo_criterion: PPOScientificCriterion | None
-
-    def __post_init__(self) -> None:
-        version = _integer(self.schema_version, "schema_version", minimum=1)
-        if version != EVALUATION_REPORT_SCHEMA_VERSION:
-            raise ValueError(f"schema_version must be {EVALUATION_REPORT_SCHEMA_VERSION}")
-        if not isinstance(self.profile, ProfileName):
-            raise ValueError("profile must be a ProfileName")
-        if not isinstance(self.evaluation_device, DeviceName):
-            raise ValueError("evaluation_device must be a DeviceName")
-        identities = (
-            (self.environment_contract_id, ENVIRONMENT_CONTRACT_ID, "environment_contract_id"),
-            (self.spectrum_grid_id, SPECTRUM_GRID_ID, "spectrum_grid_id"),
-            (self.preprocessing_schema_id, PREPROCESSING_SCHEMA_ID, "preprocessing_schema_id"),
-            (self.architecture_schema_id, ARCHITECTURE_SCHEMA_ID, "architecture_schema_id"),
-        )
-        for actual, expected, field in identities:
-            if actual != expected:
-                raise ValueError(f"{field} must be {expected!r}")
-        try:
-            rows = tuple(self.rows)
-        except TypeError as error:
-            raise ValueError("rows must contain EvaluationRow values") from error
-        if not rows or not all(isinstance(row, EvaluationRow) for row in rows):
-            raise ValueError("rows must contain EvaluationRow values")
-        allowed_suites = set(PROFILE_CONFIGS[self.profile].evaluation_suites)
-        if any(row.suite_id not in allowed_suites for row in rows):
-            raise ValueError("rows must use only the evaluation suites declared by the profile")
-        row_identities = tuple(
-            (
-                row.actor_id,
-                row.trainer,
-                row.seed,
-                row.environment_id,
-                row.observation_mode,
-                row.suite_id,
-                row.subset,
-                row.probe,
-            )
-            for row in rows
-        )
-        if len(set(row_identities)) != len(row_identities):
-            raise ValueError("rows must not contain duplicate identities")
-        _validate_canonical_actor_order(rows)
-        _validate_complete_row_matrix(rows, profile=self.profile)
-        has_bc = any(row.trainer is TrainerKind.BC for row in rows)
-        has_ppo = any(row.trainer is TrainerKind.PPO for row in rows)
-        if has_bc != (self.bc_criterion is not None):
-            raise ValueError("bc_criterion must be present exactly when BC rows are present")
-        if has_ppo != (self.ppo_criterion is not None):
-            raise ValueError("ppo_criterion must be present exactly when PPO rows are present")
-        if self.bc_criterion is not None and not isinstance(
-            self.bc_criterion, BCScientificCriterion
-        ):
-            raise ValueError("bc_criterion must be a BCScientificCriterion or None")
-        if self.ppo_criterion is not None and not isinstance(
-            self.ppo_criterion, PPOScientificCriterion
-        ):
-            raise ValueError("ppo_criterion must be a PPOScientificCriterion or None")
-        _validate_visible_criteria(
-            profile=self.profile,
-            device=self.evaluation_device,
-            rows=rows,
-            bc_criterion=self.bc_criterion,
-            ppo_criterion=self.ppo_criterion,
-        )
-        object.__setattr__(self, "schema_version", version)
-        object.__setattr__(self, "rows", rows)
-
-    def to_document(self) -> dict[str, JSONValue]:
-        """Return a freshly owned exact schema-v1 report document."""
-
-        return {
-            "schema_version": self.schema_version,
-            "profile": self.profile.value,
-            "evaluation_device": self.evaluation_device.value,
-            "environment_contract_id": self.environment_contract_id,
-            "spectrum_grid_id": self.spectrum_grid_id,
-            "preprocessing_schema_id": self.preprocessing_schema_id,
-            "architecture_schema_id": self.architecture_schema_id,
-            "rows": _row_documents(self.rows),
-            "bc_criterion": _bc_criterion_document(self.bc_criterion),
-            "ppo_criterion": _ppo_criterion_document(self.ppo_criterion),
-        }
-
-    @classmethod
-    def from_document(cls, document: Mapping[str, JSONValue]) -> EvaluationReport:
-        """Decode one exact finite report document through Task 5 row contracts."""
-
-        mapping = _mapping(document, "evaluation report")
-        _exact_fields(
-            mapping,
-            {
-                "schema_version",
-                "profile",
-                "evaluation_device",
-                "environment_contract_id",
-                "spectrum_grid_id",
-                "preprocessing_schema_id",
-                "architecture_schema_id",
-                "rows",
-                "bc_criterion",
-                "ppo_criterion",
-            },
-            "evaluation report",
-        )
-        row_values = mapping["rows"]
-        if not isinstance(row_values, list):
-            raise ValueError("rows must be a list")
-        return cls(
-            schema_version=_integer(mapping["schema_version"], "schema_version", minimum=1),
-            profile=_enum(ProfileName, mapping["profile"], "profile"),
-            evaluation_device=_enum(DeviceName, mapping["evaluation_device"], "evaluation_device"),
-            environment_contract_id=_string(
-                mapping["environment_contract_id"], "environment_contract_id"
-            ),
-            spectrum_grid_id=_string(mapping["spectrum_grid_id"], "spectrum_grid_id"),
-            preprocessing_schema_id=_string(
-                mapping["preprocessing_schema_id"], "preprocessing_schema_id"
-            ),
-            architecture_schema_id=_string(
-                mapping["architecture_schema_id"], "architecture_schema_id"
-            ),
-            rows=_rows_from_documents(row_values),
-            bc_criterion=_bc_criterion_from_document(mapping["bc_criterion"]),
-            ppo_criterion=_ppo_criterion_from_document(mapping["ppo_criterion"]),
-        )
-
-
-def evaluation_report_bytes(report: object) -> bytes:
-    """Schema-first encode one v1, v2, or E.1 evaluation report."""
-
-    if isinstance(report, EvaluationReport):
-        return canonical_json_bytes(report.to_document())
-    from harpy.learning.pitch_reports import PitchEvaluationReport
-
-    if isinstance(report, PitchEvaluationReport):
-        return canonical_json_bytes(report.to_document())
-    from harpy.learning.pitch_e1 import PitchE1EvaluationReport
-
-    if isinstance(report, PitchE1EvaluationReport):
-        return canonical_json_bytes(report.to_document())
-    from harpy.learning.experiment_results import ExploratoryPitchEvaluation, readout_bytes
-
-    if isinstance(report, ExploratoryPitchEvaluation):
-        return readout_bytes(report)
-    raise ValueError(
-        "report must be an EvaluationReport, PitchEvaluationReport, or PitchE1EvaluationReport"
-    )
-
-
 def evaluation_report_from_bytes(content: bytes) -> object:
-    """Strictly peek schema before dispatching to the frozen v1 or pitch codec."""
+    """Compatibility entrypoint retaining the historical strict-decoder hook."""
+    from harpy.learning.evaluation_reports import evaluation_report_from_bytes as decode
 
-    document = decode_json_bytes(content)
-    if document.get("schema_id") == "harpy-pitch-exploration-evaluation-v1":
-        from harpy.learning.experiment_results import readout_from_bytes
-
-        return readout_from_bytes(content)
-    schema_version = _integer(
-        document.get("schema_version"),
-        "schema_version",
-        minimum=1,
-    )
-    if schema_version == EVALUATION_REPORT_SCHEMA_VERSION:
-        return EvaluationReport.from_document(document)
-    if schema_version == PITCH_ARTIFACT_SCHEMA_VERSION:
-        from harpy.learning.pitch_reports import PitchEvaluationReport
-
-        return PitchEvaluationReport.from_document(document)
-    from harpy.learning.pitch_e1 import (
-        PITCH_E1_REPORT_SCHEMA_VERSION,
-        PitchE1EvaluationReport,
-    )
-
-    if schema_version == PITCH_E1_REPORT_SCHEMA_VERSION:
-        return PitchE1EvaluationReport.from_document(document)
-    raise ValueError(f"unsupported evaluation report schema_version {schema_version}")
+    return decode(content, decoder=decode_json_bytes)
 
 
 def evaluate_artifacts(
@@ -1708,28 +1560,6 @@ def _manifest_is_scientifically_eligible(
     )
 
 
-def _base_iid_row(
-    rows: Sequence[EvaluationRow],
-    *,
-    trainer: TrainerKind | None,
-    seed: int | None,
-    actor_id: str,
-) -> EvaluationRow:
-    matches = tuple(
-        row
-        for row in rows
-        if row.trainer is trainer
-        and row.seed == seed
-        and row.actor_id == actor_id
-        and row.suite_id is EvaluationSuiteId.IID
-        and row.subset == "combined"
-        and row.probe is None
-    )
-    if len(matches) != 1:
-        raise ValueError("report requires one canonical unperturbed combined IID row")
-    return matches[0]
-
-
 def _bc_heldout_accuracy(artifact: LoadedArtifact) -> float:
     evaluation = EvaluationFile.from_document(artifact.document("evaluation-iid.json"))
     if evaluation.next_action_accuracy is None:
@@ -1821,344 +1651,6 @@ def _evaluate_report_ppo_criterion(
         iid_rows=iid_rows,
         random_iid_row=random_row,
         eligible=True,
-    )
-
-
-def _validate_canonical_actor_order(rows: Sequence[EvaluationRow]) -> None:
-    group_identities: list[tuple[str, TrainerKind | None, int | None]] = []
-    for row in rows:
-        identity = row.actor_id, row.trainer, row.seed
-        if not group_identities or group_identities[-1] != identity:
-            if identity in group_identities:
-                raise ValueError("each actor must occupy one contiguous row block")
-            group_identities.append(identity)
-
-    def key(identity: tuple[str, TrainerKind | None, int | None]) -> tuple[int, int]:
-        actor_id, trainer, seed = identity
-        if trainer is TrainerKind.BC:
-            if seed is None:
-                raise ValueError("BC actor rows require a seed")
-            return 0, seed
-        if trainer is TrainerKind.PPO:
-            if seed is None:
-                raise ValueError("PPO actor rows require a seed")
-            return 1, seed
-        try:
-            return 2 + _BASELINE_POSITION[actor_id], 0
-        except KeyError as error:
-            raise ValueError("baseline rows must use a declared canonical actor") from error
-
-    keys = tuple(key(identity) for identity in group_identities)
-    if keys != tuple(sorted(keys)):
-        raise ValueError("rows must be ordered BC seeds, PPO seeds, then canonical baselines")
-
-
-def _actor_row_blocks(
-    rows: Sequence[EvaluationRow],
-) -> tuple[tuple[tuple[str, TrainerKind | None, int | None], tuple[EvaluationRow, ...]], ...]:
-    blocks: list[tuple[tuple[str, TrainerKind | None, int | None], tuple[EvaluationRow, ...]]] = []
-    start = 0
-    while start < len(rows):
-        identity = rows[start].actor_id, rows[start].trainer, rows[start].seed
-        end = start + 1
-        while end < len(rows):
-            candidate = rows[end].actor_id, rows[end].trainer, rows[end].seed
-            if candidate != identity:
-                break
-            end += 1
-        blocks.append((identity, tuple(rows[start:end])))
-        start = end
-    return tuple(blocks)
-
-
-def _expected_row_lanes(
-    profile: ProfileName,
-    *,
-    learned: bool,
-) -> tuple[tuple[EvaluationSuiteId, str, str | None], ...]:
-    lanes: list[tuple[EvaluationSuiteId, str, str | None]] = []
-    for suite_id in PROFILE_CONFIGS[profile].evaluation_suites:
-        if suite_id is EvaluationSuiteId.REGISTER_OOD:
-            lanes.extend((suite_id, subset, None) for subset in ("lower", "upper", "combined"))
-            continue
-        lanes.append((suite_id, "combined", None))
-        if learned:
-            lanes.extend(
-                (suite_id, "combined", probe)
-                for probe in (ZERO_SPECTRUM_PROBE, SHUFFLED_SPECTRUM_PROBE)
-            )
-    return tuple(lanes)
-
-
-def _validate_complete_row_matrix(
-    rows: Sequence[EvaluationRow],
-    *,
-    profile: ProfileName,
-) -> None:
-    blocks = _actor_row_blocks(rows)
-    learned_blocks = tuple(block for block in blocks if block[0][1] is not None)
-    if not learned_blocks:
-        raise ValueError("rows must contain at least one learned actor")
-    baseline_blocks = tuple(block for block in blocks if block[0][1] is None)
-    baseline_actor_ids = tuple(identity[0] for identity, _ in baseline_blocks)
-    expected_baselines = tuple(kind.value for kind in _BASELINE_ORDER)
-    if baseline_actor_ids != expected_baselines:
-        raise ValueError("rows must contain each canonical baseline exactly once")
-
-    learned_lanes = _expected_row_lanes(profile, learned=True)
-    baseline_lanes = _expected_row_lanes(profile, learned=False)
-    for (actor_id, trainer, seed), actor_rows in blocks:
-        if trainer is not None and actor_id != f"{trainer.value}-{seed}":
-            raise ValueError("learned actor_id must match its trainer and seed")
-        actual_lanes = tuple((row.suite_id, row.subset, row.probe) for row in actor_rows)
-        expected_lanes = learned_lanes if trainer is not None else baseline_lanes
-        if actual_lanes != expected_lanes:
-            raise ValueError(f"actor {actor_id!r} must contain its exact profile row matrix")
-
-
-def _visible_actor_seeds(
-    rows: Sequence[EvaluationRow],
-    trainer: TrainerKind,
-) -> tuple[int, ...]:
-    return tuple(
-        seed
-        for (_, candidate, seed), _ in _actor_row_blocks(rows)
-        if candidate is trainer and seed is not None
-    )
-
-
-def _validate_visible_criteria(
-    *,
-    profile: ProfileName,
-    device: DeviceName,
-    rows: Sequence[EvaluationRow],
-    bc_criterion: BCScientificCriterion | None,
-    ppo_criterion: PPOScientificCriterion | None,
-) -> None:
-    if bc_criterion is not None and bc_criterion.eligible:
-        if profile is not ProfileName.CHECKPOINT or device is not DeviceName.CPU:
-            raise ValueError("eligible BC criteria require checkpoint CPU evaluation")
-        if _visible_actor_seeds(rows, TrainerKind.BC) != (0,):
-            raise ValueError("eligible BC criteria require exactly BC seed 0")
-        heldout_accuracy = bc_criterion.heldout_next_action_accuracy
-        if heldout_accuracy is None:
-            raise ValueError("eligible BC criteria require held-out accuracy")
-        expected_bc = evaluate_bc_criterion(
-            heldout_next_action_accuracy=heldout_accuracy,
-            iid_row=_base_iid_row(
-                rows,
-                trainer=TrainerKind.BC,
-                seed=0,
-                actor_id="bc-0",
-            ),
-            eligible=True,
-        )
-        if bc_criterion != expected_bc:
-            raise ValueError("bc_criterion must match the retained IID evaluation row")
-
-    if ppo_criterion is not None and ppo_criterion.eligible:
-        if profile is not ProfileName.CHECKPOINT or device is not DeviceName.CPU:
-            raise ValueError("eligible PPO criteria require checkpoint CPU evaluation")
-        ppo_seeds = _visible_actor_seeds(rows, TrainerKind.PPO)
-        if ppo_seeds != tuple(range(5)):
-            raise ValueError("eligible PPO criteria require exactly PPO seeds 0..4")
-        bc_seeds = _visible_actor_seeds(rows, TrainerKind.BC)
-        if bc_seeds not in ((), (0,)) or (
-            bc_seeds == (0,) and (bc_criterion is None or not bc_criterion.eligible)
-        ):
-            raise ValueError("eligible PPO criteria allow only an eligible BC seed 0")
-        expected_ppo = evaluate_ppo_criterion(
-            iid_rows=tuple(
-                _base_iid_row(
-                    rows,
-                    trainer=TrainerKind.PPO,
-                    seed=seed,
-                    actor_id=f"ppo-{seed}",
-                )
-                for seed in range(5)
-            ),
-            random_iid_row=_base_iid_row(
-                rows,
-                trainer=None,
-                seed=None,
-                actor_id=BaselineKind.RANDOM.value,
-            ),
-            eligible=True,
-        )
-        if ppo_criterion != expected_ppo:
-            raise ValueError("ppo_criterion must match the retained paired IID rows")
-
-
-def _row_documents(rows: Sequence[EvaluationRow]) -> list[JSONValue]:
-    documents: list[JSONValue] = []
-    index = 0
-    while index < len(rows):
-        row = rows[index]
-        if row.suite_id is EvaluationSuiteId.REGISTER_OOD:
-            group = tuple(rows[index : index + 3])
-            if len(group) != 3:
-                raise ValueError("register-OOD rows must form complete three-row groups")
-            index += 3
-        else:
-            group = (row,)
-            index += 1
-        evaluation = EvaluationFile(
-            schema_version=EVALUATION_SCHEMA_VERSION,
-            suite_id=row.suite_id,
-            suite_digest_sha256=row.suite_digest_sha256,
-            rows=group,
-            next_action_accuracy=None,
-        )
-        row_documents = evaluation.to_document()["rows"]
-        if not isinstance(row_documents, list):
-            raise RuntimeError("Task 5 evaluation codec returned a malformed row list")
-        documents.extend(row_documents)
-    return documents
-
-
-def _rows_from_documents(values: Sequence[object]) -> tuple[EvaluationRow, ...]:
-    rows: list[EvaluationRow] = []
-    index = 0
-    while index < len(values):
-        mapping = _mapping(values[index], "evaluation row")
-        suite_id = _enum(EvaluationSuiteId, mapping.get("suite_id"), "suite_id")
-        digest = _string(mapping.get("suite_digest_sha256"), "suite_digest_sha256")
-        if suite_id is EvaluationSuiteId.REGISTER_OOD:
-            group = list(values[index : index + 3])
-            if len(group) != 3:
-                raise ValueError("register-OOD rows must form complete three-row groups")
-            index += 3
-        else:
-            group = [values[index]]
-            index += 1
-        evaluation = EvaluationFile.from_document(
-            {
-                "schema_version": EVALUATION_SCHEMA_VERSION,
-                "suite_id": suite_id.value,
-                "suite_digest_sha256": digest,
-                "rows": group,  # type: ignore[dict-item]
-                "next_action_accuracy": None,
-            }
-        )
-        rows.extend(evaluation.rows)
-    return tuple(rows)
-
-
-def _bc_criterion_document(
-    criterion: BCScientificCriterion | None,
-) -> dict[str, JSONValue] | None:
-    if criterion is None:
-        return None
-    return {
-        "eligible": criterion.eligible,
-        "heldout_next_action_accuracy": criterion.heldout_next_action_accuracy,
-        "iid_submitted_success_rate": criterion.iid_submitted_success_rate,
-        "criterion_met": criterion.criterion_met,
-        "status": criterion.status,
-    }
-
-
-def _ppo_criterion_document(
-    criterion: PPOScientificCriterion | None,
-) -> dict[str, JSONValue] | None:
-    if criterion is None:
-        return None
-    return {
-        "eligible": criterion.eligible,
-        "median_iid_submitted_success_rate": criterion.median_iid_submitted_success_rate,
-        "seeds_strictly_beating_random": criterion.seeds_strictly_beating_random,
-        "criterion_met": criterion.criterion_met,
-        "status": criterion.status,
-    }
-
-
-def _bc_criterion_from_document(value: object) -> BCScientificCriterion | None:
-    if value is None:
-        return None
-    mapping = _mapping(value, "bc_criterion")
-    _exact_fields(
-        mapping,
-        {
-            "eligible",
-            "heldout_next_action_accuracy",
-            "iid_submitted_success_rate",
-            "criterion_met",
-            "status",
-        },
-        "bc_criterion",
-    )
-    return BCScientificCriterion(
-        eligible=_boolean(mapping["eligible"], "eligible"),
-        heldout_next_action_accuracy=(
-            None
-            if mapping["heldout_next_action_accuracy"] is None
-            else _document_float(
-                mapping["heldout_next_action_accuracy"],
-                "heldout_next_action_accuracy",
-                minimum=0.0,
-                maximum=1.0,
-            )
-        ),
-        iid_submitted_success_rate=(
-            None
-            if mapping["iid_submitted_success_rate"] is None
-            else _document_float(
-                mapping["iid_submitted_success_rate"],
-                "iid_submitted_success_rate",
-                minimum=0.0,
-                maximum=1.0,
-            )
-        ),
-        criterion_met=(
-            None
-            if mapping["criterion_met"] is None
-            else _boolean(mapping["criterion_met"], "criterion_met")
-        ),
-        status=_string(mapping["status"], "status"),
-    )
-
-
-def _ppo_criterion_from_document(value: object) -> PPOScientificCriterion | None:
-    if value is None:
-        return None
-    mapping = _mapping(value, "ppo_criterion")
-    _exact_fields(
-        mapping,
-        {
-            "eligible",
-            "median_iid_submitted_success_rate",
-            "seeds_strictly_beating_random",
-            "criterion_met",
-            "status",
-        },
-        "ppo_criterion",
-    )
-    return PPOScientificCriterion(
-        eligible=_boolean(mapping["eligible"], "eligible"),
-        median_iid_submitted_success_rate=(
-            None
-            if mapping["median_iid_submitted_success_rate"] is None
-            else _document_float(
-                mapping["median_iid_submitted_success_rate"],
-                "median_iid_submitted_success_rate",
-                minimum=0.0,
-                maximum=1.0,
-            )
-        ),
-        seeds_strictly_beating_random=(
-            None
-            if mapping["seeds_strictly_beating_random"] is None
-            else _integer(
-                mapping["seeds_strictly_beating_random"],
-                "seeds_strictly_beating_random",
-            )
-        ),
-        criterion_met=(
-            None
-            if mapping["criterion_met"] is None
-            else _boolean(mapping["criterion_met"], "criterion_met")
-        ),
-        status=_string(mapping["status"], "status"),
     )
 
 

@@ -387,7 +387,7 @@ def _validate_provenance(provenance: Mapping[str, object], actors: tuple[Mapping
     if "package_sha256" in source:
         _digest(source["package_sha256"])
     if "identity" in source:
-        from harpy.learning.artifacts import _source_from_document
+        from harpy._provenance import _source_from_document
 
         _source_from_document(source["identity"])
 

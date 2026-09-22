@@ -46,15 +46,24 @@ def _artifact_files(paths: tuple[Path, ...]) -> list[dict]:
 
 
 def _source() -> dict:
-    from harpy.learning.artifacts import (
+    from harpy._provenance import (
         _capture_package_source,
+        _capture_source_status,
         _source_to_document,
-        capture_source_status,
     )
 
     anchor = Path(__file__).resolve()
     return {
-        "identity": _source_to_document(capture_source_status(anchor)),
+        "identity": _source_to_document(
+            _capture_source_status(
+                anchor,
+                required_inputs=(
+                    "src/harpy/learning/models.py",
+                    "src/harpy/learning/suites.py",
+                    "uv.lock",
+                ),
+            )
+        ),
         "package_sha256": _capture_package_source(anchor).package_sha256,
     }
 
@@ -88,6 +97,94 @@ def _decision(actor: object, observation: Mapping[str, object]) -> Decision:
     if not isinstance(action, PitchAction):
         raise ValueError("act must return a PitchAction")
     return Decision(action)
+
+
+def _run_member(episode, spec, condition, cache, trace=False) -> EpisodeRecord:
+    """One ordinary rollout shared by the legacy and durable evaluation paths."""
+    actor = spec.factory()
+    env = None
+    cancelled = False
+    try:
+        env = make_robustness_env(
+            condition,
+            nuisance_seed=episode.nuisance_seed,
+            observation_mode=spec.observation_mode,
+            cache=cache,
+        )
+        observation, _ = env.reset(
+            seed=episode.nuisance_seed,
+            options={
+                "source_pitch_cents": episode.source_pitch_cents,
+                "target_note_index": episode.target_note_index,
+            },
+        )
+        initial_evidence = env.evidence_metadata
+        actions, counts, estimates, steps = [], [], [], []
+        while True:
+            snapshot = owned_observation(observation, spec.observation_mode)
+            evidence = env.evidence_metadata if trace else None
+            controls = [int(value) for value in snapshot["controls"]]
+            decision = _decision(actor, snapshot)
+            observation, reward, terminated, truncated, info = env.step(decision.action)
+            actions.append(decision.action)
+            counts.append(decision.inference_count)
+            if decision.estimated_candidate_cents is not None:
+                estimates.append(
+                    {
+                        "step": len(actions),
+                        "estimated_candidate_cents": decision.estimated_candidate_cents,
+                    }
+                )
+            if trace:
+                steps.append(
+                    {
+                        "step": len(actions),
+                        "action": int(decision.action),
+                        "controls": controls,
+                        "reward": float(reward),
+                        "inference_count": decision.inference_count,
+                        "estimated_candidate_cents": decision.estimated_candidate_cents,
+                        "evidence": evidence,
+                    }
+                )
+            if terminated or truncated:
+                terminal = env.unwrapped.episode_result
+                if not isinstance(terminal, EpisodeResult) or terminal.actions != tuple(actions):
+                    raise RuntimeError("environment terminal result must match the action trace")
+                break
+            feedback = getattr(actor, "feedback", None)
+            if spec.observation_mode is ObservationMode.REWARD_ONLY and callable(feedback):
+                feedback(float(reward), {"action_applied": bool(info["action_applied"])})
+        return EpisodeRecord(
+            spec.name,
+            condition.id,
+            episode.id,
+            terminal,
+            tuple(counts),
+            tuple(estimates),
+            initial_evidence,
+            tuple(steps) if trace else None,
+        )
+    except BaseException:
+        cancelled = True
+        raise
+    finally:
+        cleanup_failed = cancelled
+        try:
+            if env is not None:
+                env.close()
+        except BaseException:
+            cleanup_failed = True
+            if not cancelled:
+                raise
+        finally:
+            close = getattr(actor, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    if not cleanup_failed:
+                        raise
 
 
 def evaluate(
@@ -135,80 +232,7 @@ def evaluate(
     for condition in conditions:
         for episode in episodes:
             for spec in actors:
-                actor = spec.factory()
-                env = make_robustness_env(
-                    condition,
-                    nuisance_seed=episode.nuisance_seed,
-                    observation_mode=spec.observation_mode,
-                    cache=cache,
-                )
-                try:
-                    observation, _ = env.reset(
-                        seed=episode.nuisance_seed,
-                        options={
-                            "source_pitch_cents": episode.source_pitch_cents,
-                            "target_note_index": episode.target_note_index,
-                        },
-                    )
-                    initial_evidence = env.evidence_metadata
-                    actions, counts, estimates, steps = [], [], [], []
-                    while True:
-                        snapshot = owned_observation(observation, spec.observation_mode)
-                        evidence = env.evidence_metadata if trace else None
-                        controls = [int(value) for value in snapshot["controls"]]
-                        decision = _decision(actor, snapshot)
-                        observation, reward, terminated, truncated, info = env.step(decision.action)
-                        actions.append(decision.action)
-                        counts.append(decision.inference_count)
-                        if decision.estimated_candidate_cents is not None:
-                            estimates.append(
-                                {
-                                    "step": len(actions),
-                                    "estimated_candidate_cents": decision.estimated_candidate_cents,
-                                }
-                            )
-                        if trace:
-                            steps.append(
-                                {
-                                    "step": len(actions),
-                                    "action": int(decision.action),
-                                    "controls": controls,
-                                    "reward": float(reward),
-                                    "inference_count": decision.inference_count,
-                                    "estimated_candidate_cents": decision.estimated_candidate_cents,
-                                    "evidence": evidence,
-                                }
-                            )
-                        if terminated or truncated:
-                            terminal = env.unwrapped.episode_result
-                            if not isinstance(terminal, EpisodeResult) or terminal.actions != tuple(
-                                actions
-                            ):
-                                raise RuntimeError(
-                                    "environment terminal result must match the action trace"
-                                )
-                            break
-                        feedback = getattr(actor, "feedback", None)
-                        if spec.observation_mode is ObservationMode.REWARD_ONLY and callable(
-                            feedback
-                        ):
-                            feedback(
-                                float(reward), {"action_applied": bool(info["action_applied"])}
-                            )
-                    records.append(
-                        EpisodeRecord(
-                            spec.name,
-                            condition.id,
-                            episode.id,
-                            terminal,
-                            tuple(counts),
-                            tuple(estimates),
-                            initial_evidence,
-                            tuple(steps) if trace else None,
-                        )
-                    )
-                finally:
-                    env.close()
+                records.append(_run_member(episode, spec, condition, cache, trace))
     for spec, document in zip(actors, actor_documents, strict=True):
         if spec._verify_artifact is not None:
             spec._verify_artifact()

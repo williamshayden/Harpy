@@ -1,0 +1,99 @@
+{
+  "models": [
+    {
+      "artifact": "outputs/v2-m3-reference-20260922/seed0",
+      "elapsed_training_seconds": 252.6119806719944,
+      "manifest_sha256": "7726c28080cee83b5752a689726241a09b2ff48f86217f6b0e5839b03dab279c",
+      "parameter_count": 192707,
+      "seed": 0,
+      "selected_epoch": 6,
+      "selected_validation_macro_distance": 1.1513270002796647,
+      "task": "sound-match-v1",
+      "tensor_state_sha256": "4d4e34e0484ca84ed500358ee2f2f950529ce52c7957fc49546714db73c43084",
+      "training_process_peak_rss_mib": 414.63671875
+    },
+    {
+      "artifact": "outputs/v2-m3-reference-20260922/seed1",
+      "elapsed_training_seconds": 178.44326708299923,
+      "manifest_sha256": "943ef8a50c9ac2c9b755ee84b61a2626a7e72868d6d9f83d3abb57a248368bd2",
+      "parameter_count": 192707,
+      "seed": 1,
+      "selected_epoch": 4,
+      "selected_validation_macro_distance": 1.204496887883895,
+      "task": "sound-match-v1",
+      "tensor_state_sha256": "dc6067d35086e08e5cd368abbcf64ac13d4403d0072f97461099d7563e735a6b",
+      "training_process_peak_rss_mib": 422.58203125
+    },
+    {
+      "artifact": "outputs/v2-m3-reference-20260922/seed2",
+      "elapsed_training_seconds": 164.41082330199424,
+      "manifest_sha256": "486b0665be07ce8a43e3d3b3fd44780eb6a491361b9244640342bf5f39f913a6",
+      "parameter_count": 192707,
+      "seed": 2,
+      "selected_epoch": 6,
+      "selected_validation_macro_distance": 1.1859552528772237,
+      "task": "sound-match-v1",
+      "tensor_state_sha256": "310654491e1981b10a8a35be43dd0f805bf9717776d1a4b63049018c017ff9c0",
+      "training_process_peak_rss_mib": 428.2421875
+    },
+    {
+      "artifact": "outputs/v1-portable-qualification-20260922/models/pitch-0",
+      "fingerprint": {
+        "manifest_sha256": "a3ad2169fd0e84151a1e4810f6f55a0b5ad05f84361b508947c50be4bcd270e0",
+        "payload_sha256": {
+          "metadata.json": "3cf9715960ce75a77f826368927e1babe053858df70f6b540186c7b048db4065",
+          "model.pt": "3372304c022b0f13f837c79511a92f25fa7b0cd34217be976608fe46be7c6ac2"
+        }
+      },
+      "manifest_sha256": "a3ad2169fd0e84151a1e4810f6f55a0b5ad05f84361b508947c50be4bcd270e0",
+      "parameter_count": 2497,
+      "seed": 0,
+      "task": "legacy-pitch",
+      "tensor_state_sha256": "916dc0f64706eba9968183ad80dbde99412c66efed6bb8de23bfb612c8bbc168"
+    },
+    {
+      "artifact": "outputs/v1-portable-qualification-20260922/models/pitch-1",
+      "fingerprint": {
+        "manifest_sha256": "a00e6fcda7c6b8b44ef6adeaa1d1ae65fc8ac776f7587f8a834e6a45b8042e65",
+        "payload_sha256": {
+          "metadata.json": "6e1abaf600bf660ac0f7d2a83026cdc3e455249985c293f7b81b0f6e69d2cb22",
+          "model.pt": "703bdaaae6aed66b2553c6a6f854cbfd66e601f86935ffd373abde6c7561c120"
+        }
+      },
+      "manifest_sha256": "a00e6fcda7c6b8b44ef6adeaa1d1ae65fc8ac776f7587f8a834e6a45b8042e65",
+      "parameter_count": 2497,
+      "seed": 1,
+      "task": "legacy-pitch",
+      "tensor_state_sha256": "fef2ba883401dbb4a4925968c19e09dc696c08a9b9771aa5d1f33a98bcd4ffd8"
+    },
+    {
+      "artifact": "outputs/v1-portable-qualification-20260922/models/pitch-2",
+      "fingerprint": {
+        "manifest_sha256": "b9d8687b528261264cf98aecd992604a1bd8f22d4fb9261beb26b230039d747a",
+        "payload_sha256": {
+          "metadata.json": "aa1d72d44eab2b55442d507da31c43f07a71e0d41367b85a7e9e2e2d0c9c7b37",
+          "model.pt": "2b0ace3c7ab2e09f2c9e211914f9a877b46adc7b6bf4255328cb31fa3e54bd63"
+        }
+      },
+      "manifest_sha256": "b9d8687b528261264cf98aecd992604a1bd8f22d4fb9261beb26b230039d747a",
+      "parameter_count": 2497,
+      "seed": 2,
+      "task": "legacy-pitch",
+      "tensor_state_sha256": "757f90942c4ce5162e9ec3fb33368e149d324ccc5f29b533de7577082c2662b9"
+    }
+  ],
+  "retrained": false,
+  "runtime": {
+    "device": "cpu",
+    "python": "3.12.3",
+    "torch": "2.13.0+cpu",
+    "torch_threads": 1
+  },
+  "schema_id": "harpy.research-model-reload/1",
+  "training_hardware": {
+    "active_torch_threads": 1,
+    "cpu": "Intel Core Ultra 7 155H",
+    "environment": "WSL Ubuntu on Windows",
+    "logical_cpus_visible_in_wsl": 22
+  }
+}

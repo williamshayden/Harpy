@@ -1,6 +1,6 @@
 [project]
 name = "harpy-audio"
-version = "2.0.0.dev0"
+version = "2.0.0"
 description = "A constrained audio-control benchmark and learning toolkit"
 readme = "README.md"
 license = "MIT"
@@ -16,6 +16,9 @@ Repository = "https://github.com/williamshayden/Harpy"
 Issues = "https://github.com/williamshayden/Harpy/issues"
 
 [project.optional-dependencies]
+learn = [
+  "torch>=2.8,<3",
+]
 pitch = [
   "torch>=2.8,<3",
 ]
@@ -44,6 +47,8 @@ include = [
   "/docs/verification/2026-09-08-v1-respec-qualification.md",
   "/docs/verification/v1-respec/**",
   "/examples/**",
+  "/research/sound_matching/**",
+  "/uv.lock",
   "/README.md",
   "/CHANGELOG.md",
   "/LICENSE*",

@@ -1,0 +1,100 @@
+{
+  "cache_policy": {
+    "analysis_max_array_bytes": 20971520,
+    "analysis_max_entries": 2,
+    "cached_analysis_arrays": "owned and read-only; raw magnitudes, log magnitudes, envelope",
+    "caller_input_arrays_retained": false,
+    "candidate_evaluations_waived": false,
+    "content_key": "SHA256 of validated owned float64 audio snapshots",
+    "lock": "process-local RLock covering cached analysis and scoring",
+    "returned_scores": "deep copies of nested score documents",
+    "score_max_entries": 128
+  },
+  "code": [
+    {
+      "path": "src/harpy/tasks/sound_match/objective.py",
+      "sha256": "4c79605661b52e9772118dbe435567ff66fb83a58669e62fcaf5a0aaf5a61364",
+      "size_bytes": 8158
+    },
+    {
+      "path": "tests/tasks/test_sound_match_objective_cache.py",
+      "sha256": "c483bb9ecd86511c3bd238d2ef6e871494d3950badcf90b8adae449c6b0cf482",
+      "size_bytes": 9449
+    },
+    {
+      "path": "tests/tasks/fixtures/sound_match_objective_v1_reference.py",
+      "sha256": "ca8a448dbc8f583bef686fa77c99cefee079ade92e0b718a02a9fda03f3877f7",
+      "size_bytes": 3880
+    },
+    {
+      "path": "tests/tasks/fixtures/sound_match_objective_pilot_pairs.json",
+      "sha256": "5f8ee60aa9e2e77974c74304b6378316672726c77cda273e2f2d1766f2780649",
+      "size_bytes": 49683
+    }
+  ],
+  "comparisons": [
+    {
+      "actor": "pattern-search",
+      "cached_magnitude_calls": 96,
+      "cached_peak_rss_mib_so_far": 75.37890625,
+      "cached_seconds": 1.6390302250074456,
+      "candidate_dsp_renders": 31,
+      "candidate_evaluations": 32,
+      "candidate_waveform_cache_hits": 1,
+      "model_calls": 0,
+      "original_magnitude_calls": 384,
+      "original_peak_rss_mib_so_far": 64.60546875,
+      "original_seconds": 2.8421616419946076,
+      "retained_analysis_array_bytes": 18499488,
+      "scientific_record_exactly_equal": true,
+      "score_cache_hits": 33,
+      "score_calls": 64,
+      "score_computations": 31,
+      "wall_time_reduction_percent": 42.33156197769292
+    },
+    {
+      "actor": "random-search",
+      "cached_magnitude_calls": 96,
+      "cached_peak_rss_mib_so_far": 79.15625,
+      "cached_seconds": 1.2407755919994088,
+      "candidate_dsp_renders": 31,
+      "candidate_evaluations": 32,
+      "candidate_waveform_cache_hits": 1,
+      "model_calls": 0,
+      "original_magnitude_calls": 384,
+      "original_peak_rss_mib_so_far": 68.9375,
+      "original_seconds": 2.790985883999383,
+      "retained_analysis_array_bytes": 18499488,
+      "scientific_record_exactly_equal": true,
+      "score_cache_hits": 33,
+      "score_calls": 64,
+      "score_computations": 31,
+      "wall_time_reduction_percent": 55.543465873018974
+    }
+  ],
+  "episode_id": "e_e12a1d786058bbc29bc23ea9",
+  "objective_id_preserved": "harpy-multires-spectral-v1",
+  "profiling_scope_note": "One calibration single-note reconstruction; timings are bounded fixture measurements, not broad workload estimates. Peak RSS is cumulative within each implementation process. No final-test targets were used.",
+  "schema_id": "harpy.sound-match.objective-cache-verification/1",
+  "scope": "first calibration single-note reconstruction; cold scoring caches each actor; fresh process per implementation",
+  "source_reports": [
+    {
+      "path": "outputs/v2-objective-profile-original-20260922/summary.json",
+      "sha256": "e11fccf1ed00d696fb8fb2133c304d4a141b13439e829d28d7b89cc65c0abf71"
+    },
+    {
+      "path": "outputs/v2-objective-profile-cached-20260922/summary.json",
+      "sha256": "90bf64bdd00e95a6527b8b9927842281735ef31f8c938e24f322f384f08ca657"
+    }
+  ],
+  "test_command": "PYTHONPATH=src python -m pytest tests/tasks/test_sound_match_objective.py tests/tasks/test_sound_match_objective_cache.py -q",
+  "test_evidence": {
+    "calibration_fixtures": 14,
+    "objective_tests_passed": 16,
+    "pytest_seconds": 13.58,
+    "recorded_pilot_pairs": 32,
+    "reference_source_sha256": "ca8a448dbc8f583bef686fa77c99cefee079ade92e0b718a02a9fda03f3877f7"
+  },
+  "total_cached_seconds": 2.8798058170068543,
+  "total_original_seconds": 5.633147525993991
+}

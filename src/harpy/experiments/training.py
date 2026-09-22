@@ -10,6 +10,8 @@ from pathlib import Path
 import gymnasium
 import numpy as np
 
+from harpy._provenance import FileRecord
+from harpy._serialization import canonical_json_bytes
 from harpy.experiments.artifacts import (
     METADATA_SCHEMA_ID,
     ExperimentManifest,
@@ -18,7 +20,6 @@ from harpy.experiments.artifacts import (
     load_artifact,
     validate_training_request,
 )
-from harpy.learning.artifacts import FileRecord, canonical_json_bytes
 from harpy.learning.cache import SpectrumEvidenceCache
 from harpy.learning.models import EpisodeSpec, ProfileName
 from harpy.learning.pitch_data import PITCH_SPLIT_DIGEST_SHA256, pitch_coordinate_split
@@ -43,17 +44,26 @@ def ppo_training_episode(*, seed: int, index: int) -> EpisodeSpec:
 
 
 def _source() -> dict:
-    from harpy.learning.artifacts import (
+    from harpy._provenance import (
         _capture_package_source,
+        _capture_source_status,
         _source_to_document,
-        capture_source_status,
     )
 
     try:
         anchor = Path(__file__).resolve()
         return {
             "status": "known",
-            "identity": _source_to_document(capture_source_status(anchor)),
+            "identity": _source_to_document(
+                _capture_source_status(
+                    anchor,
+                    required_inputs=(
+                        "src/harpy/learning/models.py",
+                        "src/harpy/learning/suites.py",
+                        "uv.lock",
+                    ),
+                )
+            ),
             "package_sha256": _capture_package_source(anchor).package_sha256,
         }
     except (OSError, ValueError) as error:
