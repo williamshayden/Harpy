@@ -39,12 +39,18 @@ archive-manifest.json             every contained payload's size and SHA-256
 study/plan.json                   evaluator, driver, runtime and model freeze
 study/report.json                 strict all-split metrics and validation gate
 study/listening-index.json        declared representative/worst listening pairs
+study/resource-receipts.json      portable timing/memory measurements and raw-log hashes
+study/scheduling-receipt.json     observed evaluation-worker overlap and timestamp bounds
+study/scheduling-observations.json original portable memory/worker observations
 study/{validation,iid-test,compositional-test}/
   manifest.json                  exact episode and actor membership
   attempts.jsonl, records.jsonl, commits.jsonl, complete.json
   artifacts/                     content-addressed WAVs and submitted patches
 models/{seed0,seed1,seed2}/        every selected inverse model and its provenance
 evaluator/                       exact evaluation source, driver and dependency lock
+qualification/                   exact expanded final source distribution, with final docs
+verification/resource_receipts.py portable resource collector used during archive verification
+verification/scheduling.py        scheduling receipt builder and validator
 attachments/                     separate training, M2 and v1 evidence archives
 ```
 
@@ -55,6 +61,21 @@ different purposes. Verify the compressed file first:
 ```bash
 sha256sum -c COMPLETE_ARCHIVE.tar.gz.sha256
 ```
+
+The archive guide links into the final distribution's `qualification/docs` tree.
+The `evaluator` tree preserves the earlier evaluation freeze, including its dated
+documentation. The archive inventory binds the complete expanded qualification
+tree to the attached final source distribution; file bytes and relative links
+are preserved. Only this top-level guide's documentation links are relocated.
+
+The separate `v2-installed-release-proof-20260922.tar.gz` companion retains the
+final wheel and source-distribution installation checks, including complete
+installed-reader study and paired-report comparisons with no field exclusions.
+The release index and checksums beside the archives bind this companion, the
+scientific archive and both final distributions. The scientific archive retains
+the earlier candidate installation evidence and verifies that its final package
+Python and dataset bytes match the frozen evaluator; the companion records the
+additional independent verification of the final distribution files.
 
 Verify extracted files from the archive root without importing ML libraries:
 
@@ -91,6 +112,42 @@ seeds, numerical runtime identities, target hashes, every committed record and
 the equal-eight-cell all-seed criterion. Report reading does not re-run inference.
 The frozen evaluator path is intentional: it keeps report semantics tied to the
 archived source. A newer installed reader can be checked separately.
+
+The attached `verified-prefix-v2.jsonl` and its receipt preserve 120 strictly
+exported records from the superseded preflight before objective caching. Its r2 evaluator source
+archive and `prefix-equivalence.json` support replaying the scientific-record
+comparison with `qualification/research/sound_matching/compare_prefix.py`.
+Only recorded elapsed time is excluded from that comparison; the final study
+uses the separate r3 evaluator snapshot.
+
+`attachments/paired-differences.json` retains episode-matched actor differences
+for every split, cohort and cell, including pair-eligibility denominators. Its
+source digest identifies `attachments/paired_differences.py`. Negative deltas
+mean lower submitted distance for the named actor than its comparator; they are
+not perceptual success rates or significance claims. Recompute with:
+
+```bash
+PYTHONPATH=evaluator/source python attachments/paired_differences.py \
+  --study study --output recomputed-paired-differences.json
+```
+
+Archive preparation recomputes every resource-receipt value and raw-log hash,
+checks successful split completion against the frozen plan and bundle identity,
+and retains the collector's source and digest. Resource receipts omit raw command
+lines while binding original local time and progress logs by hash. The original
+logs remain local, so the portable archive supports checking the exported values
+and their identities, not independently re-measuring historical process usage.
+Driver wall time includes startup, 192 target-hash
+preflight renders per invocation, evaluation, persistence and strict completion
+checks. Those preflight renders are outside the bundle's DSP counters, so bundle
+counts are not whole-process render totals.
+IID and compositional evaluation workers overlapped after additional host memory
+became available. Scheduling evidence distinguishes observed process starts,
+live worker snapshots and completion-report write times; it reports bounded
+overlap rather than exact process lifetimes. These are operational measurements
+on a shared host, with one CPU thread per evaluation worker, rather than isolated
+performance benchmarks. Concurrency counts exclude other host applications and
+the later report readers.
 
 ## Re-run the frozen actors
 
@@ -144,6 +201,18 @@ assert audio.shape == (96000,)  # Two seconds, mono float32 at 48 kHz.
 Play retained target and submitted WAVs at the same playback gain. Index generation and numerical
 inspection are not a claim that a human listened; listening status remains
 explicit in the evidence.
+
+The attachments include four 9.75-second validation review reels for
+`inverse-refine-0`: chord reconstruction, chord shaping, single-note reconstruction
+and single-note shaping. Each plays the lower-median target/candidate pair,
+then the largest-distance target/candidate pair. Original audio payloads and gain
+are unchanged; only silence separates segments. The portable
+`validation-review-reels-manifest.json` binds each segment to its source under
+`study/`, and `validation-review-reels-numerical-review.json` records waveform
+checks. The attached `validation-listening-index-bound.json` is the strict,
+88-pair validation-only input used by `prepare-listening-reels.py`; the full
+study index contains 264 pairs. These prepared reels have not yet received a
+human listening review.
 
 Archive construction streams file contents and compressed verification in
 bounded chunks. The small file inventory scales with file count; waveform

@@ -1,0 +1,210 @@
+{
+  "acceptance_status": "implementation-and-automated-qualification-complete; actual-listening-review-open",
+  "archive_verification": {
+    "installed_proof": {
+      "all_compressed_members_verified": true,
+      "all_report_references_preserved": true,
+      "archive": "v2-installed-release-proof-20260922.tar.gz",
+      "distributions": {
+        "harpy_audio-2.0.0-py3-none-any.whl": "36827878bfbf72498dbd611e3c5e31efe41ee8cee576fd2773d50e93866ac117",
+        "harpy_audio-2.0.0.tar.gz": "5ab00a5fd9d758d7ddc24a080721206713805f6c92243dc430e0b2ad6679591b"
+      },
+      "files": 18,
+      "machine_local_logs_included": false,
+      "schema_id": "harpy.final-installed-proof-verification/1",
+      "sha256": "0b81db9c2d27df3e0d6b7c088ecdce0366138235625fc31bf78c40ab00ba8788",
+      "size_bytes": 186682
+    },
+    "scientific": {
+      "actor_episodes": 6336,
+      "all_compressed_members_verified": true,
+      "archive": "v2-complete-study-20260922.tar.gz",
+      "files": 11210,
+      "publication_status": "local-prepared-not-published",
+      "schema_id": "harpy.sound-match.archive-verification/1",
+      "sha256": "24c67ce43e4f1c9b434cc1849381df9f2243edc7c18226df937e25c54569647d",
+      "size_bytes": 1435262292
+    }
+  },
+  "artifacts": [
+    {
+      "path": "v2-complete-study-20260922.tar.gz",
+      "role": "scientific-study-archive",
+      "sha256": "24c67ce43e4f1c9b434cc1849381df9f2243edc7c18226df937e25c54569647d",
+      "size_bytes": 1435262292
+    },
+    {
+      "path": "v2-installed-release-proof-20260922.tar.gz",
+      "role": "installed-package-proof",
+      "sha256": "0b81db9c2d27df3e0d6b7c088ecdce0366138235625fc31bf78c40ab00ba8788",
+      "size_bytes": 186682
+    },
+    {
+      "path": "v2-release-20260922/harpy_audio-2.0.0-py3-none-any.whl",
+      "role": "wheel",
+      "sha256": "36827878bfbf72498dbd611e3c5e31efe41ee8cee576fd2773d50e93866ac117",
+      "size_bytes": 740659
+    },
+    {
+      "path": "v2-release-20260922/harpy_audio-2.0.0.tar.gz",
+      "role": "source-distribution",
+      "sha256": "5ab00a5fd9d758d7ddc24a080721206713805f6c92243dc430e0b2ad6679591b",
+      "size_bytes": 2137447
+    },
+    {
+      "path": "v2-complete-study-20260922.verification.json",
+      "role": "scientific-archive-verification",
+      "sha256": "388ae79683a63a48af92f4c20545cf99886aef9fbdb67d084779356fca81a8a5",
+      "size_bytes": 330
+    },
+    {
+      "path": "v2-installed-release-proof-20260922.tar.gz.verification.json",
+      "role": "installed-proof-verification",
+      "sha256": "5d74ac851e4ab11c3019231db8c61ae5f5035476ad4058e18326f55aeb1639ea",
+      "size_bytes": 551
+    },
+    {
+      "path": "v2-validation-listening-review-20260922/all-cohorts-review.wav",
+      "role": "combined-listening-review",
+      "sha256": "170164a8141f0600ad2eb26f942d7367744deadfb59bf3fabfb640372efa919f",
+      "size_bytes": 7920056
+    },
+    {
+      "path": "v2-validation-listening-review-20260922/all-cohorts-review.json",
+      "role": "combined-listening-review-manifest",
+      "sha256": "15835a5addc47f94ea09d1170602f2298c2f1f3e79ffeca22363691956c6691b",
+      "size_bytes": 1765
+    }
+  ],
+  "binding_scope": "Post-build index external to the bound distributions and archives; artifact paths relative to the local outputs directory.",
+  "branch": "william/v2-build",
+  "created_at_utc": "2026-09-22T21:36:14.085009+00:00",
+  "engineering": {
+    "base_optional_deselections": 2,
+    "base_optional_skips": 5,
+    "base_tests_passed": 10855,
+    "derived_evidence_tests_passed": 73,
+    "final_packaged_fft_tests_passed": 53,
+    "optional_cpu_tests_passed": 335,
+    "post_cache_optional_module_skips": 1,
+    "post_cache_sound_tests_passed": 198,
+    "receipt_sha256": "99d1a5095b7f87a4e83f9ffa7d89df69af8f0900483d4d3f5e50d5ae45525159"
+  },
+  "final_installed_verification": {
+    "all_report_fields_compared": true,
+    "base_optional_model_packages_installed": false,
+    "cli_validation_readout": {
+      "exact_csv_equal": true,
+      "records": 2112,
+      "sha256": "754aa03968fb57f7e09e6d865109a4bceffb42916adcb44b51944918d851e8e5"
+    },
+    "completed_receipt_sha256": "90c2cefb041bbc432bd73f362a240c703af53231267f4a7ba412b4e02195c6f0",
+    "excluded_report_fields": [],
+    "full_study_report": {
+      "all_fields_equal": true,
+      "canonical_sha256": "a4b69dd403de97afe4d8a8738d6d075b97641d7a64cb0ed81085eb9233a7b842",
+      "excluded_fields": [],
+      "retained_sha256": "a4b69dd403de97afe4d8a8738d6d075b97641d7a64cb0ed81085eb9233a7b842"
+    },
+    "package_python_and_data_files": 95,
+    "paired_report": {
+      "all_fields_equal": true,
+      "canonical_sha256": "95d68b05855d3e43d1ad4e47894391e45b2a25bac039a8d2c2828f5e2818231a",
+      "excluded_fields": [],
+      "retained_sha256": "95d68b05855d3e43d1ad4e47894391e45b2a25bac039a8d2c2828f5e2818231a"
+    },
+    "reader_peak_rss_mib": 59.1015625,
+    "reader_scope": "Installed wheel full-study and paired report recomputation plus CLI validation CSV; shared host, no model execution.",
+    "reader_seconds": 851.9132614279952,
+    "sdist_packaged_waveform_test": {
+      "passed": true,
+      "research_fixture": "research/spectrum_preservation/encoders.py",
+      "returncode": 0,
+      "test_path": "tests/experiments/test_waveform_fft.py"
+    }
+  },
+  "listening_review": {
+    "audio_transform": "Concatenate the four verified float32 review reels in the declared order; add 0.75 seconds of silence between cohorts; preserve all sample payloads and gain.",
+    "closure_rule": "Actual listener feedback must be retained separately; numerical checks and elapsed time do not establish that listening occurred.",
+    "duration_seconds": 41.25,
+    "required_by": "docs/v2-plan.md M1 and M5",
+    "review_audio_role": "combined-listening-review",
+    "selection": "Validation seed-0 inverse-refine lower-median and worst examples in all four cohorts,16 original two-second source segments.",
+    "status": "not-performed"
+  },
+  "package_version": "2.0.0",
+  "publication_status": "local-prepared-not-published",
+  "runtime_code_commit": "410241e",
+  "runtime_source_sha256": "958bdcf36a297fc67bfa7a0a24d18ce1c52afe9e443d0064169ff2637e0dfa5e",
+  "schema_id": "harpy.v2.local-release-index/1",
+  "study": {
+    "actor_episodes": 6336,
+    "final_report_sha256": "a4b69dd403de97afe4d8a8738d6d075b97641d7a64cb0ed81085eb9233a7b842",
+    "paired_report_sha256": "95d68b05855d3e43d1ad4e47894391e45b2a25bac039a8d2c2828f5e2818231a",
+    "perceptual_success_cutoff": null,
+    "plan_sha256": "7f0c4b5574ecd1b7dc72e3ccba5404daa26c0a16e8fe3b554b42aaee022d68c8",
+    "reference_quality": {
+      "all_three_passed": true,
+      "criterion": {
+        "aggregation": "arithmetic mean of eight cell means of submitted distance",
+        "bundled_seed": 0,
+        "cells": [
+          "1:all",
+          "1:pitch",
+          "1:envelope",
+          "1:brightness",
+          "3:all",
+          "3:pitch",
+          "3:envelope",
+          "3:brightness"
+        ],
+        "id": "equal-eight-cell-validation-audio-distance-v1",
+        "missing_or_unsubmitted": "ineligible checkpoint",
+        "perceptual_success_cutoff": null,
+        "reference_quality": "all three seeds strictly below fixed actor macro distance",
+        "split": "validation",
+        "tie_break": "earliest checkpoint"
+      },
+      "seeds": [
+        {
+          "fixed_macro_distance": 1.855378060512403,
+          "inverse_macro_distance": 1.1513270002796647,
+          "passed": true,
+          "seed": 0
+        },
+        {
+          "fixed_macro_distance": 1.855378060512403,
+          "inverse_macro_distance": 1.204496887883895,
+          "passed": true,
+          "seed": 1
+        },
+        {
+          "fixed_macro_distance": 1.855378060512403,
+          "inverse_macro_distance": 1.1859552528772237,
+          "passed": true,
+          "seed": 2
+        }
+      ]
+    },
+    "split_counts": {
+      "compositional-test": {
+        "error": 0,
+        "invalid_actions": 0,
+        "submitted": 2112,
+        "truncated": 0
+      },
+      "iid-test": {
+        "error": 0,
+        "invalid_actions": 0,
+        "submitted": 2112,
+        "truncated": 0
+      },
+      "validation": {
+        "error": 0,
+        "invalid_actions": 0,
+        "submitted": 2112,
+        "truncated": 0
+      }
+    }
+  }
+}

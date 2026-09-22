@@ -60,8 +60,8 @@ def compare(before: Path, after: Path, output: Path) -> dict:
             raise ValueError(
                 f"scientific prefix differs at committed record {total}: {actual['key']}"
             )
-        before_digest.update(left + b"\n")
-        after_digest.update(right + b"\n")
+        before_digest.update(left)
+        after_digest.update(right)
         compared += 1
         expected = next(original, sentinel)
     if expected is not sentinel or not compared:

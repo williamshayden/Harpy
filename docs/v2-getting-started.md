@@ -105,8 +105,23 @@ pattern search within the remaining budget. Use `LABEL=inverse:PATH` or
 `LABEL=inverse-refine:PATH` for comparisons across seeds. Model quality and
 workflow correctness are separate; see the acceptance record for measured results.
 
-The budget is 32 candidate evaluations and 64 decisions. The initial patch
-consumes evaluation 1. Each legal proposal consumes another evaluation, including
+The prepared [evidence archive](v2-acceptance.md#local-distributions-and-evidence)
+retains the selected models under `models/seed0`, `models/seed1`, and
+`models/seed2`. After extraction, an already trained model can be used directly:
+
+```bash
+harpy evaluate --task sound-match-v1 --suite tone-smoke \
+  --actor inverse=EVIDENCE_ROOT/models/seed0 \
+  --actor inverse-refine=EVIDENCE_ROOT/models/seed0 \
+  --output runs/pretrained-inverse-smoke
+```
+
+Seed 0 is shown for a reproducible starting point; the study reports all three
+seeds and does not select the best final-test result.
+
+The shared ceilings are 32 candidate evaluations and 64 decisions. Actual
+expenditure differs: fixed uses one evaluation, inverse uses two, and search may
+use 32. The initial patch consumes evaluation 1. Each legal proposal consumes another evaluation, including
 cache hits and repeats. Restoring an earlier best candidate costs an evaluation.
 Invalid proposals consume a decision and retain the current patch. Exhausting
 decisions without explicit submission is a truncation. Submission is a protocol
@@ -154,6 +169,8 @@ harpy summarize runs/pitch-bundle --verify-replay
 hash-bound dataset suites. The frozen study compares all declared seeds on
 matched membership. Once final tests are consumed, use them to reproduce that
 evidence; further model selection needs a new preregistered test set.
+The completed [all-seed results](v2-results.md) retain both final test splits and
+the descriptive comparisons alongside their limitations.
 
 Read single-note reconstruction, chord reconstruction, and each shaping mask
 separately. Compare initial, last, submitted, and best-audition distance alongside
@@ -175,6 +192,20 @@ Actors receive target/current audio, the current patch, bounds, editable fields,
 timing, and budgets. Declare configuration and seeds in actor metadata and
 immutable model files as artifact paths. Durable factories need inspectable
 Python source. Custom actors are a cooperative research interface.
+
+The executable [custom actor example](../examples/sound_match_actor.py) shows a
+fresh controller making one legal brightness proposal and then submitting its
+heard candidate. Save or copy it as a Python file so the durable writer can
+inspect and hash its defining source, then run it with the base package installed:
+
+```bash
+python examples/sound_match_actor.py runs/custom-sound
+harpy summarize runs/custom-sound --verify-replay
+```
+
+This is an API example with no matching-quality claim. Its installed-package
+check submitted both smoke targets with two evaluations each, zero invalid
+actions, and no Torch installation.
 
 `evaluate_bundle`, `read_bundle`, `iter_records`, and `summarize_bundle` are exposed
 from `harpy.tasks.sound_match`. The earlier in-memory `run`/`evaluate` and M1

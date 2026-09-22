@@ -13,7 +13,7 @@ reconstruction and changes restricted to pitch, envelope, or brightness.
 Classical search and a trained inverse estimator use the same public observations
 and candidate-evaluation rules.
 
-**This checkout prepares package 2.0.0.** Local qualification and archive status
+**This checkout contains package 2.0.0.** Local qualification and archive status
 are recorded in [v2 acceptance](docs/v2-acceptance.md). A local package or evidence
 archive is distinct from a published release. The existing public v1 release uses
 tag `v1`; the older `v1.0.0` tag preserves a historical development checkpoint.
@@ -65,9 +65,10 @@ and reload; the frozen reference profile trains on 2,016 targets and selects
 among six epochs using 192 validation targets. All three training seeds are
 retained and compared; see the [method](docs/v2-inverse.md).
 
-The public budget is 32 candidate evaluations and 64 decisions. The initial
-candidate costs one evaluation, and cache hits or restored patches still cost
-evaluations. Actors must explicitly submit their current candidate. Submission
+All actors share a ceiling of 32 candidate evaluations and 64 decisions. Actual
+usage differs: fixed uses one evaluation, inverse uses two, and search can use
+32. The initial candidate costs one evaluation, and cache hits or restored patches
+still cost evaluations. Actors must explicitly submit their current candidate. Submission
 means the protocol finished, not that a listener would judge the sound correct.
 
 The objective is a frozen continuous spectral distance, accompanied by pitch,
@@ -75,6 +76,13 @@ envelope, and level diagnostics. There is no asserted perceptual success cutoff.
 Read reconstruction and shaping cells separately, along with errors, truncations,
 invalid actions, model calls, and render costs. Model quality claims apply only
 to the recorded artifacts and declared criteria.
+
+The frozen study completed all 6,336 actor-episodes with zero errors, truncations,
+or invalid actions. All three inverse seeds passed the declared validation
+criterion. Inverse plus refinement has lower equal-eight-cell mean distance than
+the declared search baselines on both final tests; individual targets and some
+cells still favor other actors. See [all-seed results](docs/v2-results.md).
+Actual listening review remains open in the acceptance record.
 
 ## Interrupt, resume, and read
 
@@ -134,7 +142,7 @@ reproducing the recorded studies; future model selection needs new test data.
 
 - [V2 getting started](docs/v2-getting-started.md), [inverse method](docs/v2-inverse.md),
   and [calibration](docs/v2-calibration.md).
-- [V2 acceptance](docs/v2-acceptance.md), [migration](docs/v2-migration.md),
+- [V2 results](docs/v2-results.md), [acceptance](docs/v2-acceptance.md), [migration](docs/v2-migration.md),
   [specification](docs/v2-spec.md), and [delivery plan](docs/v2-plan.md).
 - [V1 guide](docs/v1-getting-started.md), [acceptance](docs/v1-acceptance.md),
   and [contributing](docs/v1-contributing.md).

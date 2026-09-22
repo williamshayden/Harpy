@@ -26,7 +26,7 @@ def export(bundle: Path, output: Path) -> dict:
     with output.open("xb") as stream:
         for payload in iter_records(bundle, allow_incomplete=True):
             count += 1
-            encoded = canonical_json_bytes(payload) + b"\n"
+            encoded = canonical_json_bytes(payload)
             stream.write(encoded)
             digest.update(encoded)
     if source_identity() != reader_source:

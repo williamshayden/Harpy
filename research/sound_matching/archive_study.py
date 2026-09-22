@@ -7,7 +7,9 @@ import gzip
 import hashlib
 import importlib.util
 import io
+import shutil
 import tarfile
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from harpy._serialization import (
@@ -28,8 +30,97 @@ def portable_path(value: object) -> str:
     return value
 
 
+def verify_resource_receipts(study: Path) -> Path:
+    """Bind exported measurements to retained successful local execution evidence."""
+    collector = Path(__file__).with_name("resource_receipts.py")
+    spec = importlib.util.spec_from_file_location("_harpy_resource_receipt_reader", collector)
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    recorded = decode_json_bytes((study / "resource-receipts.json").read_bytes())
+    if canonical_json_bytes(reader.build_receipts(study)) != canonical_json_bytes(recorded):
+        raise ValueError("resource receipts differ from frozen execution evidence")
+    return collector
+
+
+def expand_distribution(distribution: Path, destination: Path, source_identity: dict) -> dict:
+    """Copy regular sdist members into an isolated tree, preserving their exact bytes."""
+    digest = sha256_file(distribution)
+    members = []
+    prefixes = set()
+    seen = set()
+    with tarfile.open(distribution, "r|gz") as archive:
+        for member in archive:
+            name = portable_path(member.name.rstrip("/") if member.isdir() else member.name)
+            parts = PurePosixPath(name).parts
+            prefixes.add(parts[0])
+            if len(prefixes) != 1 or name in seen:
+                raise ValueError("source distribution must have one unique root and member paths")
+            seen.add(name)
+            if member.isdir():
+                continue
+            if not member.isfile() or len(parts) < 2:
+                raise ValueError("source distribution must contain regular files below its root")
+            relative = PurePosixPath(*parts[1:]).as_posix()
+            path = destination / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as payload, path.open("xb") as target:
+                shutil.copyfileobj(payload, target, length=1024 * 1024)
+            if path.stat().st_size != member.size:
+                raise ValueError("source distribution member size differs after expansion")
+            members.append(
+                {"path": relative, "size_bytes": member.size, "sha256": sha256_file(path)}
+            )
+    required = {
+        "pyproject.toml",
+        "PKG-INFO",
+        "docs/v2-acceptance.md",
+        "docs/v2-calibration.md",
+        "research/sound_matching/README.md",
+    }
+    if not required <= {row["path"] for row in members}:
+        raise ValueError("source distribution omits the package or final qualification documents")
+    source = destination / "src/harpy"
+    if {path.relative_to(source).as_posix() for path in source.rglob("*.py")} != {
+        row["path"] for row in source_identity["files"]
+    }:
+        raise ValueError("qualification source membership differs from frozen evaluator")
+    for row in source_identity["files"]:
+        path = source / row["path"]
+        if path.stat().st_size != row["size_bytes"] or sha256_file(path) != row["sha256"]:
+            raise ValueError("qualification source differs from frozen evaluator")
+    if sha256_file(distribution) != digest:
+        raise ValueError("source distribution changed while expanding")
+    return {
+        "distribution": "attachments/" + distribution.name,
+        "distribution_sha256": digest,
+        "member_prefix": next(iter(prefixes)),
+        "archive_prefix": "qualification/",
+        "members": sorted(members, key=lambda item: item["path"]),
+    }
+
+
 def prepare(
-    study: Path, models: Path, evaluator: Path, attachments: list[Path], output: Path
+    study: Path,
+    models: Path,
+    evaluator: Path,
+    attachments: list[Path],
+    output: Path,
+    distribution: Path | None = None,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="harpy-study-qualification-") as temporary:
+        return _prepare(
+            study, models, evaluator, attachments, output, distribution, Path(temporary)
+        )
+
+
+def _prepare(
+    study: Path,
+    models: Path,
+    evaluator: Path,
+    attachments: list[Path],
+    output: Path,
+    distribution: Path | None,
+    qualification: Path,
 ) -> dict:
     """Archive existing evidence only: no inference, training or test selection."""
     plan = decode_json_bytes((study / "plan.json").read_bytes())
@@ -46,6 +137,16 @@ def prepare(
         or set(reports) != {"validation", "iid-test", "compositional-test"}
     ):
         raise ValueError("final report must describe all three splits exactly once")
+    if distribution is None:
+        raise ValueError("archive requires the exact final source distribution")
+    qualification_identity = expand_distribution(distribution, qualification, plan["source"])
+    qualification_data = qualification / "src/harpy/tasks/sound_match/data"
+    if sha256_file(qualification_data / "catalog.json") != plan["dataset_catalog_sha256"] or any(
+        sha256_file(qualification_data / f"{split}.json") != identity["sha256"]
+        for split, identity in plan["splits"].items()
+    ):
+        raise ValueError("qualification dataset files differ from frozen evaluator")
+    resource_collector = verify_resource_receipts(study)
     driver = Path(__file__).with_name("study.py")
     if sha256_file(driver) != plan["driver_sha256"]:
         raise ValueError("archive report reader differs from frozen study driver")
@@ -53,7 +154,26 @@ def prepare(
     reader = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(reader)
     verified_reports = []
-    paths = {}
+    readme = (
+        (qualification / "research/sound_matching/README.md")
+        .read_text()
+        .replace("(../../docs/", "(qualification/docs/")
+        .encode()
+    )
+    archive_readme = study / "archive-README.md"
+    if archive_readme.exists():
+        if archive_readme.read_bytes() != readme:
+            raise ValueError("prepared archive README differs from current portable guide")
+    else:
+        write_new_bytes(archive_readme, readme)
+    paths = {
+        "README.md": archive_readme,
+        "verification/resource_receipts.py": resource_collector,
+        "verification/scheduling.py": resource_collector.with_name("scheduling.py"),
+        "attachments/" + distribution.name: distribution,
+    }
+    for row in qualification_identity["members"]:
+        paths["qualification/" + row["path"]] = qualification / row["path"]
     for split in ("validation", "iid-test", "compositional-test"):
         report = reader.split_report(study / split, plan, sha256_file(study / "plan.json"), split)
         if not report["report"]["complete"] or report["report"]["completed"] != 192 * 11:
@@ -64,7 +184,14 @@ def prepare(
         for path in sorted((study / split).rglob("*")):
             if path.is_file():
                 paths["study/" + path.relative_to(study).as_posix()] = path
-    for name in ("plan.json", "report.json", "listening-index.json"):
+    for name in (
+        "plan.json",
+        "report.json",
+        "listening-index.json",
+        "resource-receipts.json",
+        "scheduling-receipt.json",
+        "scheduling-observations.json",
+    ):
         paths["study/" + name] = study / name
     expected_report = {
         "schema_id": "harpy.sound-match.matched-study-report/1",
@@ -90,10 +217,6 @@ def prepare(
         recorded_index
     ):
         raise ValueError("listening selections differ from frozen rule and retained records")
-    for path in sorted(study.glob("*-time.txt")):
-        paths["study/" + path.name] = path
-    for path in sorted(study.glob("*.log")):
-        paths["study/" + path.name] = path
     for seed in range(3):
         artifact = load_inverse_artifact(models / f"seed{seed}")
         if artifact.manifest_sha256 != plan["models"][seed]["manifest_sha256"]:
@@ -138,6 +261,8 @@ def prepare(
     for path in attachments:
         name = "attachments/" + path.name
         if name in paths:
+            if paths[name].resolve() == path.resolve():
+                continue
             raise ValueError("attachment basenames must be distinct")
         paths[name] = path
     files = []
@@ -146,10 +271,30 @@ def prepare(
         if path.is_symlink() or not path.is_file():
             raise ValueError("archive inputs must be regular files")
         files.append({"path": name, "size_bytes": path.stat().st_size, "sha256": sha256_file(path)})
+    if (
+        next(
+            row["sha256"] for row in files if row["path"] == qualification_identity["distribution"]
+        )
+        != qualification_identity["distribution_sha256"]
+    ):
+        raise ValueError("attached distribution differs from its expanded qualification tree")
     document = {
         "schema_id": "harpy.sound-match.complete-study-archive/1",
         "study_plan_sha256": sha256_file(study / "plan.json"),
         "publication_status": "local-prepared-not-published",
+        "readme_transformation": (
+            "packaging-only relocation of source guide documentation links into qualification/docs"
+        ),
+        "qualification_distribution": qualification_identity,
+        "resource_receipt_verification": {
+            "method": "exact recomputation from retained local GNU time and progress logs",
+            "collector": "verification/resource_receipts.py",
+            "collector_sha256": sha256_file(resource_collector),
+            "scheduling_validator_sha256": sha256_file(
+                resource_collector.with_name("scheduling.py")
+            ),
+            "raw_logs_included": False,
+        },
         "listening_review": "not-performed",
         "files": files,
     }
@@ -201,11 +346,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("study", "models", "evaluator", "output"):
         parser.add_argument(f"--{name}", type=Path, required=True)
+    parser.add_argument("--distribution", type=Path, required=True)
     parser.add_argument("--attach", type=Path, action="append", default=[])
     args = parser.parse_args()
     print(
         canonical_json_bytes(
-            prepare(args.study, args.models, args.evaluator, args.attach, args.output)
+            prepare(
+                args.study, args.models, args.evaluator, args.attach, args.output, args.distribution
+            )
         ).decode()
     )
 
