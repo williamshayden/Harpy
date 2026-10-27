@@ -1,6 +1,10 @@
 # Release notes
 
-## Unreleased
+## 2.0.0 — release candidate (unpublished)
+
+Prepared as an experimental known-synth research release. The publication date
+is pending; see the [release notes](docs/v2-release-notes.md) for the current
+artifact, installation, and acceptance status.
 
 - Prepare package `2.0.0` with the `sound-match-v1` task: deterministic
   single-note/chord synthesis, bounded patch proposals and explicit submission,
@@ -14,7 +18,8 @@
 - Complete the frozen 6,336-episode, three-seed sound-matching study and retain
   exact paired comparisons, source/checkpoint identities, and portable evidence.
   All episodes submitted; all three inverse seeds passed the declared validation
-  criterion. Actual listening review remains an open acceptance item.
+  criterion. Formal listening acceptance remains open after limited informal
+  audition feedback on 2026-09-24; perceptual success remains unclaimed.
 - Add append-only, single-writer evaluation bundles for sound matching and opt-in
   v1 pitch work, with committed-member resume, interrupted-attempt accounting,
   portable artifact identities, incomplete readout, and model-free replay.

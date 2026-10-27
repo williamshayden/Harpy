@@ -13,10 +13,13 @@ reconstruction and changes restricted to pitch, envelope, or brightness.
 Classical search and a trained inverse estimator use the same public observations
 and candidate-evaluation rules.
 
-**This checkout contains package 2.0.0.** Local qualification and archive status
-are recorded in [v2 acceptance](docs/v2-acceptance.md). A local package or evidence
-archive is distinct from a published release. The existing public v1 release uses
-tag `v1`; the older `v1.0.0` tag preserves a historical development checkpoint.
+**Package 2.0.0 is an experimental release candidate, prepared locally and
+unpublished.** See the [v2 release notes](docs/v2-release-notes.md) for installation,
+artifacts, and limitations. The [v2 acceptance record](docs/v2-acceptance.md)
+preserves the frozen qualification evidence. Formal listening acceptance remains
+open; limited informal audition feedback was received on 2026-09-24. The existing
+public v1 release uses tag `v1`; the older `v1.0.0` tag preserves a historical
+development checkpoint.
 
 ## Install and run
 
@@ -82,7 +85,8 @@ or invalid actions. All three inverse seeds passed the declared validation
 criterion. Inverse plus refinement has lower equal-eight-cell mean distance than
 the declared search baselines on both final tests; individual targets and some
 cells still favor other actors. See [all-seed results](docs/v2-results.md).
-Actual listening review remains open in the acceptance record.
+Formal listening acceptance remains open; numerical results and the limited
+informal audition feedback do not establish perceptual success.
 
 ## Interrupt, resume, and read
 
@@ -142,8 +146,10 @@ reproducing the recorded studies; future model selection needs new test data.
 
 - [V2 getting started](docs/v2-getting-started.md), [inverse method](docs/v2-inverse.md),
   and [calibration](docs/v2-calibration.md).
-- [V2 results](docs/v2-results.md), [acceptance](docs/v2-acceptance.md), [migration](docs/v2-migration.md),
-  [specification](docs/v2-spec.md), and [delivery plan](docs/v2-plan.md).
+- [V2 release notes](docs/v2-release-notes.md), [contributing](docs/v2-contributing.md),
+  [results](docs/v2-results.md), [acceptance](docs/v2-acceptance.md),
+  [migration](docs/v2-migration.md), [specification](docs/v2-spec.md),
+  and [delivery plan](docs/v2-plan.md).
 - [V1 guide](docs/v1-getting-started.md), [acceptance](docs/v1-acceptance.md),
   and [contributing](docs/v1-contributing.md).
 

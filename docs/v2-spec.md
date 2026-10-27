@@ -1,5 +1,10 @@
 # harPY v2: bounded sound matching
 
+> Current status, 2026-10-26: package 2.0.0 is being prepared as an unpublished
+> experimental release candidate. See [release notes](v2-release-notes.md) and
+> [acceptance evidence](v2-acceptance.md). The specification below retains its
+> original 2026-09-16 status and contract; it is not the current progress report.
+
 Status: implementation specification, 2026-09-16. **This is the complete v2 target,
 not a statement that all features are implemented.** The released package remains v1.
 The [development guide](v2-getting-started.md) describes the executable first slice.
