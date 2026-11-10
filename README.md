@@ -16,7 +16,8 @@ and candidate-evaluation rules.
 **[Version 2.0.0 is published as an experimental prerelease](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0).**
 This checkout prepares the 2.0.1 documentation and acceptance update. Stable
 promotion is deferred until matching quality improves; the LLM/HarnessBridge
-pilot is the next development priority. See the
+pilot is the next development priority; see the [prototype guide](docs/v2-llm-pilot.md).
+See the
 [v2 release notes](docs/v2-release-notes.md) for downloads and qualification, and
 the [listening review](docs/v2-listening-review.md) for the remaining acceptance
 decision. The [original acceptance record](docs/v2-acceptance.md) preserves the
