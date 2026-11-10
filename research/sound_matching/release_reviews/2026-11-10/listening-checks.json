@@ -1,0 +1,584 @@
+{
+  "schema_id": "harpy.sound-match.release-listening-preflight/1",
+  "checked_at_utc": "2026-11-10T15:50:57.144296+00:00",
+  "review_kind": "source-identity-and-numerical-audio-checks-only",
+  "human_listening": "not assessed by this audit; requires actual retained listener feedback",
+  "perceptual_acceptance": "not inferred",
+  "audio_format": {
+    "sample_rate_hz": 48000,
+    "channels": 1,
+    "encoding": "IEEE float32",
+    "duration_seconds": 41.25
+  },
+  "combined_reel": {
+    "filename": "all-cohorts-review.wav",
+    "sha256": "170164a8141f0600ad2eb26f942d7367744deadfb59bf3fabfb640372efa919f",
+    "size_bytes": 7920056
+  },
+  "combined_manifest_sha256": "15835a5addc47f94ea09d1170602f2298c2f1f3e79ffeca22363691956c6691b",
+  "source_review_manifest_sha256": "242eb5e1b1cf013245ae0da536a564a14a763d268cfc3cf733d08dd545335b72",
+  "source_selection_index_sha256": "832b1ad954768f9302503addd1c73cb5d42f80e5b89d589475efa54855a44f8c",
+  "study_plan_sha256": "7f0c4b5574ecd1b7dc72e3ccba5404daa26c0a16e8fe3b554b42aaee022d68c8",
+  "selection": "validation inverse-refine seed 0 lower-median and largest distance in each of four cohorts; no selection from final tests",
+  "selection_scope": "Eight preselected validation pairs from inverse-refine seed 0; not an exhaustive 264-pair listening assessment, a blind preference test, or a final-test model-selection exercise.",
+  "transform": "Concatenate the four verified float32 review reels in the declared order; add 0.75 seconds of silence between cohorts; preserve all sample payloads and gain. Within each cohort: exact original float32 payloads, unchanged gain; insert 0.5 second target/candidate gaps and 0.75 second between-pair gaps",
+  "checks": {
+    "passed": true,
+    "source_segments_verified": 16,
+    "cohort_reels_verified": 4,
+    "target_match_pairs": 8,
+    "all_source_wav_hashes_match": true,
+    "all_original_payloads_preserved": true,
+    "all_silent_gaps_exact_zero": true,
+    "all_samples_finite": true,
+    "all_source_segments_nonzero": true,
+    "all_source_endpoints_zero": true,
+    "samples_abs_ge_1": 0,
+    "published_reel_and_manifest_equal_to_frozen_originals": true,
+    "selection_rows_exactly_equal_to_bound_index": true,
+    "maximum_peak_abs": 0.39709392189979553
+  },
+  "pairs": [
+    {
+      "pair": 1,
+      "cohort": "single-reconstruction",
+      "selection": "median",
+      "selection_definition": "lower-median-submitted-distance",
+      "episode_id": "e_27392a4c6e0fe5eedbabcec9",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "1:all",
+      "target": {
+        "role": "target",
+        "start_seconds": 0.0,
+        "end_seconds": 2.0,
+        "source_path_in_study": "validation/artifacts/f60791463385357877c1364233a665e8617031123e4b983e4bd74cb11db450df.wav",
+        "source_sha256": "f60791463385357877c1364233a665e8617031123e4b983e4bd74cb11db450df",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "3c076f7bdf3255c63a5351e61908e2e7672ac1b696bfb19c0fd65c0fbcd14982",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.20812278985977173,
+          "rms": 0.04009150411628858,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 2.5,
+        "end_seconds": 4.5,
+        "source_path_in_study": "validation/artifacts/846c2a098cdd98d0a75edf3889428d63ae60fd393d1dc7040db70774dcfb26fc.wav",
+        "source_sha256": "846c2a098cdd98d0a75edf3889428d63ae60fd393d1dc7040db70774dcfb26fc",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "d090c68f8ec190e6891065c7aa0285f523073edf7e8fac605bed0f448db09540",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.16109563410282135,
+          "rms": 0.035815853904332375,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 0.81265436078343,
+      "pitch_error_cents": [
+        4
+      ],
+      "envelope_rmse": 0.013944827282475179,
+      "level_error_db": -0.979540803208856,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 137,
+        "brightness_hz": 1769,
+        "decay_ms": 194,
+        "gain_db": -9,
+        "notes_cents": [
+          5848
+        ],
+        "release_ms": 691,
+        "sustain_db": -9,
+        "waveform": "triangle"
+      }
+    },
+    {
+      "pair": 2,
+      "cohort": "single-reconstruction",
+      "selection": "worst",
+      "selection_definition": "largest-submitted-distance",
+      "episode_id": "e_97d5d681b1acccf5475b2ac3",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "1:all",
+      "target": {
+        "role": "target",
+        "start_seconds": 5.25,
+        "end_seconds": 7.25,
+        "source_path_in_study": "validation/artifacts/e0854878b36d9b5f3b24d8833c7cc40af2262f7f6b10195525288e6962444e23.wav",
+        "source_sha256": "e0854878b36d9b5f3b24d8833c7cc40af2262f7f6b10195525288e6962444e23",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "0831e97bd314f8fbdd1faf577fd8d390a5ae7e3cada6cca325c28a7287151ff9",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.08740334212779999,
+          "rms": 0.014697750099395087,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 7.75,
+        "end_seconds": 9.75,
+        "source_path_in_study": "validation/artifacts/f27c8e38ea08cac1a8f3411a9a80228c5c2b5aa9e93cec0d694c5e2aad9ae743.wav",
+        "source_sha256": "f27c8e38ea08cac1a8f3411a9a80228c5c2b5aa9e93cec0d694c5e2aad9ae743",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "51a573a1e89fb6b23a5b0e41dac6a79caad361c6760c246dfab6317d0a98a8b3",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.09488958865404129,
+          "rms": 0.017781649687713872,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 2.541944438382933,
+      "pitch_error_cents": [
+        15
+      ],
+      "envelope_rmse": 0.00527235999444218,
+      "level_error_db": 1.6544238220723217,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 82,
+        "brightness_hz": 200,
+        "decay_ms": 145,
+        "gain_db": -7,
+        "notes_cents": [
+          5471
+        ],
+        "release_ms": 616,
+        "sustain_db": -9,
+        "waveform": "saw"
+      }
+    },
+    {
+      "pair": 3,
+      "cohort": "chord-reconstruction",
+      "selection": "median",
+      "selection_definition": "lower-median-submitted-distance",
+      "episode_id": "e_0d7a5430f03cb8673e622504",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "3:all",
+      "target": {
+        "role": "target",
+        "start_seconds": 10.5,
+        "end_seconds": 12.5,
+        "source_path_in_study": "validation/artifacts/061951fe587e0bfef1f4b242f7551d13943ca6520ced56e59220003c92e4902a.wav",
+        "source_sha256": "061951fe587e0bfef1f4b242f7551d13943ca6520ced56e59220003c92e4902a",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "a7c241ffc9db60e8ee731d4b4b113debc981a10f276a892c04bf2781b7bb2456",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.2501929998397827,
+          "rms": 0.04261958715359676,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 13.0,
+        "end_seconds": 15.0,
+        "source_path_in_study": "validation/artifacts/a8086d3444382a96222961f4a94b2e9198ae72f387fa7b68e41c002fe051b3d0.wav",
+        "source_sha256": "a8086d3444382a96222961f4a94b2e9198ae72f387fa7b68e41c002fe051b3d0",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "a913657be3e8814436df3ad328cc97059f7b2eb2e6d5ccad586d57246d06476f",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.18946588039398193,
+          "rms": 0.030497174615274836,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 1.4470119058123168,
+      "pitch_error_cents": [
+        570,
+        470,
+        195
+      ],
+      "envelope_rmse": 0.017326561168892526,
+      "level_error_db": -2.906992642328965,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 88,
+        "brightness_hz": 647,
+        "decay_ms": 196,
+        "gain_db": -8,
+        "notes_cents": [
+          5031,
+          5631,
+          6106
+        ],
+        "release_ms": 353,
+        "sustain_db": -10,
+        "waveform": "square"
+      }
+    },
+    {
+      "pair": 4,
+      "cohort": "chord-reconstruction",
+      "selection": "worst",
+      "selection_definition": "largest-submitted-distance",
+      "episode_id": "e_efe067f5f2c06875ed558494",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "3:all",
+      "target": {
+        "role": "target",
+        "start_seconds": 15.75,
+        "end_seconds": 17.75,
+        "source_path_in_study": "validation/artifacts/444d58273f637cb6b4a66bc78879b1b4af7ba68cac605ffe21f0aadf9ce9d1ca.wav",
+        "source_sha256": "444d58273f637cb6b4a66bc78879b1b4af7ba68cac605ffe21f0aadf9ce9d1ca",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "4433b11ddd31c8766cdb2dc6337a9d4186108bb023ce73d55d18099832da47ab",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.07366248220205307,
+          "rms": 0.009186351672407146,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 18.25,
+        "end_seconds": 20.25,
+        "source_path_in_study": "validation/artifacts/0561dd77b74d0b2e7eaa37b3e66d1c196938dfcba798f955d03a0e62f6951198.wav",
+        "source_sha256": "0561dd77b74d0b2e7eaa37b3e66d1c196938dfcba798f955d03a0e62f6951198",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "ac8a1e67c3765d72767cc68e2bccfbe420a08e8d026a3b402a071806cf8db8ac",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.1712602972984314,
+          "rms": 0.022914245913758905,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 3.3926118223221238,
+      "pitch_error_cents": [
+        880,
+        309,
+        658
+      ],
+      "envelope_rmse": 0.015795709290335767,
+      "level_error_db": 7.939250050180475,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 90,
+        "brightness_hz": 2446,
+        "decay_ms": 219,
+        "gain_db": -7,
+        "notes_cents": [
+          5100,
+          5971,
+          6022
+        ],
+        "release_ms": 482,
+        "sustain_db": -10,
+        "waveform": "saw"
+      }
+    },
+    {
+      "pair": 5,
+      "cohort": "single-shaping",
+      "selection": "median",
+      "selection_definition": "lower-median-submitted-distance",
+      "episode_id": "e_bd5b3d49a72b1ce9157107c5",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "1:pitch",
+      "target": {
+        "role": "target",
+        "start_seconds": 21.0,
+        "end_seconds": 23.0,
+        "source_path_in_study": "validation/artifacts/94ea9159df790746732bb9c8456365012e5605185d880b8741f01d368ce88f78.wav",
+        "source_sha256": "94ea9159df790746732bb9c8456365012e5605185d880b8741f01d368ce88f78",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "cb8ee1a7b45c79568a2bce0d27b49817e15d76c5fce513fdd0567426530a1fe2",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.1868550330400467,
+          "rms": 0.024321949214466728,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 23.5,
+        "end_seconds": 25.5,
+        "source_path_in_study": "validation/artifacts/94ea9159df790746732bb9c8456365012e5605185d880b8741f01d368ce88f78.wav",
+        "source_sha256": "94ea9159df790746732bb9c8456365012e5605185d880b8741f01d368ce88f78",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "cb8ee1a7b45c79568a2bce0d27b49817e15d76c5fce513fdd0567426530a1fe2",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.1868550330400467,
+          "rms": 0.024321949214466728,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 0.0,
+      "pitch_error_cents": [
+        0
+      ],
+      "envelope_rmse": 0.0,
+      "level_error_db": 0.0,
+      "target_and_match_audio_identical": true,
+      "submitted_patch": {
+        "attack_ms": 40,
+        "brightness_hz": 1738,
+        "decay_ms": 211,
+        "gain_db": -8,
+        "notes_cents": [
+          5080
+        ],
+        "release_ms": 38,
+        "sustain_db": -19,
+        "waveform": "saw"
+      }
+    },
+    {
+      "pair": 6,
+      "cohort": "single-shaping",
+      "selection": "worst",
+      "selection_definition": "largest-submitted-distance",
+      "episode_id": "e_1e5f7b60033cf734d04b576f",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "1:pitch",
+      "target": {
+        "role": "target",
+        "start_seconds": 26.25,
+        "end_seconds": 28.25,
+        "source_path_in_study": "validation/artifacts/9f82ae99b0b49590ec7bea8dd071dd4582ba19761efa37c3f34e98105825a8c5.wav",
+        "source_sha256": "9f82ae99b0b49590ec7bea8dd071dd4582ba19761efa37c3f34e98105825a8c5",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "5845e3ac30ea3dde9674da7fb55d60a2e95470bf5a9076c2241531ceda286337",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.3745614290237427,
+          "rms": 0.0926788793699051,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 28.75,
+        "end_seconds": 30.75,
+        "source_path_in_study": "validation/artifacts/333c97925a722ee67cb1c0fe5d249272465b9255a143786d3cf396b7af996592.wav",
+        "source_sha256": "333c97925a722ee67cb1c0fe5d249272465b9255a143786d3cf396b7af996592",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "a37e6eef9d4b166ce5fbdc968bca29583d2fdfda2af99ba72588d2619b1152d6",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.38281306624412537,
+          "rms": 0.09514026253759943,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 2.119189318158394,
+      "pitch_error_cents": [
+        702
+      ],
+      "envelope_rmse": 0.005766703942157434,
+      "level_error_db": 0.22767143300653103,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 6,
+        "brightness_hz": 3276,
+        "decay_ms": 288,
+        "gain_db": -2,
+        "notes_cents": [
+          5762
+        ],
+        "release_ms": 395,
+        "sustain_db": -6,
+        "waveform": "saw"
+      }
+    },
+    {
+      "pair": 7,
+      "cohort": "chord-shaping",
+      "selection": "median",
+      "selection_definition": "lower-median-submitted-distance",
+      "episode_id": "e_31893bb6ce926316cb0629c4",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "3:envelope",
+      "target": {
+        "role": "target",
+        "start_seconds": 31.5,
+        "end_seconds": 33.5,
+        "source_path_in_study": "validation/artifacts/690d5a6f4dd88ea32229218b679d15f8925ad0e216e3748ad24c46a23779cebc.wav",
+        "source_sha256": "690d5a6f4dd88ea32229218b679d15f8925ad0e216e3748ad24c46a23779cebc",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "a99b9feea87814d7712f269fb289df894bfc72993690041d799591cccf272d01",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.05637636035680771,
+          "rms": 0.00755120614066469,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 34.0,
+        "end_seconds": 36.0,
+        "source_path_in_study": "validation/artifacts/480b6b2bc8a3649e237bd2b1abff67925052f3044f649bc69674781c50d5b2f0.wav",
+        "source_sha256": "480b6b2bc8a3649e237bd2b1abff67925052f3044f649bc69674781c50d5b2f0",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "53738bafc346fea1e9be26a2b1f17d40e2e9cc2059c664c02c7261526593af48",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.05668412894010544,
+          "rms": 0.007510974696053441,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 0.16933116445472954,
+      "pitch_error_cents": [
+        0,
+        0,
+        0
+      ],
+      "envelope_rmse": 0.0005310873814702674,
+      "level_error_db": -0.046400547528966385,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 250,
+        "brightness_hz": 2884,
+        "decay_ms": 352,
+        "gain_db": -17,
+        "notes_cents": [
+          6119,
+          6619,
+          7119
+        ],
+        "release_ms": 376,
+        "sustain_db": -15,
+        "waveform": "saw"
+      }
+    },
+    {
+      "pair": 8,
+      "cohort": "chord-shaping",
+      "selection": "worst",
+      "selection_definition": "largest-submitted-distance",
+      "episode_id": "e_9767f4335892342529f72591",
+      "actor": "inverse-refine-0",
+      "split": "validation",
+      "cell": "3:pitch",
+      "target": {
+        "role": "target",
+        "start_seconds": 36.75,
+        "end_seconds": 38.75,
+        "source_path_in_study": "validation/artifacts/d700fa0266ee7267925ed6c4017cd83ad97fec160bd0927127b4d7fbe9b8165e.wav",
+        "source_sha256": "d700fa0266ee7267925ed6c4017cd83ad97fec160bd0927127b4d7fbe9b8165e",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "a68b6ae38966b9a9443a5a237f559a572f5f7efc5f191a6d40d49be236c0945c",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.39709392189979553,
+          "rms": 0.047064435315142275,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "match": {
+        "role": "match",
+        "start_seconds": 39.25,
+        "end_seconds": 41.25,
+        "source_path_in_study": "validation/artifacts/f9f09952d693ea74341ca1cbfe845a7fc884a0cc1fbb982f7187001efae55625.wav",
+        "source_sha256": "f9f09952d693ea74341ca1cbfe845a7fc884a0cc1fbb982f7187001efae55625",
+        "source_size_bytes": 384056,
+        "float32_payload_sha256": "835e3017a0c24be239f164ec4310f3eb816e0f5254e3d4026d4c4e1bb6739cdb",
+        "waveform": {
+          "finite": true,
+          "nonzero": true,
+          "peak_abs": 0.388393372297287,
+          "rms": 0.04490907952825546,
+          "first_sample": 0.0,
+          "last_sample": 0.0,
+          "samples_abs_ge_1": 0
+        }
+      },
+      "distance": 1.8997793679842647,
+      "pitch_error_cents": [
+        924,
+        1274,
+        924
+      ],
+      "envelope_rmse": 0.010986384644139561,
+      "level_error_db": -0.40717397260357835,
+      "target_and_match_audio_identical": false,
+      "submitted_patch": {
+        "attack_ms": 56,
+        "brightness_hz": 2069,
+        "decay_ms": 202,
+        "gain_db": -2,
+        "notes_cents": [
+          5248,
+          5298,
+          6148
+        ],
+        "release_ms": 346,
+        "sustain_db": -20,
+        "waveform": "square"
+      }
+    }
+  ],
+  "limitations": [
+    "Numeric non-clipping and zero endpoints do not prove absence of audible defects.",
+    "Spectral distance and pitch diagnostics are recorded observations, not listener ratings.",
+    "The median and worst labels rank submitted spectral distance within each selected cohort."
+  ]
+}

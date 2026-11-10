@@ -1,10 +1,24 @@
 # Release notes
 
-## 2.0.0 — release candidate (unpublished)
+## 2.0.1 — Unreleased
 
-Prepared as an experimental known-synth research release. The publication date
-is pending; see the [release notes](docs/v2-release-notes.md) for the current
-artifact, installation, and acceptance status.
+- Update current documentation with the published v2 downloads, completed hosted
+  base CI, and a separate listening-review record. Preserve the original study,
+  package artifacts, and dated qualification records.
+- Prepare the v2 source and contribution guidance for the default branch. This
+  patch adds no sound-matching feature or new model-quality claim.
+- Record listening feedback received on 2026-11-10: no obvious audio errors, but
+  significant matching misses in the reviewed examples. Defer stable promotion
+  until matching improves and prioritize the LLM/HarnessBridge pilot; see the
+  [review record](docs/v2-listening-review.md).
+
+## 2.0.0 — 2026-10-26 (experimental prerelease)
+
+Published as [v2.0.0](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0)
+with wheel, source distribution, the complete scientific archive, installation
+proof, and checksums. See the [release notes](docs/v2-release-notes.md) for access
+and qualification details. The packaged October preparation records retain
+their original pre-publication status.
 
 - Prepare package `2.0.0` with the `sound-match-v1` task: deterministic
   single-note/chord synthesis, bounded patch proposals and explicit submission,
@@ -27,7 +41,9 @@ artifact, installation, and acceptance status.
   metrics and readout; extract neutral JSON, file hashing, and create-only
   publication primitives behind compatible historical imports.
 - Add base and optional CPU-training CI jobs, including installed wheel/sdist
-  checks. These workflow definitions do not constitute a hosted CI run.
+  checks. The [hosted base job](https://github.com/williamshayden/Harpy/actions/runs/40428101600)
+  passed at the release commit. Hosted optional training was skipped; the
+  separately recorded local optional CPU suite passed all 335 tests.
 - Specify headless v2 sound/chord matching, constrained patch editing, and a
   supervised inverse-model workflow; record phased delivery and source-backed v1
   reliability cleanup. The specification describes the full intended release;

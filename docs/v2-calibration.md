@@ -1,5 +1,10 @@
 # Sound-matching calibration and frozen dataset protocol
 
+> Current status, 2026-11-10: the [listening review](v2-listening-review.md)
+> records subsequent listener feedback and matching-quality concerns. Statements
+> below about unperformed listening describe the original calibration record.
+> The frozen objective, fixtures, and scientific results remain unchanged.
+
 This record covers the bounded CPU calibration pilot and the target generator
 `harpy-grouped-sound-targets-v1`. It does not claim perceptual acceptance. The
 objective remains `harpy-multires-spectral-v1` and the renderer remains

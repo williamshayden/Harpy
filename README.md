@@ -13,18 +13,21 @@ reconstruction and changes restricted to pitch, envelope, or brightness.
 Classical search and a trained inverse estimator use the same public observations
 and candidate-evaluation rules.
 
-**Package 2.0.0 is an experimental release candidate, prepared locally and
-unpublished.** See the [v2 release notes](docs/v2-release-notes.md) for installation,
-artifacts, and limitations. The [v2 acceptance record](docs/v2-acceptance.md)
-preserves the frozen qualification evidence. Formal listening acceptance remains
-open; limited informal audition feedback was received on 2026-09-24. The existing
-public v1 release uses tag `v1`; the older `v1.0.0` tag preserves a historical
-development checkpoint.
+**[Version 2.0.0 is published as an experimental prerelease](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0).**
+This checkout prepares the 2.0.1 documentation and acceptance update. Stable
+promotion is deferred until matching quality improves; the LLM/HarnessBridge
+pilot is the next development priority. See the
+[v2 release notes](docs/v2-release-notes.md) for downloads and qualification, and
+the [listening review](docs/v2-listening-review.md) for the remaining acceptance
+decision. The [original acceptance record](docs/v2-acceptance.md) preserves the
+frozen study evidence. The public v1 release uses tag `v1`; the older `v1.0.0`
+tag preserves a historical development checkpoint.
 
 ## Install and run
 
-Use Python 3.12 on Linux/WSL, the qualified platform, from this checkout or a
-built wheel:
+Use Python 3.12 on Linux/WSL, the qualified platform. Download a wheel from the
+[published v2 release](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0),
+or install this source checkout:
 
 ```bash
 python3.12 -m venv .venv
@@ -85,8 +88,10 @@ or invalid actions. All three inverse seeds passed the declared validation
 criterion. Inverse plus refinement has lower equal-eight-cell mean distance than
 the declared search baselines on both final tests; individual targets and some
 cells still favor other actors. See [all-seed results](docs/v2-results.md).
-Formal listening acceptance remains open; numerical results and the limited
-informal audition feedback do not establish perceptual success.
+Listening feedback on 2026-11-10 reported no obvious audio errors, but significant
+matching misses across the reviewed examples. The cause of those misses and the
+release decision remain under review in the [listening record](docs/v2-listening-review.md).
+The completed audition does not establish perceptual acceptance.
 
 ## Interrupt, resume, and read
 
@@ -137,9 +142,9 @@ conditions. See [v1 qualification](docs/verification/2026-09-08-v1-respec-qualif
 and [FFT evidence](docs/v1-waveform-fft.md).
 
 The [public v1 release](https://github.com/williamshayden/Harpy/releases/tag/v1)
-includes its wheel, source, and portable representation study. The v2 acceptance
-record identifies the separately prepared portable all-seed v1 archive and its
-access status. Consumed confirmation and final-test memberships support
+includes its wheel, source, and portable representation study. The
+[published complete v2 study archive](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/v2-complete-study-20260922.tar.gz)
+also retains the portable all-seed v1 evidence. Consumed confirmation and final-test memberships support
 reproducing the recorded studies; future model selection needs new test data.
 
 ## Documentation and scope
@@ -148,6 +153,7 @@ reproducing the recorded studies; future model selection needs new test data.
   and [calibration](docs/v2-calibration.md).
 - [V2 release notes](docs/v2-release-notes.md), [contributing](docs/v2-contributing.md),
   [results](docs/v2-results.md), [acceptance](docs/v2-acceptance.md),
+  [listening review](docs/v2-listening-review.md),
   [migration](docs/v2-migration.md), [specification](docs/v2-spec.md),
   and [delivery plan](docs/v2-plan.md).
 - [V1 guide](docs/v1-getting-started.md), [acceptance](docs/v1-acceptance.md),

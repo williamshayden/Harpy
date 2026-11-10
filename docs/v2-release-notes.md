@@ -1,8 +1,15 @@
-# harPY 2.0.0 release candidate
+# harPY v2 release notes
 
-Status on 2026-10-26: prepared locally for an **experimental known-synth research
-release**, not yet published. The publication date and final release links are
-pending. Package version `2.0.0` does not imply that a public release exists.
+Version **2.0.0 was published on 2026-10-26 as an experimental research
+prerelease**. Its [GitHub release](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0)
+provides the packages and complete study evidence. The original artifacts retain
+their dated preparation status; the release page records their publication.
+
+This checkout prepares **2.0.1**, a documentation and acceptance update for the
+same sound-matching implementation. Listening has been performed; the listener's
+matching-quality concerns and the stable-release decision remain under review.
+See the [listening review](v2-listening-review.md). The 2.0.0 tag, package bytes,
+and frozen scientific evidence are preserved.
 
 ## What changes
 
@@ -39,17 +46,19 @@ source .venv/bin/activate
 python -m pip install .
 ```
 
-Alternatively, install the prepared wheel from the checkout:
+Alternatively, download the published
+[2.0.0 wheel](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/harpy_audio-2.0.0-py3-none-any.whl)
+and install it from your download directory:
 
 ```bash
-python -m pip install outputs/v2-release-20261026/harpy_audio-2.0.0-py3-none-any.whl
+python -m pip install ./harpy_audio-2.0.0-py3-none-any.whl
 ```
 
 For optional inverse training, use `python -m pip install '.[learn]'` from the
 checkout, or install the wheel with its extra:
 
 ```bash
-python -m pip install 'outputs/v2-release-20261026/harpy_audio-2.0.0-py3-none-any.whl[learn]'
+python -m pip install './harpy_audio-2.0.0-py3-none-any.whl[learn]'
 ```
 
 Base synthesis, classical actors, result reading, and replay do not require
@@ -66,25 +75,25 @@ Use a new output path for a new run. The [getting-started guide](v2-getting-star
 covers chords, shaping, audio inspection, training, and custom Python actors.
 The [contribution guide](v2-contributing.md) describes development checks.
 
-## Artifacts and publication
+## Published artifacts and qualification
 
-The current release preparation uses `outputs/v2-release-20261026/` for:
+The [2.0.0 release assets](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0)
+include:
 
-- `harpy_audio-2.0.0-py3-none-any.whl` and `harpy_audio-2.0.0.tar.gz`.
-- `SHA256SUMS`, a flat checksum file for the prepared artifacts.
-- `publication-index.json`, the artifact inventory for publication.
-- `qualification.json`, the current release verification record.
+- The [wheel](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/harpy_audio-2.0.0-py3-none-any.whl)
+  and [source distribution](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/harpy_audio-2.0.0.tar.gz).
+- The [complete study archive](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/v2-complete-study-20260922.tar.gz),
+  containing all three selected models, saved evaluations, listening examples,
+  frozen source, and the retained v1 evidence.
+- [SHA256SUMS](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/SHA256SUMS),
+  [publication-index.json](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/publication-index.json),
+  and [qualification.json](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/qualification.json).
+- Separate installation-proof archives and the
+  [41.25-second review reel](https://github.com/williamshayden/Harpy/releases/download/v2.0.0/all-cohorts-review.wav).
 
-The retained scientific archive and installed-package proof are separate evidence
-assets. The [acceptance record](v2-acceptance.md) identifies their original local
-paths; the [archive guide](../research/sound_matching/README.md) explains their
-contents, checksums, and reproduction commands. Original study artifacts remain
-unchanged. Release preparation does not publish them.
-
-Once the release is published, download the wheel or source distribution and
-the accompanying checksum file from that release's assets. Download all files
-listed in `SHA256SUMS` into one directory and run `sha256sum -c SHA256SUMS` there,
-then install the downloaded wheel with:
+Download every file listed in `SHA256SUMS` into one directory and run
+`sha256sum -c SHA256SUMS` to verify the complete asset set. Install either
+downloaded distribution with:
 
 ```bash
 python -m pip install ./harpy_audio-2.0.0-py3-none-any.whl
@@ -92,16 +101,31 @@ python -m pip install ./harpy_audio-2.0.0-py3-none-any.whl
 python -m pip install ./harpy_audio-2.0.0.tar.gz
 ```
 
-No public v2 download URL or package-index installation is asserted here.
+The [archive guide](../research/sound_matching/README.md) explains model paths,
+reproduction commands, and the distinction between original September evidence
+and the October package verification. GitHub assets are the published package
+distribution; these instructions do not assume a package-index release.
+
+The 2.0.0 qualification passed 10,938 base tests, with five optional Torch skips
+and two model-loading deselections, plus a separate local CPU suite with all
+335 tests passing. Wheel and source installs outside the checkout exercised
+run, resume, strict replay, and custom actors. The
+[hosted base CI run](https://github.com/williamshayden/Harpy/actions/runs/40428101600)
+also passed on the release commit. Its optional training job was skipped; local
+optional coverage is recorded separately. These checks qualify the published
+2.0.0 artifacts. A changed 2.0.1 package needs its own checks and checksum binding.
 
 ## Scope and known limitations
 
 This is a controlled synthetic-sound research toolkit. Learned matches remain
 approximate. Spectral distance is not perceptual acceptance, and retained failure
 examples include substantial pitch errors even when distance improves. Limited
-informal audition feedback was received on 2026-09-24; formal representative and
-failure-case listening acceptance remains open. The earlier acceptance and
-archive records preserve the review status at the time they were written.
+informal audition feedback was received on 2026-09-24. On 2026-11-10, the listener
+reported no obvious audio errors in the review examples, but significant
+matching misses across them. This is completed listening with an unresolved
+matching-quality concern, not a perceptual-acceptance pass. The current
+[review record](v2-listening-review.md) retains the feedback and investigation;
+the earlier acceptance and archive records preserve their original dated status.
 
 All actors share ceilings of 32 candidate evaluations and 64 decisions. Actual
 usage differs: fixed uses one evaluation, inverse uses two, and search may use
@@ -109,8 +133,8 @@ usage differs: fixed uses one evaluation, inverse uses two, and search may use
 all consume evaluations. Submission means the protocol finished; it is not a
 claim of sound quality.
 
-Native Windows/macOS, new-task CUDA execution, and hosted CI execution remain
-unqualified. External recordings, live audio, DAW/VST hosting, effects, a packaged
+Native Windows/macOS and new-task CUDA execution remain unqualified.
+External recordings, live audio, DAW/VST hosting, effects, a packaged
 UI, hosted-model adapters, and new-task PPO are outside this release. Custom
 Python actors are cooperative code, not sandboxed plugins.
 

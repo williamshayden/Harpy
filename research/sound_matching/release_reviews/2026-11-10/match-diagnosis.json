@@ -1,0 +1,2328 @@
+{
+  "schema_id": "harpy.sound-match.bounded-validation-diagnosis/1",
+  "created_at_utc": "2026-11-10T15:56:22.076552+00:00",
+  "scope": "Eight original validation listening cases, existing results for 11 actors each, and 11 counterfactual pitches for one validation case. No new model training, actor tuning, final-test evaluation or frozen artifact changes.",
+  "perceptual_assessment": "No listening performed by this numerical audit. Root retains actual user feedback separately.",
+  "identity": {
+    "validation_manifest_sha256": "ac3e65e2965364f921b3025f30abc80dd350cb318391211174a36a0fcc55df73",
+    "listening_checks_sha256": "eb899f633ec966905c6f3d4ffc84717a6304dee445b89992db0a6e649e157f98",
+    "objective_id": "harpy-multires-spectral-v1",
+    "renderer_id": "harpy-compact-synth-v1"
+  },
+  "checks": {
+    "cases": 8,
+    "exact_target_renders": 8,
+    "exact_match_renders": 8,
+    "zero_target_self_scores": 8,
+    "exact_replayed_scores": 8,
+    "all_locked_fields_preserved": true
+  },
+  "cases": [
+    {
+      "pair": 1,
+      "cohort": "single-reconstruction",
+      "selection": "median",
+      "episode_id": "e_27392a4c6e0fe5eedbabcec9",
+      "cell": "1:all",
+      "target_patch": {
+        "attack_ms": 206,
+        "brightness_hz": 269,
+        "decay_ms": 296,
+        "gain_db": -1,
+        "notes_cents": [
+          5844
+        ],
+        "release_ms": 627,
+        "sustain_db": -12,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 10,
+        "brightness_hz": 6000,
+        "decay_ms": 100,
+        "gain_db": -6,
+        "notes_cents": [
+          6000
+        ],
+        "release_ms": 200,
+        "sustain_db": -6,
+        "waveform": "sine"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 0.81265436078343,
+      "cross_actor_retained_results": [
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 0.81265436078343,
+          "submitted_notes_cents": [
+            5848
+          ],
+          "pitch_absolute_error_cents": [
+            4
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            4
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 0.8878902609923046,
+          "submitted_notes_cents": [
+            5847
+          ],
+          "pitch_absolute_error_cents": [
+            3
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            3
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 0.9996423873904953,
+          "submitted_notes_cents": [
+            5814
+          ],
+          "pitch_absolute_error_cents": [
+            30
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -30
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.3495547809156294,
+          "submitted_notes_cents": [
+            5748
+          ],
+          "pitch_absolute_error_cents": [
+            96
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -96
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.4166799042661395,
+          "submitted_notes_cents": [
+            5717
+          ],
+          "pitch_absolute_error_cents": [
+            127
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -127
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.4796419860197698,
+          "submitted_notes_cents": [
+            5800
+          ],
+          "pitch_absolute_error_cents": [
+            44
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -44
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.5283024874984112,
+          "submitted_notes_cents": [
+            5899
+          ],
+          "pitch_absolute_error_cents": [
+            55
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            55
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.5797967056811217,
+          "submitted_notes_cents": [
+            5205
+          ],
+          "pitch_absolute_error_cents": [
+            639
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -639
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.6296778561909886,
+          "submitted_notes_cents": [
+            6314
+          ],
+          "pitch_absolute_error_cents": [
+            470
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            470
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 1.636968403967444,
+          "submitted_notes_cents": [
+            6347
+          ],
+          "pitch_absolute_error_cents": [
+            503
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            503
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 2.1529736514723403,
+          "submitted_distance": 2.1529736514723403,
+          "submitted_notes_cents": [
+            6000
+          ],
+          "pitch_absolute_error_cents": [
+            156
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            156
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "cohort": "single-reconstruction",
+      "selection": "worst",
+      "episode_id": "e_97d5d681b1acccf5475b2ac3",
+      "cell": "1:all",
+      "target_patch": {
+        "attack_ms": 78,
+        "brightness_hz": 4509,
+        "decay_ms": 240,
+        "gain_db": -15,
+        "notes_cents": [
+          5486
+        ],
+        "release_ms": 732,
+        "sustain_db": -13,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 10,
+        "brightness_hz": 6000,
+        "decay_ms": 100,
+        "gain_db": -6,
+        "notes_cents": [
+          6000
+        ],
+        "release_ms": 200,
+        "sustain_db": -6,
+        "waveform": "sine"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 2.541944438382933,
+      "cross_actor_retained_results": [
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 1.697231167264569,
+          "submitted_notes_cents": [
+            5491
+          ],
+          "pitch_absolute_error_cents": [
+            5
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            5
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 2.368435919482833,
+          "submitted_notes_cents": [
+            5255
+          ],
+          "pitch_absolute_error_cents": [
+            231
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -231
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 2.3759672168503116,
+          "submitted_notes_cents": [
+            6269
+          ],
+          "pitch_absolute_error_cents": [
+            783
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            783
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 2.541944438382933,
+          "submitted_notes_cents": [
+            5471
+          ],
+          "pitch_absolute_error_cents": [
+            15
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -15
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 2.6482701819143775,
+          "submitted_notes_cents": [
+            5522
+          ],
+          "pitch_absolute_error_cents": [
+            36
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            36
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 2.8370176619150453,
+          "submitted_notes_cents": [
+            5447
+          ],
+          "pitch_absolute_error_cents": [
+            39
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -39
+          ],
+          "evaluations": 31,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 3.642906338123119,
+          "submitted_notes_cents": [
+            6347
+          ],
+          "pitch_absolute_error_cents": [
+            861
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            861
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 3.666307483962779,
+          "submitted_notes_cents": [
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            385
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            385
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 3.806360172802029,
+          "submitted_notes_cents": [
+            5822
+          ],
+          "pitch_absolute_error_cents": [
+            336
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            336
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 4.383834369785026,
+          "submitted_notes_cents": [
+            5500
+          ],
+          "pitch_absolute_error_cents": [
+            14
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            14
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 6.758628898991527,
+          "submitted_distance": 6.758628898991527,
+          "submitted_notes_cents": [
+            6000
+          ],
+          "pitch_absolute_error_cents": [
+            514
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            514
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        }
+      ]
+    },
+    {
+      "pair": 3,
+      "cohort": "chord-reconstruction",
+      "selection": "median",
+      "episode_id": "e_0d7a5430f03cb8673e622504",
+      "cell": "3:all",
+      "target_patch": {
+        "attack_ms": 86,
+        "brightness_hz": 1066,
+        "decay_ms": 316,
+        "gain_db": -6,
+        "notes_cents": [
+          5601,
+          6101,
+          6301
+        ],
+        "release_ms": 287,
+        "sustain_db": -11,
+        "waveform": "square"
+      },
+      "initial_patch": {
+        "attack_ms": 10,
+        "brightness_hz": 6000,
+        "decay_ms": 100,
+        "gain_db": -6,
+        "notes_cents": [
+          6000,
+          6400,
+          6700
+        ],
+        "release_ms": 200,
+        "sustain_db": -6,
+        "waveform": "sine"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 1.4470119058123168,
+      "cross_actor_retained_results": [
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.2559843044944083,
+          "submitted_notes_cents": [
+            5571,
+            6147,
+            6314
+          ],
+          "pitch_absolute_error_cents": [
+            30,
+            46,
+            13
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -30,
+            46,
+            13
+          ],
+          "evaluations": 31,
+          "model_calls": 1
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.2848029184807357,
+          "submitted_notes_cents": [
+            6100,
+            6300,
+            6400
+          ],
+          "pitch_absolute_error_cents": [
+            499,
+            199,
+            99
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            499,
+            199,
+            99
+          ],
+          "evaluations": 31,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.4470119058123168,
+          "submitted_notes_cents": [
+            5031,
+            5631,
+            6106
+          ],
+          "pitch_absolute_error_cents": [
+            570,
+            470,
+            195
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -570,
+            -470,
+            -195
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.524045587084507,
+          "submitted_notes_cents": [
+            6101,
+            6153,
+            6347
+          ],
+          "pitch_absolute_error_cents": [
+            500,
+            52,
+            46
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            500,
+            52,
+            46
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.6684592133438976,
+          "submitted_notes_cents": [
+            5031,
+            5231,
+            6106
+          ],
+          "pitch_absolute_error_cents": [
+            570,
+            870,
+            195
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -570,
+            -870,
+            -195
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.7369936310379999,
+          "submitted_notes_cents": [
+            4810,
+            5151,
+            6333
+          ],
+          "pitch_absolute_error_cents": [
+            791,
+            950,
+            32
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -791,
+            -950,
+            32
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.7801182575425216,
+          "submitted_notes_cents": [
+            5175,
+            6005,
+            6524
+          ],
+          "pitch_absolute_error_cents": [
+            426,
+            96,
+            223
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -426,
+            -96,
+            223
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.79681014104199,
+          "submitted_notes_cents": [
+            5387,
+            6041,
+            6132
+          ],
+          "pitch_absolute_error_cents": [
+            214,
+            60,
+            169
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -214,
+            -60,
+            -169
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.8020132779951539,
+          "submitted_notes_cents": [
+            6001,
+            6253,
+            6347
+          ],
+          "pitch_absolute_error_cents": [
+            400,
+            152,
+            46
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            400,
+            152,
+            46
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 1.8138866755964698,
+          "submitted_notes_cents": [
+            5871,
+            6314,
+            6347
+          ],
+          "pitch_absolute_error_cents": [
+            270,
+            213,
+            46
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            270,
+            213,
+            46
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 2.2413762002937596,
+          "submitted_distance": 2.2413762002937596,
+          "submitted_notes_cents": [
+            6000,
+            6400,
+            6700
+          ],
+          "pitch_absolute_error_cents": [
+            399,
+            299,
+            399
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            399,
+            299,
+            399
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        }
+      ]
+    },
+    {
+      "pair": 4,
+      "cohort": "chord-reconstruction",
+      "selection": "worst",
+      "episode_id": "e_efe067f5f2c06875ed558494",
+      "cell": "3:all",
+      "target_patch": {
+        "attack_ms": 144,
+        "brightness_hz": 11938,
+        "decay_ms": 414,
+        "gain_db": -15,
+        "notes_cents": [
+          5980,
+          6280,
+          6680
+        ],
+        "release_ms": 358,
+        "sustain_db": -21,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 10,
+        "brightness_hz": 6000,
+        "decay_ms": 100,
+        "gain_db": -6,
+        "notes_cents": [
+          6000,
+          6400,
+          6700
+        ],
+        "release_ms": 200,
+        "sustain_db": -6,
+        "waveform": "sine"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 3.3926118223221238,
+      "cross_actor_retained_results": [
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 1.7582349350882431,
+          "submitted_notes_cents": [
+            4961,
+            6284,
+            6680
+          ],
+          "pitch_absolute_error_cents": [
+            1019,
+            4,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -1019,
+            4,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 2.1819153750517106,
+          "submitted_notes_cents": [
+            6154,
+            6402,
+            6652
+          ],
+          "pitch_absolute_error_cents": [
+            174,
+            122,
+            28
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            174,
+            122,
+            -28
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 2.5207229403034916,
+          "submitted_notes_cents": [
+            4936,
+            4973,
+            6470
+          ],
+          "pitch_absolute_error_cents": [
+            1044,
+            1307,
+            210
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -1044,
+            -1307,
+            -210
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 2.9053423126912636,
+          "submitted_notes_cents": [
+            4800,
+            6247,
+            6274
+          ],
+          "pitch_absolute_error_cents": [
+            1180,
+            33,
+            406
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -1180,
+            -33,
+            -406
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 3.1662179007302087,
+          "submitted_notes_cents": [
+            5517,
+            5973,
+            6022
+          ],
+          "pitch_absolute_error_cents": [
+            463,
+            307,
+            658
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -463,
+            -307,
+            -658
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 3.2771047195012613,
+          "submitted_notes_cents": [
+            5125,
+            6347,
+            6374
+          ],
+          "pitch_absolute_error_cents": [
+            855,
+            67,
+            306
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -855,
+            67,
+            -306
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 3.3926118223221238,
+          "submitted_notes_cents": [
+            5100,
+            5971,
+            6022
+          ],
+          "pitch_absolute_error_cents": [
+            880,
+            309,
+            658
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -880,
+            -309,
+            -658
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 3.5643107623961305,
+          "submitted_notes_cents": [
+            5817,
+            5822,
+            6073
+          ],
+          "pitch_absolute_error_cents": [
+            163,
+            458,
+            607
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -163,
+            -458,
+            -607
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 3.6543834778781448,
+          "submitted_notes_cents": [
+            5031,
+            5822,
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            949,
+            458,
+            809
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -949,
+            -458,
+            -809
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 4.125311317936354,
+          "submitted_notes_cents": [
+            6000,
+            6300,
+            6700
+          ],
+          "pitch_absolute_error_cents": [
+            20,
+            20,
+            20
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            20,
+            20,
+            20
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 5.998880840138933,
+          "submitted_distance": 5.998880840138933,
+          "submitted_notes_cents": [
+            6000,
+            6400,
+            6700
+          ],
+          "pitch_absolute_error_cents": [
+            20,
+            120,
+            20
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            20,
+            120,
+            20
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        }
+      ]
+    },
+    {
+      "pair": 5,
+      "cohort": "single-shaping",
+      "selection": "median",
+      "episode_id": "e_bd5b3d49a72b1ce9157107c5",
+      "cell": "1:pitch",
+      "target_patch": {
+        "attack_ms": 40,
+        "brightness_hz": 1738,
+        "decay_ms": 211,
+        "gain_db": -8,
+        "notes_cents": [
+          5080
+        ],
+        "release_ms": 38,
+        "sustain_db": -19,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 40,
+        "brightness_hz": 1738,
+        "decay_ms": 211,
+        "gain_db": -8,
+        "notes_cents": [
+          5996
+        ],
+        "release_ms": 38,
+        "sustain_db": -19,
+        "waveform": "saw"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 0.0,
+      "cross_actor_retained_results": [
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.0,
+          "submitted_notes_cents": [
+            5080
+          ],
+          "pitch_absolute_error_cents": [
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0
+          ],
+          "evaluations": 20,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.0,
+          "submitted_notes_cents": [
+            5080
+          ],
+          "pitch_absolute_error_cents": [
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0
+          ],
+          "evaluations": 21,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.0,
+          "submitted_notes_cents": [
+            5080
+          ],
+          "pitch_absolute_error_cents": [
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0
+          ],
+          "evaluations": 21,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.0,
+          "submitted_notes_cents": [
+            5080
+          ],
+          "pitch_absolute_error_cents": [
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0
+          ],
+          "evaluations": 21,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.5424091778928981,
+          "submitted_notes_cents": [
+            5074
+          ],
+          "pitch_absolute_error_cents": [
+            6
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -6
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.7728354279797066,
+          "submitted_notes_cents": [
+            5060
+          ],
+          "pitch_absolute_error_cents": [
+            20
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -20
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 0.9720349005979276,
+          "submitted_notes_cents": [
+            5031
+          ],
+          "pitch_absolute_error_cents": [
+            49
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -49
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 1.6097192664829825,
+          "submitted_notes_cents": [
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            791
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            791
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 1.6097192664829825,
+          "submitted_notes_cents": [
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            791
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            791
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 1.6442928237587537,
+          "submitted_notes_cents": [
+            5996
+          ],
+          "pitch_absolute_error_cents": [
+            916
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            916
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 1.6442928237587537,
+          "submitted_distance": 1.821618105358456,
+          "submitted_notes_cents": [
+            6580
+          ],
+          "pitch_absolute_error_cents": [
+            1500
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            1500
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        }
+      ]
+    },
+    {
+      "pair": 6,
+      "cohort": "single-shaping",
+      "selection": "worst",
+      "episode_id": "e_1e5f7b60033cf734d04b576f",
+      "cell": "1:pitch",
+      "target_patch": {
+        "attack_ms": 6,
+        "brightness_hz": 3276,
+        "decay_ms": 288,
+        "gain_db": -2,
+        "notes_cents": [
+          6464
+        ],
+        "release_ms": 395,
+        "sustain_db": -6,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 6,
+        "brightness_hz": 3276,
+        "decay_ms": 288,
+        "gain_db": -2,
+        "notes_cents": [
+          5652
+        ],
+        "release_ms": 395,
+        "sustain_db": -6,
+        "waveform": "saw"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 2.119189318158394,
+      "cross_actor_retained_results": [
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 0.0,
+          "submitted_notes_cents": [
+            6464
+          ],
+          "pitch_absolute_error_cents": [
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0
+          ],
+          "evaluations": 16,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 1.4036217669582447,
+          "submitted_notes_cents": [
+            6450
+          ],
+          "pitch_absolute_error_cents": [
+            14
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -14
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 1.7309143792052684,
+          "submitted_notes_cents": [
+            6503
+          ],
+          "pitch_absolute_error_cents": [
+            39
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            39
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 1.9133954781222744,
+          "submitted_notes_cents": [
+            6396
+          ],
+          "pitch_absolute_error_cents": [
+            68
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -68
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 1.9804456068753984,
+          "submitted_notes_cents": [
+            6374
+          ],
+          "pitch_absolute_error_cents": [
+            90
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -90
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.119189318158394,
+          "submitted_notes_cents": [
+            5762
+          ],
+          "pitch_absolute_error_cents": [
+            702
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -702
+          ],
+          "evaluations": 18,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.119189318158394,
+          "submitted_notes_cents": [
+            5762
+          ],
+          "pitch_absolute_error_cents": [
+            702
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -702
+          ],
+          "evaluations": 17,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.119189318158394,
+          "submitted_notes_cents": [
+            5762
+          ],
+          "pitch_absolute_error_cents": [
+            702
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -702
+          ],
+          "evaluations": 19,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.3055035228743237,
+          "submitted_notes_cents": [
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            593
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -593
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.321021003229594,
+          "submitted_notes_cents": [
+            5652
+          ],
+          "pitch_absolute_error_cents": [
+            812
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -812
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 2.321021003229594,
+          "submitted_distance": 2.42139663426307,
+          "submitted_notes_cents": [
+            6891
+          ],
+          "pitch_absolute_error_cents": [
+            427
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            427
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        }
+      ]
+    },
+    {
+      "pair": 7,
+      "cohort": "chord-shaping",
+      "selection": "median",
+      "episode_id": "e_31893bb6ce926316cb0629c4",
+      "cell": "3:envelope",
+      "target_patch": {
+        "attack_ms": 248,
+        "brightness_hz": 2884,
+        "decay_ms": 319,
+        "gain_db": -17,
+        "notes_cents": [
+          6119,
+          6619,
+          7119
+        ],
+        "release_ms": 293,
+        "sustain_db": -13,
+        "waveform": "saw"
+      },
+      "initial_patch": {
+        "attack_ms": 63,
+        "brightness_hz": 2884,
+        "decay_ms": 335,
+        "gain_db": -17,
+        "notes_cents": [
+          6119,
+          6619,
+          7119
+        ],
+        "release_ms": 326,
+        "sustain_db": -3,
+        "waveform": "saw"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 0.16933116445472954,
+      "cross_actor_retained_results": [
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.04490274427243091,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.07913276168767504,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.16933116445472954,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.32729676330926166,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.34884953483113873,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.3902564146100238,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.41293863145980975,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.7447062422631373,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.7512340452616879,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 0.9225728660006612,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 1.2459352574074467,
+          "submitted_distance": 1.2459352574074467,
+          "submitted_notes_cents": [
+            6119,
+            6619,
+            7119
+          ],
+          "pitch_absolute_error_cents": [
+            0,
+            0,
+            0
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            0,
+            0,
+            0
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        }
+      ]
+    },
+    {
+      "pair": 8,
+      "cohort": "chord-shaping",
+      "selection": "worst",
+      "episode_id": "e_9767f4335892342529f72591",
+      "cell": "3:pitch",
+      "target_patch": {
+        "attack_ms": 56,
+        "brightness_hz": 2069,
+        "decay_ms": 202,
+        "gain_db": -2,
+        "notes_cents": [
+          6172,
+          6572,
+          7072
+        ],
+        "release_ms": 346,
+        "sustain_db": -20,
+        "waveform": "square"
+      },
+      "initial_patch": {
+        "attack_ms": 56,
+        "brightness_hz": 2069,
+        "decay_ms": 202,
+        "gain_db": -2,
+        "notes_cents": [
+          5198,
+          5398,
+          5898
+        ],
+        "release_ms": 346,
+        "sustain_db": -20,
+        "waveform": "square"
+      },
+      "target_render_equal_to_frozen_wav": true,
+      "submitted_render_equal_to_frozen_wav": true,
+      "target_self_distance": 0.0,
+      "replayed_objective_exactly_equal": true,
+      "locked_fields_preserved": true,
+      "reviewed_actor": "inverse-refine-0",
+      "reviewed_actor_distance": 1.8997793679842647,
+      "cross_actor_retained_results": [
+        {
+          "actor": "inverse-refine-1",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.3457871041223752,
+          "submitted_notes_cents": [
+            5721,
+            6174,
+            6568
+          ],
+          "pitch_absolute_error_cents": [
+            451,
+            398,
+            504
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -451,
+            -398,
+            -504
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "random-search-0",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.4736195527138503,
+          "submitted_notes_cents": [
+            6575,
+            7053,
+            7165
+          ],
+          "pitch_absolute_error_cents": [
+            403,
+            481,
+            93
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            403,
+            481,
+            93
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-1",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.607452428707208,
+          "submitted_notes_cents": [
+            5394,
+            6540,
+            7067
+          ],
+          "pitch_absolute_error_cents": [
+            778,
+            32,
+            5
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -778,
+            -32,
+            -5
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "random-search-2",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.6348611607016335,
+          "submitted_notes_cents": [
+            6075,
+            6583,
+            7188
+          ],
+          "pitch_absolute_error_cents": [
+            97,
+            11,
+            116
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -97,
+            11,
+            116
+          ],
+          "evaluations": 32,
+          "model_calls": 0
+        },
+        {
+          "actor": "pattern-search",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.7177886436728806,
+          "submitted_notes_cents": [
+            5248,
+            5298,
+            6173
+          ],
+          "pitch_absolute_error_cents": [
+            924,
+            1274,
+            899
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -924,
+            -1274,
+            -899
+          ],
+          "evaluations": 31,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-refine-2",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.8714192341507445,
+          "submitted_notes_cents": [
+            5771,
+            5809,
+            7091
+          ],
+          "pitch_absolute_error_cents": [
+            401,
+            763,
+            19
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -401,
+            -763,
+            19
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-1",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.8947388039902553,
+          "submitted_notes_cents": [
+            5871,
+            6374,
+            6580
+          ],
+          "pitch_absolute_error_cents": [
+            301,
+            198,
+            492
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -301,
+            -198,
+            -492
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-refine-0",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 1.8997793679842647,
+          "submitted_notes_cents": [
+            5248,
+            5298,
+            6148
+          ],
+          "pitch_absolute_error_cents": [
+            924,
+            1274,
+            924
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -924,
+            -1274,
+            -924
+          ],
+          "evaluations": 32,
+          "model_calls": 1
+        },
+        {
+          "actor": "inverse-2",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 2.1284239009082646,
+          "submitted_notes_cents": [
+            5809,
+            5871,
+            6891
+          ],
+          "pitch_absolute_error_cents": [
+            363,
+            701,
+            181
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -363,
+            -701,
+            -181
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        },
+        {
+          "actor": "fixed",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 2.166554567373407,
+          "submitted_notes_cents": [
+            5198,
+            5398,
+            5898
+          ],
+          "pitch_absolute_error_cents": [
+            974,
+            1174,
+            1174
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -974,
+            -1174,
+            -1174
+          ],
+          "evaluations": 1,
+          "model_calls": 0
+        },
+        {
+          "actor": "inverse-0",
+          "status": "submitted",
+          "initial_distance": 2.166554567373407,
+          "submitted_distance": 2.2316069076581595,
+          "submitted_notes_cents": [
+            5031,
+            5231,
+            5871
+          ],
+          "pitch_absolute_error_cents": [
+            1141,
+            1341,
+            1201
+          ],
+          "pitch_signed_candidate_minus_target_cents": [
+            -1141,
+            -1341,
+            -1201
+          ],
+          "evaluations": 2,
+          "model_calls": 1
+        }
+      ]
+    }
+  ],
+  "pitch_landscape": {
+    "episode_id": "e_1e5f7b60033cf734d04b576f",
+    "qualification": "Privileged diagnostic uses the stored target patch; it is not a legal audio-only actor or a new benchmark result.",
+    "only_changed_field": "notes_cents",
+    "all_other_fields_equal_to_original_locked_patch": true,
+    "initial_note_cents": 5652,
+    "submitted_note_cents": 5762,
+    "target_note_cents": 6464,
+    "retained_trace": [
+      {
+        "evaluation": 1,
+        "note_cents": 5652,
+        "distance": 2.321021003229594,
+        "source": "initial"
+      },
+      {
+        "evaluation": 2,
+        "note_cents": 5871,
+        "distance": 2.3055035228743237,
+        "model_calls": 1,
+        "source": "model"
+      },
+      {
+        "evaluation": 3,
+        "note_cents": 5771,
+        "distance": 2.2700040308371126,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 4,
+        "note_cents": 5671,
+        "distance": 2.334184896085079,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 5,
+        "note_cents": 5721,
+        "distance": 2.3158855479123073,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 6,
+        "note_cents": 5821,
+        "distance": 2.310563796043042,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 7,
+        "note_cents": 5746,
+        "distance": 2.289954519378243,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 8,
+        "note_cents": 5796,
+        "distance": 2.2991446687467656,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 9,
+        "note_cents": 5759,
+        "distance": 2.240337973751882,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 10,
+        "note_cents": 5747,
+        "distance": 2.290160321179459,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 11,
+        "note_cents": 5753,
+        "distance": 2.2747320528033,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 12,
+        "note_cents": 5765,
+        "distance": 2.2430256774924566,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 13,
+        "note_cents": 5756,
+        "distance": 2.287043604286765,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 14,
+        "note_cents": 5762,
+        "distance": 2.119189318158394,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 15,
+        "note_cents": 5761,
+        "distance": 2.1770262310688437,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 16,
+        "note_cents": 5763,
+        "distance": 2.173360952110837,
+        "model_calls": 0,
+        "source": "search"
+      },
+      {
+        "evaluation": 17,
+        "note_cents": 5762,
+        "distance": 2.119189318158394,
+        "model_calls": 0,
+        "source": "search"
+      }
+    ],
+    "probes": [
+      {
+        "note_cents": 5652,
+        "signed_error_cents": -812,
+        "distance": 2.321021003229594,
+        "difference_from_submitted_distance": 0.20183168507120008,
+        "meaning": "initial"
+      },
+      {
+        "note_cents": 5750,
+        "signed_error_cents": -714,
+        "distance": 2.3021853844978932,
+        "difference_from_submitted_distance": 0.18299606633949939,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5756,
+        "signed_error_cents": -708,
+        "distance": 2.287043604286765,
+        "difference_from_submitted_distance": 0.16785428612837094,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5759,
+        "signed_error_cents": -705,
+        "distance": 2.240337973751882,
+        "difference_from_submitted_distance": 0.1211486555934882,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5761,
+        "signed_error_cents": -703,
+        "distance": 2.1770262310688437,
+        "difference_from_submitted_distance": 0.0578369129104499,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5762,
+        "signed_error_cents": -702,
+        "distance": 2.119189318158394,
+        "difference_from_submitted_distance": 0.0,
+        "meaning": "submitted"
+      },
+      {
+        "note_cents": 5763,
+        "signed_error_cents": -701,
+        "distance": 2.173360952110837,
+        "difference_from_submitted_distance": 0.05417163395244318,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5765,
+        "signed_error_cents": -699,
+        "distance": 2.2430256774924566,
+        "difference_from_submitted_distance": 0.12383635933406278,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5768,
+        "signed_error_cents": -696,
+        "distance": 2.286441745552841,
+        "difference_from_submitted_distance": 0.16725242739444734,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 5774,
+        "signed_error_cents": -690,
+        "distance": 2.276416494244937,
+        "difference_from_submitted_distance": 0.15722717608654335,
+        "meaning": "local-neighbor"
+      },
+      {
+        "note_cents": 6464,
+        "signed_error_cents": 0,
+        "distance": 0.0,
+        "difference_from_submitted_distance": -2.119189318158394,
+        "meaning": "true-target-oracle"
+      }
+    ],
+    "all_tested_local_neighbors_worse": true,
+    "target_patch_distance_zero": true
+  }
+}

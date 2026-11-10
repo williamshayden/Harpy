@@ -1,9 +1,10 @@
 # Contributing to harPY v2
 
 Use Python 3.12 on Linux/WSL. Start from the v2 source checkout or unpacked
-source distribution; public `main` remains v1 until publication. See the
-[release notes](v2-release-notes.md) for current preparation and qualification
-status, and the [sound-matching guide](v2-getting-started.md) for usage.
+source distribution. The published `v2.0.0` tag reproduces the experimental
+prerelease; this checkout prepares the 2.0.1 documentation and acceptance update.
+See the [release notes](v2-release-notes.md) for current status and downloads,
+and the [sound-matching guide](v2-getting-started.md) for usage.
 
 ## Set up and check a change
 

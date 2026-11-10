@@ -1,10 +1,13 @@
 # harPY v2 delivery and v1 cleanup plan
 
-> Current status, 2026-10-26: package 2.0.0 is being prepared as an unpublished
-> experimental release candidate. See [release notes](v2-release-notes.md) for
-> current scope and [acceptance evidence](v2-acceptance.md) for the frozen checks.
-> The dated plan and progress language below remain historical; formal listening
-> acceptance is still open.
+> Current status, 2026-11-10: [v2.0.0 is published](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0)
+> as an experimental prerelease; implementation, packaging and hosted base CI are
+> complete for that release. This checkout prepares the 2.0.1 documentation and
+> acceptance update. See [release notes](v2-release-notes.md), the original
+> [acceptance evidence](v2-acceptance.md), and the current
+> [listening review](v2-listening-review.md). Listening has been performed;
+> matching-quality concerns and formal acceptance remain under review.
+> The dated plan and progress language below remain historical.
 
 This delivery plan was frozen on 2026-09-16. Scope is defined in
 [v2-spec.md](v2-spec.md). Implementation and qualification are tracked in the

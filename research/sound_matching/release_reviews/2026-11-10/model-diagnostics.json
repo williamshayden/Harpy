@@ -1,0 +1,134 @@
+{
+  "analysis_kind": "post-hoc read-only manifest count and source inspection",
+  "causal_or_perceptual_acceptance_claim": false,
+  "confirmed_implementation": {
+    "checkpoint_selection": "After each epoch, ordinary inverse validation episodes are scored; select minimum equally weighted mean across eight validation cells.",
+    "gradient_loss": {
+      "notes": "Mean binary cross entropy across 2401 independent exact-cent outputs, positive weight (2401 - public note count) / public note count.",
+      "scalar_fields": "Squared error of sigmoid outputs against normalized labels.",
+      "waveform": "Categorical cross entropy.",
+      "weighting": "Equal eligible field mean per example, then equal example mean."
+    },
+    "local_search": "Pitch neighbors begin at plus/minus 100 cents; step sizes halve toward one. An improving current candidate becomes the new best and resets the neighbor queue. Seen patches are omitted. At exhausted one-unit neighborhoods the actor restores the best patch if needed and submits, even if public evaluation budget remains.",
+    "pitch_distance_in_training_loss": "The BCE term contains no term based on cent distance between the correct bin and an incorrect bin; it is not continuous pitch regression.",
+    "search_objective": "Pattern/random search directly minimize score(target_audio, candidate_audio)[distance], the mean of spectral convergence plus log-magnitude distance at FFT sizes 512, 2048 and 8192.",
+    "search_restarts": "No global restart or coarse pitch sweep is implemented by PatternSearchActor.",
+    "separate_diagnostics": "Envelope RMSE, level error, and evaluator pitch error are reported but do not add separate terms to the optimized distance.",
+    "sources": [
+      {
+        "lines": [
+          54,
+          69
+        ],
+        "path": "src/harpy/tasks/sound_match/inverse_network.py",
+        "role": "Supervised gradient loss",
+        "sha256": "96a38a2e18fd433412ee6f6e5b5c07f6c67e28d552404be41c29ba276d6350cc"
+      },
+      {
+        "lines": [
+          183,
+          222
+        ],
+        "path": "src/harpy/tasks/sound_match/inverse_training.py",
+        "role": "Optimization and spectral checkpoint selection",
+        "sha256": "7a48eb33460b0bdd069783667c0d854db2a8cc98bce500bfdf59831bffb1c58e"
+      },
+      {
+        "lines": [
+          214,
+          237
+        ],
+        "path": "src/harpy/tasks/sound_match/inverse_features.py",
+        "role": "Training labels and editable-field masks",
+        "sha256": "2537cb457d1fbd09e01921fbdf36c663908b2ada66d51a778241aba813a4c65b"
+      },
+      {
+        "lines": [
+          29,
+          45
+        ],
+        "path": "src/harpy/tasks/sound_match/actors.py",
+        "role": "Scored best candidate and budget handling",
+        "sha256": "2af2bd39f1b8432e74cf5037aa0f0eef53dcc09a51e5d0fc35a067ab7157d1fc"
+      },
+      {
+        "lines": [
+          83,
+          142
+        ],
+        "path": "src/harpy/tasks/sound_match/actors.py",
+        "role": "Local neighborhood, step schedule and early completion",
+        "sha256": "2af2bd39f1b8432e74cf5037aa0f0eef53dcc09a51e5d0fc35a067ab7157d1fc"
+      },
+      {
+        "lines": [
+          150,
+          174
+        ],
+        "path": "src/harpy/tasks/sound_match/objective.py",
+        "role": "Optimized scalar and separate diagnostics",
+        "sha256": "4c79605661b52e9772118dbe435567ff66fb83a58669e62fcaf5a0aaf5a61364"
+      }
+    ],
+    "training_mode": "Supervised parameter estimation, not reinforcement learning."
+  },
+  "counting_method": {
+    "distinct_positive_train_bins": "len(train_note_counter)",
+    "eligible_filter": "Include a dataset entry if 'notes_cents' is in entry['episode']['editable_fields']; locked pitch contributes no eligible pitch-head training loss.",
+    "never_positive_train_bins": "2401 - len(train_note_counter)",
+    "note_bin_count": 2401,
+    "note_range_cents_inclusive": [
+      4800,
+      7200
+    ],
+    "positive_labels": "For every eligible entry, count each note in entry['episode']['target_patch']['notes_cents'] once. Counts preserve repeated observations of a bin across entries.",
+    "positive_once_train_bins": "sum(count == 1 for count in train_note_counter.values())",
+    "target_instance_and_bin_counts_are_not_independent_samples": true,
+    "validation_denominator": "sum(validation_note_counter.values()); note instances, not targets or distinct bins",
+    "validation_unseen_note_instances": "sum(count for note, count in validation_note_counter.items() if note not in train_note_counter)"
+  },
+  "counts": {
+    "train_bins_never_positive": 829,
+    "train_bins_positive_once": 837,
+    "train_distinct_positive_bins": 1572,
+    "train_positive_note_instances": 2688,
+    "validation_note_instances_never_positive_in_train": 83,
+    "validation_positive_note_instances": 256
+  },
+  "dataset_bindings": {
+    "train": {
+      "path": "src/harpy/tasks/sound_match/data/train.json",
+      "pitch_supervised_targets": 1344,
+      "sha256": "ab9be4ba4ca6952793c4ee1c2d5bebf435023fb97a7197fadc868266ee2cabe7",
+      "size_bytes": 1628176,
+      "targets": 2016
+    },
+    "validation": {
+      "path": "src/harpy/tasks/sound_match/data/validation.json",
+      "pitch_supervised_targets": 128,
+      "sha256": "2821bf152eef2224d854d41b83d191d8cce719ea439b5ee8469ee9da5a522024",
+      "size_bytes": 155677,
+      "targets": 192
+    }
+  },
+  "frozen_release_commit": "bf20fe7f8d248e55376f54f193a9b005a99f218e",
+  "frozen_release_tag": "v2.0.0",
+  "hypotheses_not_established_causes": [
+    "Sparse exact-cent positive supervision may limit pitch generalization; the counts alone do not establish the cause of particular errors.",
+    "Model capacity and spectrogram representation may limit initial patch quality; no capacity or representation ablation was run for this diagnostic.",
+    "Alternative global/coarse pitch proposals may escape local spectral minima; their effect requires a controlled comparison with fixed weights and matched candidate budgets."
+  ],
+  "known_review_case": {
+    "actor": "inverse-refine-0",
+    "episode_id": "e_1e5f7b60033cf734d04b576f",
+    "interpretation": "This target pitch bin is seen during eligible training; its retained 702-cent failure is not itself an unseen-label example.",
+    "split": "validation",
+    "target_bin_positive_training_instances": 2,
+    "target_note_cents": 6464,
+    "trace_and_render_diagnosis": "research/sound_matching/release_reviews/2026-11-10/match-diagnosis.json"
+  },
+  "review_date": "2026-11-10",
+  "schema_id": "harpy.sound-match.model-diagnostics/1",
+  "scope": "Frozen train/validation membership and existing model/search implementation; no training, actor execution, final-test selection, or new quality claim.",
+  "suggested_smallest_followup": "Freeze weights, objective and the 32-evaluation ceiling; compare current refinement with a coarse/global pitch-proposal variant on development/validation diagnostics. Preserve all cases and actual costs. This is not a confirmatory result; any later final model-selection claim requires fresh held-out membership."
+}

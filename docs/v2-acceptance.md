@@ -1,5 +1,11 @@
 # V2 acceptance and evidence
 
+> Current status, 2026-11-10: v2.0.0 is published and hosted base CI passed.
+> Listening has now been performed; matching-quality concerns and the stable
+> release decision remain under review. See the [current listening review](v2-listening-review.md)
+> and [release notes](v2-release-notes.md). The original record below preserves
+> its dated qualification evidence and review status.
+
 Implementation and the frozen numerical study completed on 2026-09-22. Actual
 listening review remains an open acceptance gate. This record distinguishes
 implemented behavior, checked evidence, and that remaining review. Package version

@@ -1,9 +1,15 @@
 # Sound-matching research evidence
 
+The frozen archives are published with [v2.0.0](https://github.com/williamshayden/Harpy/releases/tag/v2.0.0).
+The [November 2026 listening review](../../docs/v2-listening-review.md) records
+subsequent human feedback and matching-quality diagnosis. Historical manifests
+retain their original creation-time publication and listening status.
+
 The [calibration protocol](../../docs/v2-calibration.md) fixes memberships,
 candidate budgets, baseline seeds, equal-cell checkpoint selection and the
 all-three-seeds reference criterion. The scripts here preserve those decisions.
-All outputs are local and create-only. Creating an archive does not publish it.
+These scripts create new outputs locally and do not publish them. Outputs are
+create-only; the existing frozen release archives remain unchanged.
 
 ## Evidence and boundaries
 
@@ -211,8 +217,9 @@ are unchanged; only silence separates segments. The portable
 `study/`, and `validation-review-reels-numerical-review.json` records waveform
 checks. The attached `validation-listening-index-bound.json` is the strict,
 88-pair validation-only input used by `prepare-listening-reels.py`; the full
-study index contains 264 pairs. These prepared reels have not yet received a
-human listening review.
+study index contains 264 pairs. These reels had not received human listening
+review when archived; subsequent feedback is recorded in the
+[current listening review](../../docs/v2-listening-review.md).
 
 Archive construction streams file contents and compressed verification in
 bounded chunks. The small file inventory scales with file count; waveform
